@@ -1,7 +1,9 @@
 package net.optiminium.client;
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -16,41 +18,47 @@ import net.neoforged.neoforge.client.event.RenderLivingEvent;
 import net.neoforged.neoforge.client.event.RenderNameTagEvent;
 import net.neoforged.neoforge.common.util.TriState;
 import net.neoforged.neoforge.event.entity.living.EffectParticleModificationEvent;
-import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
-
-import java.util.HashMap;
-import java.util.Map;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumFpsOptimizer {
 	private static final int CELL_SIZE_SHIFT = 4;
 	private static final double ALWAYS_RENDER_DISTANCE_SQR = 10.0 * 10.0;
 	private static final double NAME_TAG_DISTANCE_SQR = 32.0 * 32.0;
-	private static final double PARTICLE_DISTANCE_SQR = 24.0 * 24.0;
-	private static final Map<Long, Integer> renderedCrowdByCell = new HashMap<>();
+	private static final Long2IntOpenHashMap renderedCrowdByCell = new Long2IntOpenHashMap();
+	private static boolean crowdCulling;
+	private static boolean clientRenderCulling;
+	private static boolean particleLimiter;
+	private static LocalPlayer player;
+	private static double effectParticleDistanceSqr;
+	private static int crowdRenderBudgetPercent;
 
 	private OptiminiumFpsOptimizer() {
 	}
 
 	@SubscribeEvent
 	public static void onFrameStart(RenderFrameEvent.Pre event) {
-		renderedCrowdByCell.clear();
+		if (!renderedCrowdByCell.isEmpty()) {
+			renderedCrowdByCell.clear();
+		}
 		OptiminiumGpuOptimizer.onFrameStart();
+		boolean enabled = OptiminiumSettings.isEnabled();
+		crowdCulling = enabled && OptiminiumSettings.isCrowdCulling();
+		clientRenderCulling = enabled && OptiminiumSettings.isClientRenderCulling();
+		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
+		player = Minecraft.getInstance().player;
+		double effectParticleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * 0.375D);
+		effectParticleDistanceSqr = effectParticleDistance * effectParticleDistance;
+		crowdRenderBudgetPercent = OptiminiumSettings.getCrowdRenderBudgetPercent();
 	}
 
 	@SubscribeEvent
 	public static void onRenderLiving(RenderLivingEvent.Pre<?, ?> event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!crowdCulling || player == null) {
 			return;
 		}
 		LivingEntity entity = event.getEntity();
-		if (!isCullableCrowdEntity(entity)) {
-			return;
-		}
-
-		LocalPlayer player = Minecraft.getInstance().player;
-		if (player == null) {
+		if (!(entity instanceof Mob mob) || entity instanceof Player) {
 			return;
 		}
 
@@ -59,12 +67,21 @@ public final class OptiminiumFpsOptimizer {
 			return;
 		}
 
+		if (!isCullableCrowdEntity(mob)) {
+			return;
+		}
+
 		int budget = renderBudgetForDistance(distanceSqr);
+		if (budget <= 0) {
+			event.setCanceled(true);
+			OptiminiumGpuOptimizer.recordCulledEntityRender();
+			return;
+		}
 		long cellKey = crowdCellKey(entity, distanceSqr);
-		int renderedInCell = renderedCrowdByCell.getOrDefault(cellKey, 0);
+		int renderedInCell = renderedCrowdByCell.get(cellKey);
 		if (renderedInCell >= budget) {
 			event.setCanceled(true);
-			OptiminiumMetrics.culledEntityRender();
+			OptiminiumGpuOptimizer.recordCulledEntityRender();
 			return;
 		}
 		renderedCrowdByCell.put(cellKey, renderedInCell + 1);
@@ -72,38 +89,33 @@ public final class OptiminiumFpsOptimizer {
 
 	@SubscribeEvent
 	public static void onRenderNameTag(RenderNameTagEvent event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!clientRenderCulling || player == null) {
 			return;
 		}
 		Entity entity = event.getEntity();
 		if (!(entity instanceof LivingEntity) || entity instanceof LocalPlayer) {
 			return;
 		}
-		LocalPlayer player = Minecraft.getInstance().player;
-		if (player != null && player.distanceToSqr(entity) > NAME_TAG_DISTANCE_SQR) {
+		if (player.distanceToSqr(entity) > NAME_TAG_DISTANCE_SQR) {
 			event.setCanRender(TriState.FALSE);
-			OptiminiumMetrics.hiddenNameTag();
+			OptiminiumGpuOptimizer.recordHiddenNameTag();
 		}
 	}
 
 	@SubscribeEvent
 	public static void onEffectParticle(EffectParticleModificationEvent event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!particleLimiter || player == null) {
 			return;
 		}
-		LocalPlayer player = Minecraft.getInstance().player;
 		LivingEntity entity = event.getEntity();
-		if (player != null && entity != player && player.distanceToSqr(entity) > PARTICLE_DISTANCE_SQR) {
+		if (entity != player && player.distanceToSqr(entity) > effectParticleDistanceSqr) {
 			event.setVisible(false);
-			OptiminiumMetrics.hiddenParticle();
+			OptiminiumGpuOptimizer.recordHiddenParticle();
 		}
 	}
 
-	private static boolean isCullableCrowdEntity(LivingEntity entity) {
-		if (!(entity instanceof Mob mob) || entity instanceof Player) {
-			return false;
-		}
-		if (entity instanceof AbstractVillager villager && villager.isTrading()) {
+	private static boolean isCullableCrowdEntity(Mob mob) {
+		if (mob instanceof AbstractVillager villager && villager.isTrading()) {
 			return false;
 		}
 		return !mob.isAggressive()
@@ -119,24 +131,28 @@ public final class OptiminiumFpsOptimizer {
 	}
 
 	private static int renderBudgetForDistance(double distanceSqr) {
+		int baseBudget;
 		if (distanceSqr > 112.0 * 112.0) {
+			baseBudget = 0;
+		} else if (distanceSqr > 72.0 * 72.0) {
+			baseBudget = 1;
+		} else if (distanceSqr > 40.0 * 40.0) {
+			baseBudget = 2;
+		} else if (distanceSqr > 20.0 * 20.0) {
+			baseBudget = 6;
+		} else {
+			baseBudget = 12;
+		}
+		int percent = crowdRenderBudgetPercent;
+		if (baseBudget <= 0 || percent <= 0) {
 			return 0;
 		}
-		if (distanceSqr > 72.0 * 72.0) {
-			return 1;
-		}
-		if (distanceSqr > 40.0 * 40.0) {
-			return 2;
-		}
-		if (distanceSqr > 20.0 * 20.0) {
-			return 6;
-		}
-		return 12;
+		return Math.max(1, (int)Math.ceil(baseBudget * (percent / 100.0D)));
 	}
 
 	private static long crowdCellKey(Entity entity, double distanceSqr) {
-		int x = entity.blockPosition().getX() >> CELL_SIZE_SHIFT;
-		int z = entity.blockPosition().getZ() >> CELL_SIZE_SHIFT;
+		int x = Mth.floor(entity.getX()) >> CELL_SIZE_SHIFT;
+		int z = Mth.floor(entity.getZ()) >> CELL_SIZE_SHIFT;
 		int tier = distanceTier(distanceSqr);
 		return (((long)x) & 0x3FFFFFFL) << 38 | (((long)z) & 0x3FFFFFFL) << 12 | tier;
 	}

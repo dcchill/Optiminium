@@ -52,16 +52,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class OptiminiumOptimizer {
 	private static final int IDLE_SAMPLE_TICKS = 5;
 	private static final int OCCLUDED_SAMPLE_TICKS = 10;
-	private static final int FAR_FREEZE_SAMPLE_TICKS = 40;
 	private static final int ENTITY_STATE_TTL = 20 * 60;
-	private static final int ITEM_CLUSTER_THRESHOLD = 24;
 	private static final int ITEM_ABSORB_MIN_AGE = 80;
 	private static final int ITEM_PLAYER_SAFE_RADIUS = 18;
 	private static final int ITEM_RELEASE_RADIUS = 20;
 	private static final int ITEM_RELEASES_PER_PLAYER_TICK = 8;
 	private static final int ITEM_SCAN_PERIOD_TICKS = 100;
 	private static final int XP_SCAN_PERIOD_TICKS = 40;
-	private static final int XP_MERGE_THRESHOLD = 8;
 	private static final int XP_PLAYER_SAFE_RADIUS = 8;
 	private static final int REGION_CHUNK_SIZE = 4;
 	private static final int REDSTONE_DUPLICATE_WINDOW_TICKS = 2;
@@ -82,14 +79,23 @@ public final class OptiminiumOptimizer {
 		MinecraftServer server = event.getServer();
 		long tick = server.getTickCount();
 		if (!OptiminiumSettings.isEnabled()) {
+			adaptiveDistance.pause(server);
 			virtualItems.releaseAll(server, 64);
 			return;
 		}
-		adaptiveDistance.update(server, tick);
+		if (OptiminiumSettings.isAdaptiveSimulationDistance()) {
+			adaptiveDistance.update(server, tick);
+		} else {
+			adaptiveDistance.pause(server);
+		}
 		redstoneGraph.endTick(tick);
 		blockEntitySleep.cleanup(tick);
 		predictiveTicks.cleanup(tick);
-		virtualItems.releaseNearPlayers(server, tick);
+		if (OptiminiumSettings.isItemVirtualization()) {
+			virtualItems.releaseNearPlayers(server, tick);
+		} else {
+			virtualItems.releaseAll(server, 64);
+		}
 	}
 
 	@SubscribeEvent
@@ -99,10 +105,10 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			if (tick % ITEM_SCAN_PERIOD_TICKS == 0) {
+			if (OptiminiumSettings.isItemVirtualization() && tick % ITEM_SCAN_PERIOD_TICKS == 0) {
 				virtualItems.absorbDenseItemRegions(level, tick);
 			}
-			if (tick % XP_SCAN_PERIOD_TICKS == 0) {
+			if (OptiminiumSettings.isXpOrbMerging() && tick % XP_SCAN_PERIOD_TICKS == 0) {
 				xpOrbs.mergeDenseOrbRegions(level);
 			}
 		}
@@ -110,7 +116,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityJoin(EntityJoinLevelEvent event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
 			return;
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
@@ -120,7 +126,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityTickPre(EntityTickEvent.Pre event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
 			return;
 		}
 		Entity entity = event.getEntity();
@@ -169,7 +175,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityTickPost(EntityTickEvent.Post event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
 			return;
 		}
 		Entity entity = event.getEntity();
@@ -181,7 +187,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
 			return;
 		}
 		wakeInteractedEntity(event.getTarget(), event.getEntity());
@@ -189,7 +195,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityInteractSpecific(PlayerInteractEvent.EntityInteractSpecific event) {
-		if (!OptiminiumSettings.isEnabled()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
 			return;
 		}
 		wakeInteractedEntity(event.getTarget(), event.getEntity());
@@ -203,7 +209,9 @@ public final class OptiminiumOptimizer {
 		if (event.getEntity().level() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
 			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			if (OptiminiumSettings.isRedstoneDeduplication()) {
+				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			}
 		}
 	}
 
@@ -219,7 +227,7 @@ public final class OptiminiumOptimizer {
 			for (Direction direction : event.getNotifiedSides()) {
 				blockEntitySleep.markDirty(level.dimension(), pos.relative(direction), tick);
 			}
-			if (redstoneGraph.isDuplicate(level.dimension(), pos, event.getState(), event.getNotifiedSides(), tick)) {
+			if (OptiminiumSettings.isRedstoneDeduplication() && redstoneGraph.isDuplicate(level.dimension(), pos, event.getState(), event.getNotifiedSides(), tick)) {
 				event.setCanceled(true);
 			}
 		}
@@ -233,7 +241,9 @@ public final class OptiminiumOptimizer {
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
 			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			if (OptiminiumSettings.isRedstoneDeduplication()) {
+				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			}
 		}
 	}
 
@@ -245,7 +255,9 @@ public final class OptiminiumOptimizer {
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
 			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			if (OptiminiumSettings.isRedstoneDeduplication()) {
+				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
+			}
 		}
 	}
 
@@ -363,7 +375,7 @@ public final class OptiminiumOptimizer {
 				return 1;
 			}
 			if (distanceSqr > 96.0 * 96.0) {
-				return FAR_FREEZE_SAMPLE_TICKS;
+				return OptiminiumSettings.getFarEntityTickInterval();
 			}
 			if (distanceSqr > 32.0 * 32.0) {
 				return OCCLUDED_SAMPLE_TICKS;
@@ -449,7 +461,7 @@ public final class OptiminiumOptimizer {
 			}
 			for (Map.Entry<RegionKey, List<ItemEntity>> entry : byRegion.entrySet()) {
 				ItemCloud existing = clouds.get(entry.getKey());
-				if (existing == null && entry.getValue().size() < ITEM_CLUSTER_THRESHOLD) {
+				if (existing == null && entry.getValue().size() < OptiminiumSettings.getItemClusterThreshold()) {
 					continue;
 				}
 				ItemCloud cloud = clouds.computeIfAbsent(entry.getKey(), ignored -> new ItemCloud());
@@ -633,7 +645,7 @@ public final class OptiminiumOptimizer {
 				}
 			}
 			for (List<ExperienceOrb> orbs : byRegion.values()) {
-				if (orbs.size() < XP_MERGE_THRESHOLD) {
+				if (orbs.size() < OptiminiumSettings.getXpMergeThreshold()) {
 					continue;
 				}
 				Vec3 position = Vec3.ZERO;
@@ -655,6 +667,7 @@ public final class OptiminiumOptimizer {
 
 	private static final class AdaptiveSimulationDistance {
 		private int targetDistance = -1;
+		private int lastAppliedDistance = -1;
 		private int stableWindows;
 
 		void update(MinecraftServer server, long tick) {
@@ -666,11 +679,13 @@ public final class OptiminiumOptimizer {
 				targetDistance = current;
 			}
 			double mspt = server.getAverageTickTimeNanos() / 1_000_000.0;
+			int targetMspt = OptiminiumSettings.getAdaptiveSimulationTargetMspt();
+			int minDistance = OptiminiumSettings.getAdaptiveSimulationMinDistanceChunks();
 			int next = current;
-			if (mspt > 55.0 && current > 4) {
+			if (mspt > targetMspt + 5.0D && current > minDistance) {
 				next = current - 1;
 				stableWindows = 0;
-			} else if (mspt < 38.0) {
+			} else if (mspt < targetMspt - 12.0D) {
 				stableWindows++;
 				if (stableWindows >= 6 && current < targetDistance) {
 					next = current + 1;
@@ -681,7 +696,18 @@ public final class OptiminiumOptimizer {
 			}
 			if (next != current) {
 				server.getPlayerList().setSimulationDistance(next);
+				lastAppliedDistance = next;
 			}
+		}
+
+		void pause(MinecraftServer server) {
+			int current = server.getPlayerList().getSimulationDistance();
+			if (targetDistance >= 0 && lastAppliedDistance >= 0 && current == lastAppliedDistance && current < targetDistance) {
+				server.getPlayerList().setSimulationDistance(targetDistance);
+			}
+			targetDistance = -1;
+			lastAppliedDistance = -1;
+			stableWindows = 0;
 		}
 	}
 

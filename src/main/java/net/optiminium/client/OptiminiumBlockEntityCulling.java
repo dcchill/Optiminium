@@ -1,6 +1,7 @@
 package net.optiminium.client;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.core.BlockPos;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BannerRenderer;
 import net.minecraft.client.renderer.blockentity.BedRenderer;
@@ -44,8 +45,6 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
-import net.optiminium.optimization.OptiminiumMetrics;
-import net.optiminium.optimization.OptiminiumSettings;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
 public final class OptiminiumBlockEntityCulling {
@@ -94,29 +93,43 @@ public final class OptiminiumBlockEntityCulling {
 
 		@Override
 		public boolean shouldRender(T blockEntity, Vec3 cameraPos) {
-			if (!OptiminiumSettings.isEnabled()) {
+			if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
 				return delegate.shouldRender(blockEntity, cameraPos);
 			}
-			boolean shouldRender = Vec3.atCenterOf(blockEntity.getBlockPos()).closerThan(cameraPos, viewDistance) && delegate.shouldRender(blockEntity, cameraPos);
+			int scaledViewDistance = OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
+			boolean shouldRender = closerThanBlockCenter(blockEntity.getBlockPos(), cameraPos, scaledViewDistance) && delegate.shouldRender(blockEntity, cameraPos);
 			if (!shouldRender) {
-				OptiminiumMetrics.culledBlockEntityRender();
+				OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
 			}
 			return shouldRender;
 		}
 
 		@Override
 		public boolean shouldRenderOffScreen(T blockEntity) {
+			if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
+				return delegate.shouldRenderOffScreen(blockEntity);
+			}
 			return false;
 		}
 
 		@Override
 		public int getViewDistance() {
-			return viewDistance;
+			if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
+				return delegate.getViewDistance();
+			}
+			return OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
 		}
 
 		@Override
 		public AABB getRenderBoundingBox(T blockEntity) {
 			return delegate.getRenderBoundingBox(blockEntity);
+		}
+
+		private static boolean closerThanBlockCenter(BlockPos pos, Vec3 cameraPos, int distance) {
+			double dx = pos.getX() + 0.5D - cameraPos.x;
+			double dy = pos.getY() + 0.5D - cameraPos.y;
+			double dz = pos.getZ() + 0.5D - cameraPos.z;
+			return dx * dx + dy * dy + dz * dz < distance * distance;
 		}
 	}
 }

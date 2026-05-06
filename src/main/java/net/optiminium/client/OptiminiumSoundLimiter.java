@@ -10,8 +10,6 @@ import net.optiminium.optimization.OptiminiumSettings;
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumSoundLimiter {
 	private static final long WINDOW_NANOS = 250_000_000L;
-	private static final int MAX_VILLAGER_AMBIENT_PER_WINDOW = 8;
-	private static final int MAX_ENTITY_AMBIENT_PER_WINDOW = 32;
 	private static long villagerAmbientWindowStart;
 	private static long entityAmbientWindowStart;
 	private static int villagerAmbientSounds;
@@ -22,39 +20,47 @@ public final class OptiminiumSoundLimiter {
 
 	@SubscribeEvent
 	public static void onPlaySound(PlaySoundEvent event) {
-		if (!OptiminiumSettings.isEnabled() || event.getSound() == null) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isAmbientSoundLimiter() || event.getSound() == null) {
 			return;
 		}
 
 		String name = event.getName();
 		long now = System.nanoTime();
-		if (isVillagerAmbient(name) && isOverVillagerAmbientBudget(now)) {
+		if (isVillagerAmbient(name) && isOverVillagerAmbientBudget(now, villagerAmbientBudget())) {
 			event.setSound(null);
 			OptiminiumMetrics.suppressedSound();
 			return;
 		}
-		if (isEntityAmbient(name) && isOverEntityAmbientBudget(now)) {
+		if (isEntityAmbient(name) && isOverEntityAmbientBudget(now, OptiminiumSettings.getAmbientSoundBudget())) {
 			event.setSound(null);
 			OptiminiumMetrics.suppressedSound();
 		}
 	}
 
-	private static boolean isOverVillagerAmbientBudget(long now) {
+	private static boolean isOverVillagerAmbientBudget(long now, int budget) {
 		if (now - villagerAmbientWindowStart > WINDOW_NANOS) {
 			villagerAmbientWindowStart = now;
 			villagerAmbientSounds = 0;
 		}
 		villagerAmbientSounds++;
-		return villagerAmbientSounds > MAX_VILLAGER_AMBIENT_PER_WINDOW;
+		return villagerAmbientSounds > budget;
 	}
 
-	private static boolean isOverEntityAmbientBudget(long now) {
+	private static boolean isOverEntityAmbientBudget(long now, int budget) {
 		if (now - entityAmbientWindowStart > WINDOW_NANOS) {
 			entityAmbientWindowStart = now;
 			entityAmbientSounds = 0;
 		}
 		entityAmbientSounds++;
-		return entityAmbientSounds > MAX_ENTITY_AMBIENT_PER_WINDOW;
+		return entityAmbientSounds > budget;
+	}
+
+	private static int villagerAmbientBudget() {
+		int budget = OptiminiumSettings.getAmbientSoundBudget();
+		if (budget <= 0) {
+			return 0;
+		}
+		return Math.max(1, budget / 4);
 	}
 
 	private static boolean isVillagerAmbient(String soundName) {

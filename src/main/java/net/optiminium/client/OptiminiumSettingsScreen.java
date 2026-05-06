@@ -9,6 +9,7 @@ import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.optiminium.optimization.OptiminiumSettings;
 
+import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
@@ -17,96 +18,42 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static final Component TITLE = Component.literal("Optiminium Settings");
 	private static final int CONTROL_WIDTH = 220;
 	private static final int CONTROL_HEIGHT = 20;
-	private static final int ROW_GAP = 8;
+	private static final int COLUMN_GAP = 12;
+	private static final int ROW_GAP = 6;
+	private static final int PAGE_BUTTON_WIDTH = 64;
+	private static final int PAGE_BUTTON_GAP = 6;
 
 	private final Screen lastScreen;
-	private Button toggleButton;
+	private final Page selectedPage;
+	private int controlsX;
+	private int controlsY;
+	private int controlsColumns;
 
 	public OptiminiumSettingsScreen(Screen lastScreen) {
+		this(lastScreen, Page.GENERAL);
+	}
+
+	private OptiminiumSettingsScreen(Screen lastScreen, Page selectedPage) {
 		super(TITLE);
 		this.lastScreen = lastScreen;
+		this.selectedPage = selectedPage;
 	}
 
 	@Override
 	protected void init() {
-		int x = (this.width - CONTROL_WIDTH) / 2;
-		int y = Math.max(40, this.height / 6);
+		addPageButtons();
+		configureControlLayout(selectedPage.controlCount);
 
-		this.toggleButton = Button.builder(toggleLabel(), pressed -> {
-			OptiminiumSettings.toggleEnabled();
-			pressed.setMessage(toggleLabel());
-		})
-			.bounds(x, y, CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal("Toggle Optiminium optimizations for this instance.")))
-			.build();
-		this.addRenderableWidget(this.toggleButton);
-
-		SettingsSlider fogSlider = new SettingsSlider(
-			x,
-			y + (CONTROL_HEIGHT + ROW_GAP),
-			CONTROL_WIDTH,
-			CONTROL_HEIGHT,
-			OptiminiumSettings::getFogDistanceBlocks,
-			OptiminiumSettings::setFogDistanceBlocks,
-			OptiminiumSettings.getMinFogDistanceBlocks(),
-			OptiminiumSettings.getMaxFogDistanceBlocks(),
-			value -> Component.literal("Fog: " + value + " blocks")
-		);
-		fogSlider.setTooltip(Tooltip.create(Component.literal("Set Optiminium's client fog far plane.")));
-		this.addRenderableWidget(fogSlider);
-
-		this.addRenderableWidget(Button.builder(cameraChunkLoadingLabel(), pressed -> {
-			OptiminiumSettings.toggleCameraChunkLoading();
-			pressed.setMessage(cameraChunkLoadingLabel());
-		})
-			.bounds(x, y + (CONTROL_HEIGHT + ROW_GAP) * 2, CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal("Only track chunks inside the player's camera-facing view cone.")))
-			.build());
-
-		SettingsSlider cameraRadiusSlider = new SettingsSlider(
-			x,
-			y + (CONTROL_HEIGHT + ROW_GAP) * 3,
-			CONTROL_WIDTH,
-			CONTROL_HEIGHT,
-			OptiminiumSettings::getCameraAlwaysTrackRadiusChunks,
-			OptiminiumSettings::setCameraAlwaysTrackRadiusChunks,
-			OptiminiumSettings.getMinCameraAlwaysTrackRadiusChunks(),
-			OptiminiumSettings.getMaxCameraAlwaysTrackRadiusChunks(),
-			value -> Component.literal("Camera Keep Radius: " + value + " chunks")
-		);
-		cameraRadiusSlider.setTooltip(Tooltip.create(Component.literal("Keep this many chunks around the player loaded even outside the camera cone.")));
-		this.addRenderableWidget(cameraRadiusSlider);
-
-		SettingsSlider cameraYawStepSlider = new SettingsSlider(
-			x,
-			y + (CONTROL_HEIGHT + ROW_GAP) * 4,
-			CONTROL_WIDTH,
-			CONTROL_HEIGHT,
-			OptiminiumSettings::getCameraYawStepDegrees,
-			OptiminiumSettings::setCameraYawStepDegrees,
-			OptiminiumSettings.getMinCameraYawStepDegrees(),
-			OptiminiumSettings.getMaxCameraYawStepDegrees(),
-			value -> Component.literal("Camera Yaw Step: " + value + " deg")
-		);
-		cameraYawStepSlider.setTooltip(Tooltip.create(Component.literal("Smaller values update the chunk cone more often as the player turns.")));
-		this.addRenderableWidget(cameraYawStepSlider);
-
-		SettingsSlider cameraChunkGroupSlider = new SettingsSlider(
-			x,
-			y + (CONTROL_HEIGHT + ROW_GAP) * 5,
-			CONTROL_WIDTH,
-			CONTROL_HEIGHT,
-			OptiminiumSettings::getCameraChunkGroupSizeChunks,
-			OptiminiumSettings::setCameraChunkGroupSizeChunks,
-			OptiminiumSettings.getMinCameraChunkGroupSizeChunks(),
-			OptiminiumSettings.getMaxCameraChunkGroupSizeChunks(),
-			value -> Component.literal("Camera Chunk Group: " + value + " chunks")
-		);
-		cameraChunkGroupSlider.setTooltip(Tooltip.create(Component.literal("Load camera chunks in larger groups to reduce visual churn while moving.")));
-		this.addRenderableWidget(cameraChunkGroupSlider);
+		switch (selectedPage) {
+			case GENERAL -> addGeneralControls();
+			case RENDER -> addRenderControls();
+			case EFFECTS -> addEffectsControls();
+			case SERVER -> addServerControls();
+			case WORLD -> addWorldControls();
+		}
 
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, pressed -> this.onClose())
-			.bounds((this.width - 200) / 2, this.height - 32, 200, CONTROL_HEIGHT)
+			.bounds((this.width - 200) / 2, this.height - 30, 200, CONTROL_HEIGHT)
 			.build());
 	}
 
@@ -121,12 +68,164 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.minecraft.setScreen(this.lastScreen);
 	}
 
-	private static Component toggleLabel() {
-		return Component.literal("Optiminium: " + (OptiminiumSettings.isEnabled() ? "ON" : "OFF"));
+	private void addPageButtons() {
+		Page[] pages = Page.values();
+		int buttonWidth = Math.min(PAGE_BUTTON_WIDTH, Math.max(52, (this.width - 20 - (pages.length - 1) * PAGE_BUTTON_GAP) / pages.length));
+		int totalWidth = pages.length * buttonWidth + (pages.length - 1) * PAGE_BUTTON_GAP;
+		int x = (this.width - totalWidth) / 2;
+		int y = 34;
+		for (Page page : pages) {
+			Button button = Button.builder(Component.literal(page.label), pressed -> switchPage(page))
+				.bounds(x, y, buttonWidth, CONTROL_HEIGHT)
+				.build();
+			button.active = page != selectedPage;
+			this.addRenderableWidget(button);
+			x += buttonWidth + PAGE_BUTTON_GAP;
+		}
 	}
 
-	private static Component cameraChunkLoadingLabel() {
-		return Component.literal("Camera Chunks: " + (OptiminiumSettings.isCameraChunkLoading() ? "ON" : "OFF"));
+	private void switchPage(Page page) {
+		if (page != selectedPage && this.minecraft != null) {
+			this.minecraft.setScreen(new OptiminiumSettingsScreen(this.lastScreen, page));
+		}
+	}
+
+	private void configureControlLayout(int controlCount) {
+		boolean twoColumns = this.width >= CONTROL_WIDTH * 2 + COLUMN_GAP + 40 && controlCount > 6;
+		this.controlsColumns = twoColumns ? 2 : 1;
+		int totalWidth = this.controlsColumns * CONTROL_WIDTH + (this.controlsColumns - 1) * COLUMN_GAP;
+		this.controlsX = (this.width - totalWidth) / 2;
+		int rows = (controlCount + this.controlsColumns - 1) / this.controlsColumns;
+		int totalHeight = rows * CONTROL_HEIGHT + Math.max(0, rows - 1) * ROW_GAP;
+		this.controlsY = Math.max(58, Math.min(64, this.height - 42 - totalHeight));
+	}
+
+	private void addGeneralControls() {
+		int index = 0;
+		index = addToggle(index, "Optiminium", OptiminiumSettings::isEnabled, () -> OptiminiumSettings.toggleEnabled(), "Toggle every Optiminium optimization.");
+		index = addSlider(index, OptiminiumSettings::getFogDistanceBlocks, OptiminiumSettings::setFogDistanceBlocks, OptiminiumSettings.getMinFogDistanceBlocks(),
+			OptiminiumSettings.getMaxFogDistanceBlocks(), value -> Component.literal("Fog: " + value + " blocks"), "Set Optiminium's client fog far plane.");
+		index = addToggle(index, "Camera Chunks", OptiminiumSettings::isCameraChunkLoading, () -> OptiminiumSettings.toggleCameraChunkLoading(),
+			"Only track chunks inside the player's camera-facing view cone.");
+		index = addSlider(index, OptiminiumSettings::getCameraAlwaysTrackRadiusChunks, OptiminiumSettings::setCameraAlwaysTrackRadiusChunks,
+			OptiminiumSettings.getMinCameraAlwaysTrackRadiusChunks(), OptiminiumSettings.getMaxCameraAlwaysTrackRadiusChunks(),
+			value -> Component.literal("Camera Keep: " + value + " chunks"), "Keep this many chunks around the player loaded outside the camera cone.");
+		index = addSlider(index, OptiminiumSettings::getCameraYawStepDegrees, OptiminiumSettings::setCameraYawStepDegrees, OptiminiumSettings.getMinCameraYawStepDegrees(),
+			OptiminiumSettings.getMaxCameraYawStepDegrees(), value -> Component.literal("Camera Yaw: " + value + " deg"), "Smaller values update the chunk cone more often as the player turns.");
+		addSlider(index, OptiminiumSettings::getCameraChunkGroupSizeChunks, OptiminiumSettings::setCameraChunkGroupSizeChunks, OptiminiumSettings.getMinCameraChunkGroupSizeChunks(),
+			OptiminiumSettings.getMaxCameraChunkGroupSizeChunks(), value -> Component.literal("Chunk Group: " + value), "Load camera chunks in larger groups to reduce visual churn while moving.");
+	}
+
+	private void addRenderControls() {
+		int index = 0;
+		index = addToggle(index, "Render Culling", OptiminiumSettings::isClientRenderCulling, () -> OptiminiumSettings.toggleClientRenderCulling(),
+			"Skip distant low-value entity renders and name tags.");
+		index = addSlider(index, OptiminiumSettings::getEntityRenderDistanceScalePercent, OptiminiumSettings::setEntityRenderDistanceScalePercent,
+			OptiminiumSettings.getMinEntityRenderDistanceScalePercent(), OptiminiumSettings.getMaxEntityRenderDistanceScalePercent(),
+			value -> Component.literal("Entity Dist: " + value + "%"), "Scale distance cutoffs for item, XP, projectile, and hanging entity renders.");
+		index = addToggle(index, "Block Entities", OptiminiumSettings::isBlockEntityCulling, () -> OptiminiumSettings.toggleBlockEntityCulling(),
+			"Skip distant block entity renderers such as signs, chests, and spawners.");
+		index = addSlider(index, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent,
+			OptiminiumSettings.getMinBlockEntityDistanceScalePercent(), OptiminiumSettings.getMaxBlockEntityDistanceScalePercent(),
+			value -> Component.literal("Block Entity Dist: " + value + "%"), "Scale distance cutoffs for block entity renderers.");
+		index = addToggle(index, "Crowd Culling", OptiminiumSettings::isCrowdCulling, () -> OptiminiumSettings.toggleCrowdCulling(),
+			"Limit how many idle mobs render inside crowded distant cells.");
+		addSlider(index, OptiminiumSettings::getCrowdRenderBudgetPercent, OptiminiumSettings::setCrowdRenderBudgetPercent,
+			OptiminiumSettings.getMinCrowdRenderBudgetPercent(), OptiminiumSettings.getMaxCrowdRenderBudgetPercent(),
+			value -> Component.literal("Crowd Budget: " + value + "%"), "Scale the render budget for dense idle mob crowds.");
+	}
+
+	private void addEffectsControls() {
+		int index = 0;
+		index = addToggle(index, "Particle Limiter", OptiminiumSettings::isParticleLimiter, () -> OptiminiumSettings.toggleParticleLimiter(),
+			"Drop distant and excessive low-priority particles.");
+		index = addSlider(index, OptiminiumSettings::getParticleRenderDistanceBlocks, OptiminiumSettings::setParticleRenderDistanceBlocks,
+			OptiminiumSettings.getMinParticleRenderDistanceBlocks(), OptiminiumSettings.getMaxParticleRenderDistanceBlocks(),
+			value -> Component.literal("Particle Dist: " + value), "Distance cutoff for non-critical particles.");
+		index = addSlider(index, OptiminiumSettings::getMaxParticlesPerFrame, OptiminiumSettings::setMaxParticlesPerFrame,
+			OptiminiumSettings.getMinMaxParticlesPerFrame(), OptiminiumSettings.getMaxMaxParticlesPerFrame(),
+			value -> Component.literal("Particle Budget: " + value), "Maximum non-critical particles Optiminium allows each frame.");
+		index = addToggle(index, "Sound Limiter", OptiminiumSettings::isAmbientSoundLimiter, () -> OptiminiumSettings.toggleAmbientSoundLimiter(),
+			"Limit repeated ambient sounds from dense groups of entities.");
+		addSlider(index, OptiminiumSettings::getAmbientSoundBudget, OptiminiumSettings::setAmbientSoundBudget, OptiminiumSettings.getMinAmbientSoundBudget(),
+			OptiminiumSettings.getMaxAmbientSoundBudget(), value -> Component.literal("Sound Budget: " + value), "Ambient entity sounds allowed per quarter second.");
+	}
+
+	private void addServerControls() {
+		int index = 0;
+		index = addToggle(index, "Tick Throttle", OptiminiumSettings::isServerEntityTickThrottling, () -> OptiminiumSettings.toggleServerEntityTickThrottling(),
+			"Tick idle far mobs less often while keeping active mobs awake.");
+		index = addSlider(index, OptiminiumSettings::getFarEntityTickInterval, OptiminiumSettings::setFarEntityTickInterval, OptiminiumSettings.getMinFarEntityTickInterval(),
+			OptiminiumSettings.getMaxFarEntityTickInterval(), value -> Component.literal("Far Tick Gap: " + value), "Ticks between updates for quiet mobs far from every player.");
+		index = addToggle(index, "Adaptive Sim", OptiminiumSettings::isAdaptiveSimulationDistance, () -> OptiminiumSettings.toggleAdaptiveSimulationDistance(),
+			"Lower simulation distance under sustained server tick pressure.");
+		index = addSlider(index, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt,
+			OptiminiumSettings.getMinAdaptiveSimulationTargetMspt(), OptiminiumSettings.getMaxAdaptiveSimulationTargetMspt(),
+			value -> Component.literal("Target MSPT: " + value), "Tick-time target used by adaptive simulation distance.");
+		addSlider(index, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks,
+			OptiminiumSettings.getMinAdaptiveSimulationMinDistanceChunks(), OptiminiumSettings.getMaxAdaptiveSimulationMinDistanceChunks(),
+			value -> Component.literal("Min Sim Dist: " + value), "Lowest simulation distance adaptive mode may use.");
+	}
+
+	private void addWorldControls() {
+		int index = 0;
+		index = addToggle(index, "Item Clouds", OptiminiumSettings::isItemVirtualization, () -> OptiminiumSettings.toggleItemVirtualization(),
+			"Compress large unattended item piles into lightweight virtual stacks.");
+		index = addSlider(index, OptiminiumSettings::getItemClusterThreshold, OptiminiumSettings::setItemClusterThreshold, OptiminiumSettings.getMinItemClusterThreshold(),
+			OptiminiumSettings.getMaxItemClusterThreshold(), value -> Component.literal("Item Cluster: " + value), "Minimum unattended item count before cloud compression starts.");
+		index = addToggle(index, "XP Merge", OptiminiumSettings::isXpOrbMerging, () -> OptiminiumSettings.toggleXpOrbMerging(),
+			"Merge dense unattended XP orb groups.");
+		index = addSlider(index, OptiminiumSettings::getXpMergeThreshold, OptiminiumSettings::setXpMergeThreshold, OptiminiumSettings.getMinXpMergeThreshold(),
+			OptiminiumSettings.getMaxXpMergeThreshold(), value -> Component.literal("XP Cluster: " + value), "Minimum XP orb group size before merging starts.");
+		addToggle(index, "Redstone Dedup", OptiminiumSettings::isRedstoneDeduplication, () -> OptiminiumSettings.toggleRedstoneDeduplication(),
+			"Suppress duplicate redstone neighbor notifications in the same short tick window.");
+	}
+
+	private int addToggle(int index, String label, BooleanSupplier getter, Runnable toggler, String tooltip) {
+		Button button = Button.builder(toggleLabel(label, getter.getAsBoolean()), pressed -> {
+			toggler.run();
+			pressed.setMessage(toggleLabel(label, getter.getAsBoolean()));
+		})
+			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
+			.tooltip(Tooltip.create(Component.literal(tooltip)))
+			.build();
+		this.addRenderableWidget(button);
+		return index + 1;
+	}
+
+	private int addSlider(int index, IntSupplier getter, IntConsumer setter, int min, int max, IntFunction<Component> labelFactory, String tooltip) {
+		SettingsSlider slider = new SettingsSlider(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT, getter, setter, min, max, labelFactory);
+		slider.setTooltip(Tooltip.create(Component.literal(tooltip)));
+		this.addRenderableWidget(slider);
+		return index + 1;
+	}
+
+	private int controlX(int index) {
+		return controlsX + (index % controlsColumns) * (CONTROL_WIDTH + COLUMN_GAP);
+	}
+
+	private int controlY(int index) {
+		return controlsY + (index / controlsColumns) * (CONTROL_HEIGHT + ROW_GAP);
+	}
+
+	private static Component toggleLabel(String name, boolean enabled) {
+		return Component.literal(name + ": " + (enabled ? "ON" : "OFF"));
+	}
+
+	private enum Page {
+		GENERAL("General", 6),
+		RENDER("Render", 6),
+		EFFECTS("Effects", 5),
+		SERVER("Server", 5),
+		WORLD("World", 5);
+
+		private final String label;
+		private final int controlCount;
+
+		Page(String label, int controlCount) {
+			this.label = label;
+			this.controlCount = controlCount;
+		}
 	}
 
 	private static final class SettingsSlider extends AbstractSliderButton {
