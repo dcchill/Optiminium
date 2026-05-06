@@ -67,6 +67,8 @@ public final class OptiminiumOptimizer {
 	private static final int REDSTONE_DUPLICATE_WINDOW_TICKS = 2;
 	private static final int BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20 * 10;
 	private static final int NEARBY_IDLE_CROWD_SAMPLE_TICKS = 4;
+	private static final int VILLAGER_CROWD_THRESHOLD = 6;
+	private static final double VILLAGER_CROWD_RADIUS_BLOCKS = 5.0D;
 
 	private static final PredictiveTickScheduler predictiveTicks = new PredictiveTickScheduler();
 	private static final VirtualizedItemSystem virtualItems = new VirtualizedItemSystem();
@@ -300,6 +302,9 @@ public final class OptiminiumOptimizer {
 			if (!isEligible(entity)) {
 				return false;
 			}
+			if (entity instanceof AbstractVillager villager && !isPackedVillager(villager, level)) {
+				return false;
+			}
 			long tick = level.getServer().getTickCount();
 			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(entity.position(), tick));
 			if (tick < state.forceAwakeUntil) {
@@ -344,6 +349,9 @@ public final class OptiminiumOptimizer {
 		}
 
 		private int intervalFor(Entity entity, ServerLevel level, EntityTickState state) {
+			if (entity instanceof AbstractVillager villager && !isPackedVillager(villager, level)) {
+				return 1;
+			}
 			if (state.quietTicks < 40 || isCombatActive(entity)) {
 				return 1;
 			}
@@ -383,9 +391,23 @@ public final class OptiminiumOptimizer {
 			if (entity instanceof AbstractVillager villager && villager.isTrading()) {
 				return false;
 			}
+			if (entity instanceof AbstractVillager villager && !isPackedVillager(villager, (ServerLevel)villager.level())) {
+				return false;
+			}
 			return !mob.isLeashed()
 				&& !mob.isNoAi()
 				&& !(mob instanceof AgeableMob ageableMob && ageableMob.isBaby());
+		}
+
+		private boolean isPackedVillager(AbstractVillager villager, ServerLevel level) {
+			if (!villager.isAlive() || villager.isTrading()) {
+				return false;
+			}
+			return level.getEntitiesOfClass(
+				AbstractVillager.class,
+				villager.getBoundingBox().inflate(VILLAGER_CROWD_RADIUS_BLOCKS),
+				nearbyVillager -> nearbyVillager.isAlive() && !nearbyVillager.isTrading()
+			).size() >= VILLAGER_CROWD_THRESHOLD;
 		}
 
 		private boolean isCombatActive(Entity entity) {

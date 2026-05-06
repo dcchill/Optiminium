@@ -34,7 +34,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 		this.toggleButton = Button.builder(toggleLabel(), pressed -> {
 			OptiminiumSettings.toggleEnabled();
-			OptiminiumClientChunkCache.onSettingsChanged();
 			pressed.setMessage(toggleLabel());
 		})
 			.bounds(x, y, CONTROL_WIDTH, CONTROL_HEIGHT)
@@ -56,41 +55,41 @@ public final class OptiminiumSettingsScreen extends Screen {
 		fogSlider.setTooltip(Tooltip.create(Component.literal("Set Optiminium's client fog far plane.")));
 		this.addRenderableWidget(fogSlider);
 
-		SettingsSlider liveReserveSlider = new SettingsSlider(
-			x,
-			y + (CONTROL_HEIGHT + ROW_GAP) * 2,
-			CONTROL_WIDTH,
-			CONTROL_HEIGHT,
-			OptiminiumSettings::getLiveRenderDistanceReserveChunks,
-			OptiminiumSettings::setLiveRenderDistanceReserveChunks,
-			OptiminiumSettings.getMinLiveRenderDistanceReserveChunks(),
-			OptiminiumSettings.getMaxLiveRenderDistanceReserveChunks(),
-			value -> Component.literal(value == 0 ? "Live Reserve: Off" : "Live Reserve: -" + value + " chunks")
-		);
-		liveReserveSlider.setTooltip(Tooltip.create(Component.literal("Reduce live vanilla chunk rendering so the outer distance can be covered by cached chunks.")));
-		this.addRenderableWidget(liveReserveSlider);
+		this.addRenderableWidget(Button.builder(cameraChunkLoadingLabel(), pressed -> {
+			OptiminiumSettings.toggleCameraChunkLoading();
+			pressed.setMessage(cameraChunkLoadingLabel());
+		})
+			.bounds(x, y + (CONTROL_HEIGHT + ROW_GAP) * 2, CONTROL_WIDTH, CONTROL_HEIGHT)
+			.tooltip(Tooltip.create(Component.literal("Only track chunks inside the player's camera-facing view cone.")))
+			.build());
 
-		SettingsSlider cachedChunkSlider = new SettingsSlider(
+		SettingsSlider cameraRadiusSlider = new SettingsSlider(
 			x,
 			y + (CONTROL_HEIGHT + ROW_GAP) * 3,
 			CONTROL_WIDTH,
 			CONTROL_HEIGHT,
-			OptiminiumSettings::getCachedChunkDistanceChunks,
-			OptiminiumSettings::setCachedChunkDistanceChunks,
-			OptiminiumSettings.getMinCachedChunkDistanceChunks(),
-			OptiminiumSettings.getMaxCachedChunkDistanceChunks(),
-			value -> Component.literal(value == 0 ? "Cached Chunks: Off" : "Cached Chunks: +" + value)
+			OptiminiumSettings::getCameraAlwaysTrackRadiusChunks,
+			OptiminiumSettings::setCameraAlwaysTrackRadiusChunks,
+			OptiminiumSettings.getMinCameraAlwaysTrackRadiusChunks(),
+			OptiminiumSettings.getMaxCameraAlwaysTrackRadiusChunks(),
+			value -> Component.literal("Camera Keep Radius: " + value + " chunks")
 		);
-		cachedChunkSlider.setTooltip(Tooltip.create(Component.literal("Render cached terrain samples outside the live vanilla chunk radius.")));
-		this.addRenderableWidget(cachedChunkSlider);
+		cameraRadiusSlider.setTooltip(Tooltip.create(Component.literal("Keep this many chunks around the player loaded even outside the camera cone.")));
+		this.addRenderableWidget(cameraRadiusSlider);
 
-		this.addRenderableWidget(Button.builder(debugCachedChunksLabel(), pressed -> {
-			OptiminiumSettings.toggleDebugCachedChunks();
-			pressed.setMessage(debugCachedChunksLabel());
-		})
-			.bounds(x, y + (CONTROL_HEIGHT + ROW_GAP) * 4, CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal("Highlight chunks currently being supplied from Optiminium's cache.")))
-			.build());
+		SettingsSlider cameraYawStepSlider = new SettingsSlider(
+			x,
+			y + (CONTROL_HEIGHT + ROW_GAP) * 4,
+			CONTROL_WIDTH,
+			CONTROL_HEIGHT,
+			OptiminiumSettings::getCameraYawStepDegrees,
+			OptiminiumSettings::setCameraYawStepDegrees,
+			OptiminiumSettings.getMinCameraYawStepDegrees(),
+			OptiminiumSettings.getMaxCameraYawStepDegrees(),
+			value -> Component.literal("Camera Yaw Step: " + value + " deg")
+		);
+		cameraYawStepSlider.setTooltip(Tooltip.create(Component.literal("Smaller values update the chunk cone more often as the player turns.")));
+		this.addRenderableWidget(cameraYawStepSlider);
 
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, pressed -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 32, 200, CONTROL_HEIGHT)
@@ -112,8 +111,8 @@ public final class OptiminiumSettingsScreen extends Screen {
 		return Component.literal("Optiminium: " + (OptiminiumSettings.isEnabled() ? "ON" : "OFF"));
 	}
 
-	private static Component debugCachedChunksLabel() {
-		return Component.literal("Cached Debug: " + (OptiminiumSettings.isDebugCachedChunks() ? "ON" : "OFF"));
+	private static Component cameraChunkLoadingLabel() {
+		return Component.literal("Camera Chunks: " + (OptiminiumSettings.isCameraChunkLoading() ? "ON" : "OFF"));
 	}
 
 	private static final class SettingsSlider extends AbstractSliderButton {
@@ -143,7 +142,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 			int value = valueFromSlider();
 			if (getter.getAsInt() != value) {
 				setter.accept(value);
-				OptiminiumClientChunkCache.onSettingsChanged();
 			}
 			updateMessage();
 		}

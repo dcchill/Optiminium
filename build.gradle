@@ -47,10 +47,8 @@ def optiminiumMixinJson = '''{
   "required": true,
   "minVersion": "0.8",
   "package": "net.optiminium.mixin",
-  "client": [
-    "ClientChunkCacheMixin",
-    "ClientPacketListenerMixin",
-    "OptionsMixin"
+  "mixins": [
+    "ChunkMapMixin"
   ],
   "injectors": {
     "defaultRequire": 1

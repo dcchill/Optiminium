@@ -12,24 +12,24 @@ import java.util.Properties;
 public final class OptiminiumSettings {
 	private static final String ENABLED_KEY = "enabled";
 	private static final String FOG_DISTANCE_KEY = "fogDistanceBlocks";
-	private static final String LIVE_RENDER_DISTANCE_RESERVE_KEY = "liveRenderDistanceReserveChunks";
-	private static final String CACHED_CHUNK_DISTANCE_KEY = "cachedChunkDistanceChunks";
-	private static final String DEBUG_CACHED_CHUNKS_KEY = "debugCachedChunks";
+	private static final String CAMERA_CHUNK_LOADING_KEY = "cameraChunkLoading";
+	private static final String CAMERA_ALWAYS_TRACK_RADIUS_KEY = "cameraAlwaysTrackRadiusChunks";
+	private static final String CAMERA_YAW_STEP_DEGREES_KEY = "cameraYawStepDegrees";
 	private static final Path CONFIG_FILE = FMLPaths.CONFIGDIR.get().resolve("optiminium.properties");
 	private static final int MIN_FOG_DISTANCE_BLOCKS = 32;
 	private static final int MAX_FOG_DISTANCE_BLOCKS = 512;
 	private static final int DEFAULT_FOG_DISTANCE_BLOCKS = 192;
-	private static final int MIN_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS = 0;
-	private static final int MAX_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS = 8;
-	private static final int DEFAULT_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS = 2;
-	private static final int MIN_CACHED_CHUNK_DISTANCE_CHUNKS = 0;
-	private static final int MAX_CACHED_CHUNK_DISTANCE_CHUNKS = 16;
-	private static final int DEFAULT_CACHED_CHUNK_DISTANCE_CHUNKS = 4;
+	private static final int MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 0;
+	private static final int MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 4;
+	private static final int DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 2;
+	private static final int MIN_CAMERA_YAW_STEP_DEGREES = 1;
+	private static final int MAX_CAMERA_YAW_STEP_DEGREES = 45;
+	private static final int DEFAULT_CAMERA_YAW_STEP_DEGREES = 15;
 	private static volatile boolean enabled = true;
 	private static volatile int fogDistanceBlocks = DEFAULT_FOG_DISTANCE_BLOCKS;
-	private static volatile int liveRenderDistanceReserveChunks = DEFAULT_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS;
-	private static volatile int cachedChunkDistanceChunks = DEFAULT_CACHED_CHUNK_DISTANCE_CHUNKS;
-	private static volatile boolean debugCachedChunks = false;
+	private static volatile boolean cameraChunkLoading = false;
+	private static volatile int cameraAlwaysTrackRadiusChunks = DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
+	private static volatile int cameraYawStepDegrees = DEFAULT_CAMERA_YAW_STEP_DEGREES;
 
 	static {
 		load();
@@ -52,20 +52,60 @@ public final class OptiminiumSettings {
 		return enabled;
 	}
 
-	public static boolean isDebugCachedChunks() {
-		return debugCachedChunks;
+	public static boolean isCameraChunkLoading() {
+		return cameraChunkLoading;
 	}
 
-	public static void setDebugCachedChunks(boolean debug) {
-		if (debugCachedChunks != debug) {
-			debugCachedChunks = debug;
+	public static void setCameraChunkLoading(boolean enabled) {
+		if (cameraChunkLoading != enabled) {
+			cameraChunkLoading = enabled;
 			save();
 		}
 	}
 
-	public static boolean toggleDebugCachedChunks() {
-		setDebugCachedChunks(!debugCachedChunks);
-		return debugCachedChunks;
+	public static boolean toggleCameraChunkLoading() {
+		setCameraChunkLoading(!cameraChunkLoading);
+		return cameraChunkLoading;
+	}
+
+	public static int getCameraAlwaysTrackRadiusChunks() {
+		return cameraAlwaysTrackRadiusChunks;
+	}
+
+	public static void setCameraAlwaysTrackRadiusChunks(int radiusChunks) {
+		int clamped = clamp(radiusChunks, MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS, MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS);
+		if (cameraAlwaysTrackRadiusChunks != clamped) {
+			cameraAlwaysTrackRadiusChunks = clamped;
+			save();
+		}
+	}
+
+	public static int getMinCameraAlwaysTrackRadiusChunks() {
+		return MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
+	}
+
+	public static int getMaxCameraAlwaysTrackRadiusChunks() {
+		return MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
+	}
+
+	public static int getCameraYawStepDegrees() {
+		return cameraYawStepDegrees;
+	}
+
+	public static void setCameraYawStepDegrees(int yawStepDegrees) {
+		int clamped = clamp(yawStepDegrees, MIN_CAMERA_YAW_STEP_DEGREES, MAX_CAMERA_YAW_STEP_DEGREES);
+		if (cameraYawStepDegrees != clamped) {
+			cameraYawStepDegrees = clamped;
+			save();
+		}
+	}
+
+	public static int getMinCameraYawStepDegrees() {
+		return MIN_CAMERA_YAW_STEP_DEGREES;
+	}
+
+	public static int getMaxCameraYawStepDegrees() {
+		return MAX_CAMERA_YAW_STEP_DEGREES;
 	}
 
 	public static int getFogDistanceBlocks() {
@@ -88,46 +128,6 @@ public final class OptiminiumSettings {
 		return MAX_FOG_DISTANCE_BLOCKS;
 	}
 
-	public static int getLiveRenderDistanceReserveChunks() {
-		return liveRenderDistanceReserveChunks;
-	}
-
-	public static void setLiveRenderDistanceReserveChunks(int distanceChunks) {
-		int clamped = clamp(distanceChunks, MIN_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS, MAX_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS);
-		if (liveRenderDistanceReserveChunks != clamped) {
-			liveRenderDistanceReserveChunks = clamped;
-			save();
-		}
-	}
-
-	public static int getMinLiveRenderDistanceReserveChunks() {
-		return MIN_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS;
-	}
-
-	public static int getMaxLiveRenderDistanceReserveChunks() {
-		return MAX_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS;
-	}
-
-	public static int getCachedChunkDistanceChunks() {
-		return cachedChunkDistanceChunks;
-	}
-
-	public static void setCachedChunkDistanceChunks(int distanceChunks) {
-		int clamped = clamp(distanceChunks, MIN_CACHED_CHUNK_DISTANCE_CHUNKS, MAX_CACHED_CHUNK_DISTANCE_CHUNKS);
-		if (cachedChunkDistanceChunks != clamped) {
-			cachedChunkDistanceChunks = clamped;
-			save();
-		}
-	}
-
-	public static int getMinCachedChunkDistanceChunks() {
-		return MIN_CACHED_CHUNK_DISTANCE_CHUNKS;
-	}
-
-	public static int getMaxCachedChunkDistanceChunks() {
-		return MAX_CACHED_CHUNK_DISTANCE_CHUNKS;
-	}
-
 	private static void load() {
 		if (!Files.isRegularFile(CONFIG_FILE)) {
 			return;
@@ -137,10 +137,10 @@ public final class OptiminiumSettings {
 			properties.load(input);
 			enabled = Boolean.parseBoolean(properties.getProperty(ENABLED_KEY, "true"));
 			fogDistanceBlocks = parseClamped(properties, FOG_DISTANCE_KEY, DEFAULT_FOG_DISTANCE_BLOCKS, MIN_FOG_DISTANCE_BLOCKS, MAX_FOG_DISTANCE_BLOCKS);
-			liveRenderDistanceReserveChunks = parseClamped(properties, LIVE_RENDER_DISTANCE_RESERVE_KEY, DEFAULT_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS, MIN_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS,
-					MAX_LIVE_RENDER_DISTANCE_RESERVE_CHUNKS);
-			cachedChunkDistanceChunks = parseClamped(properties, CACHED_CHUNK_DISTANCE_KEY, DEFAULT_CACHED_CHUNK_DISTANCE_CHUNKS, MIN_CACHED_CHUNK_DISTANCE_CHUNKS, MAX_CACHED_CHUNK_DISTANCE_CHUNKS);
-			debugCachedChunks = Boolean.parseBoolean(properties.getProperty(DEBUG_CACHED_CHUNKS_KEY, "false"));
+			cameraChunkLoading = Boolean.parseBoolean(properties.getProperty(CAMERA_CHUNK_LOADING_KEY, "false"));
+			cameraAlwaysTrackRadiusChunks = parseClamped(properties, CAMERA_ALWAYS_TRACK_RADIUS_KEY, DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS, MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS,
+					MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS);
+			cameraYawStepDegrees = parseClamped(properties, CAMERA_YAW_STEP_DEGREES_KEY, DEFAULT_CAMERA_YAW_STEP_DEGREES, MIN_CAMERA_YAW_STEP_DEGREES, MAX_CAMERA_YAW_STEP_DEGREES);
 		} catch (IOException ignored) {
 		}
 	}
@@ -149,9 +149,9 @@ public final class OptiminiumSettings {
 		Properties properties = new Properties();
 		properties.setProperty(ENABLED_KEY, Boolean.toString(enabled));
 		properties.setProperty(FOG_DISTANCE_KEY, Integer.toString(fogDistanceBlocks));
-		properties.setProperty(LIVE_RENDER_DISTANCE_RESERVE_KEY, Integer.toString(liveRenderDistanceReserveChunks));
-		properties.setProperty(CACHED_CHUNK_DISTANCE_KEY, Integer.toString(cachedChunkDistanceChunks));
-		properties.setProperty(DEBUG_CACHED_CHUNKS_KEY, Boolean.toString(debugCachedChunks));
+		properties.setProperty(CAMERA_CHUNK_LOADING_KEY, Boolean.toString(cameraChunkLoading));
+		properties.setProperty(CAMERA_ALWAYS_TRACK_RADIUS_KEY, Integer.toString(cameraAlwaysTrackRadiusChunks));
+		properties.setProperty(CAMERA_YAW_STEP_DEGREES_KEY, Integer.toString(cameraYawStepDegrees));
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {
