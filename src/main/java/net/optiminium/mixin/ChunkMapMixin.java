@@ -41,8 +41,8 @@ public abstract class ChunkMapMixin {
 			this.applyChunkTrackingView(player, ChunkTrackingView.EMPTY);
 			currentView = ChunkTrackingView.EMPTY;
 		}
-		OptiminiumCameraChunkLoading.sendCenterIfNeeded(player, currentView, center);
 		ChunkTrackingView newView = OptiminiumCameraChunkLoading.createView(center, OptiminiumCameraChunkLoading.centerOf(currentView), this.getPlayerViewDistance(player), player.getYRot());
+		OptiminiumCameraChunkLoading.sendCenterIfNeeded(player, currentView, OptiminiumCameraChunkLoading.centerOf(newView));
 		OptiminiumCameraChunkLoading.difference(currentView, newView, pos -> this.optiminium$markChunkPendingToSend(player, pos), pos -> optiminium$dropChunk(player, pos));
 		player.setChunkTrackingView(newView);
 		callback.cancel();

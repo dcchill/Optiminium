@@ -91,6 +91,20 @@ public final class OptiminiumSettingsScreen extends Screen {
 		cameraYawStepSlider.setTooltip(Tooltip.create(Component.literal("Smaller values update the chunk cone more often as the player turns.")));
 		this.addRenderableWidget(cameraYawStepSlider);
 
+		SettingsSlider cameraChunkGroupSlider = new SettingsSlider(
+			x,
+			y + (CONTROL_HEIGHT + ROW_GAP) * 5,
+			CONTROL_WIDTH,
+			CONTROL_HEIGHT,
+			OptiminiumSettings::getCameraChunkGroupSizeChunks,
+			OptiminiumSettings::setCameraChunkGroupSizeChunks,
+			OptiminiumSettings.getMinCameraChunkGroupSizeChunks(),
+			OptiminiumSettings.getMaxCameraChunkGroupSizeChunks(),
+			value -> Component.literal("Camera Chunk Group: " + value + " chunks")
+		);
+		cameraChunkGroupSlider.setTooltip(Tooltip.create(Component.literal("Load camera chunks in larger groups to reduce visual churn while moving.")));
+		this.addRenderableWidget(cameraChunkGroupSlider);
+
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, pressed -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 32, 200, CONTROL_HEIGHT)
 			.build());

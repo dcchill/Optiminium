@@ -50,6 +50,10 @@ def optiminiumMixinJson = '''{
   "mixins": [
     "ChunkMapMixin"
   ],
+  "client": [
+    "EntityRenderDispatcherMixin",
+    "ParticleEngineMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   }

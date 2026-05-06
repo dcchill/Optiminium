@@ -36,6 +36,7 @@ public final class OptiminiumFpsOptimizer {
 	@SubscribeEvent
 	public static void onFrameStart(RenderFrameEvent.Pre event) {
 		renderedCrowdByCell.clear();
+		OptiminiumGpuOptimizer.onFrameStart();
 	}
 
 	@SubscribeEvent
