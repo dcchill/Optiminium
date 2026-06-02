@@ -53,24 +53,24 @@ public final class OptiminiumBlockEntityCulling {
 
 	@SubscribeEvent
 	public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
-		register(event, BlockEntityType.SIGN, SignRenderer::new, 32);
-		register(event, BlockEntityType.HANGING_SIGN, HangingSignRenderer::new, 32);
-		register(event, BlockEntityType.MOB_SPAWNER, SpawnerRenderer::new, 40);
-		register(event, BlockEntityType.CHEST, ChestRenderer::new, 48);
-		register(event, BlockEntityType.ENDER_CHEST, ChestRenderer::new, 48);
-		register(event, BlockEntityType.TRAPPED_CHEST, ChestRenderer::new, 48);
-		register(event, BlockEntityType.ENCHANTING_TABLE, EnchantTableRenderer::new, 48);
-		register(event, BlockEntityType.LECTERN, LecternRenderer::new, 32);
-		register(event, BlockEntityType.SKULL, SkullBlockRenderer::new, 32);
-		register(event, BlockEntityType.BANNER, BannerRenderer::new, 32);
-		register(event, BlockEntityType.SHULKER_BOX, ShulkerBoxRenderer::new, 48);
-		register(event, BlockEntityType.BED, BedRenderer::new, 32);
-		register(event, BlockEntityType.BELL, BellRenderer::new, 32);
-		register(event, BlockEntityType.CAMPFIRE, CampfireRenderer::new, 32);
-		register(event, BlockEntityType.BRUSHABLE_BLOCK, BrushableBlockRenderer::new, 24);
-		register(event, BlockEntityType.DECORATED_POT, DecoratedPotRenderer::new, 32);
-		register(event, BlockEntityType.TRIAL_SPAWNER, TrialSpawnerRenderer::new, 48);
-		register(event, BlockEntityType.VAULT, VaultRenderer::new, 48);
+		register(event, BlockEntityType.SIGN, SignRenderer::new, 24);
+		register(event, BlockEntityType.HANGING_SIGN, HangingSignRenderer::new, 24);
+		register(event, BlockEntityType.MOB_SPAWNER, SpawnerRenderer::new, 32);
+		register(event, BlockEntityType.CHEST, ChestRenderer::new, 40);
+		register(event, BlockEntityType.ENDER_CHEST, ChestRenderer::new, 40);
+		register(event, BlockEntityType.TRAPPED_CHEST, ChestRenderer::new, 40);
+		register(event, BlockEntityType.ENCHANTING_TABLE, EnchantTableRenderer::new, 40);
+		register(event, BlockEntityType.LECTERN, LecternRenderer::new, 24);
+		register(event, BlockEntityType.SKULL, SkullBlockRenderer::new, 24);
+		register(event, BlockEntityType.BANNER, BannerRenderer::new, 24);
+		register(event, BlockEntityType.SHULKER_BOX, ShulkerBoxRenderer::new, 40);
+		register(event, BlockEntityType.BED, BedRenderer::new, 24);
+		register(event, BlockEntityType.BELL, BellRenderer::new, 24);
+		register(event, BlockEntityType.CAMPFIRE, CampfireRenderer::new, 24);
+		register(event, BlockEntityType.BRUSHABLE_BLOCK, BrushableBlockRenderer::new, 20);
+		register(event, BlockEntityType.DECORATED_POT, DecoratedPotRenderer::new, 24);
+		register(event, BlockEntityType.TRIAL_SPAWNER, TrialSpawnerRenderer::new, 40);
+		register(event, BlockEntityType.VAULT, VaultRenderer::new, 40);
 	}
 
 	private static <T extends BlockEntity> void register(EntityRenderersEvent.RegisterRenderers event, BlockEntityType<? extends T> type, BlockEntityRendererProvider<T> provider, int viewDistance) {
@@ -88,6 +88,9 @@ public final class OptiminiumBlockEntityCulling {
 
 		@Override
 		public void render(T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
+			if (OptiminiumGpuOptimizer.shouldSkipBlockEntityRender(blockEntity, viewDistance)) {
+				return;
+			}
 			delegate.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
 		}
 

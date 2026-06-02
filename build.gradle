@@ -48,10 +48,11 @@ def optiminiumMixinJson = '''{
   "minVersion": "0.8",
   "package": "net.optiminium.mixin",
   "mixins": [
-    "ChunkMapMixin"
+    "LevelLightEngineMixin"
   ],
   "client": [
     "EntityRenderDispatcherMixin",
+    "LevelRendererMixin",
     "ParticleEngineMixin"
   ],
   "injectors": {

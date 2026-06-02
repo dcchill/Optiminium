@@ -56,12 +56,17 @@ public final class OptiminiumOptimizer {
 	private static final int ITEM_ABSORB_MIN_AGE = 80;
 	private static final int ITEM_PLAYER_SAFE_RADIUS = 18;
 	private static final int ITEM_RELEASE_RADIUS = 20;
-	private static final int ITEM_RELEASES_PER_PLAYER_TICK = 8;
-	private static final int ITEM_SCAN_PERIOD_TICKS = 100;
-	private static final int XP_SCAN_PERIOD_TICKS = 40;
+	private static final int ITEM_RELEASES_PER_PLAYER_TICK = 2;
+	private static final int ITEM_SCAN_PERIOD_TICKS = 600;
+	private static final int ITEM_SCAN_PHASE_TICKS = 37;
+	private static final int XP_SCAN_PERIOD_TICKS = 200;
+	private static final int XP_SCAN_PHASE_TICKS = 103;
 	private static final int XP_PLAYER_SAFE_RADIUS = 8;
 	private static final int REGION_CHUNK_SIZE = 4;
 	private static final int REDSTONE_DUPLICATE_WINDOW_TICKS = 2;
+	private static final int REDSTONE_CLEANUP_PERIOD_TICKS = 20;
+	private static final int ENTITY_CLEANUP_PERIOD_TICKS = 200;
+	private static final int BLOCK_ENTITY_CLEANUP_PERIOD_TICKS = 600;
 	private static final int BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20 * 10;
 	private static final int NEARBY_IDLE_CROWD_SAMPLE_TICKS = 4;
 	private static final int VILLAGER_CROWD_THRESHOLD = 6;
@@ -88,9 +93,15 @@ public final class OptiminiumOptimizer {
 		} else {
 			adaptiveDistance.pause(server);
 		}
-		redstoneGraph.endTick(tick);
-		blockEntitySleep.cleanup(tick);
-		predictiveTicks.cleanup(tick);
+		if (tick % REDSTONE_CLEANUP_PERIOD_TICKS == 0) {
+			redstoneGraph.cleanup(tick);
+		}
+		if (tick % BLOCK_ENTITY_CLEANUP_PERIOD_TICKS == 0) {
+			blockEntitySleep.cleanup(tick);
+		}
+		if (tick % ENTITY_CLEANUP_PERIOD_TICKS == 0) {
+			predictiveTicks.cleanup(tick);
+		}
 		if (OptiminiumSettings.isItemVirtualization()) {
 			virtualItems.releaseNearPlayers(server, tick);
 		} else {
@@ -105,10 +116,10 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			if (OptiminiumSettings.isItemVirtualization() && tick % ITEM_SCAN_PERIOD_TICKS == 0) {
+			if (OptiminiumSettings.isItemVirtualization() && Math.floorMod(tick + level.dimension().location().hashCode(), ITEM_SCAN_PERIOD_TICKS) == ITEM_SCAN_PHASE_TICKS) {
 				virtualItems.absorbDenseItemRegions(level, tick);
 			}
-			if (OptiminiumSettings.isXpOrbMerging() && tick % XP_SCAN_PERIOD_TICKS == 0) {
+			if (OptiminiumSettings.isXpOrbMerging() && Math.floorMod(tick + level.dimension().location().hashCode(), XP_SCAN_PERIOD_TICKS) == XP_SCAN_PHASE_TICKS) {
 				xpOrbs.mergeDenseOrbRegions(level);
 			}
 		}
@@ -318,7 +329,7 @@ public final class OptiminiumOptimizer {
 				return false;
 			}
 			long tick = level.getServer().getTickCount();
-			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(entity.position(), tick));
+			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(uuid, entity.position(), tick));
 			if (tick < state.forceAwakeUntil) {
 				return false;
 			}
@@ -326,14 +337,14 @@ public final class OptiminiumOptimizer {
 			if (interval <= 1) {
 				return false;
 			}
-			return tick - state.lastAllowedTick < interval;
+			return Math.floorMod(tick + state.tickPhase, interval) != 0;
 		}
 
 		void recordTick(Entity entity, ServerLevel level, long tick) {
 			if (!isEligible(entity)) {
 				return;
 			}
-			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(entity.position(), tick));
+			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(uuid, entity.position(), tick));
 			Vec3 now = entity.position();
 			boolean moved = now.distanceToSqr(state.lastPosition) > 0.0025 || entity.getDeltaMovement().lengthSqr() > 0.0004;
 			if (isIdleCrowdEntity(entity)) {
@@ -345,13 +356,12 @@ public final class OptiminiumOptimizer {
 				state.quietTicks++;
 			}
 			state.lastPosition = now;
-			state.lastAllowedTick = tick;
 			state.lastSeenTick = tick;
 			state.currentInterval = intervalFor(entity, level, state);
 		}
 
 		void wake(Entity entity, long untilTick) {
-			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(entity.position(), untilTick));
+			EntityTickState state = states.computeIfAbsent(entity.getUUID(), uuid -> new EntityTickState(uuid, entity.position(), untilTick));
 			state.forceAwakeUntil = Math.max(state.forceAwakeUntil, untilTick);
 			state.quietTicks = 0;
 		}
@@ -432,17 +442,17 @@ public final class OptiminiumOptimizer {
 
 	private static final class EntityTickState {
 		private Vec3 lastPosition;
-		private long lastAllowedTick;
 		private long lastSeenTick;
 		private long forceAwakeUntil;
+		private final int tickPhase;
 		private int quietTicks;
 		private int currentInterval = 1;
 
-		private EntityTickState(Vec3 position, long tick) {
+		private EntityTickState(UUID uuid, Vec3 position, long tick) {
 			this.lastPosition = position;
-			this.lastAllowedTick = tick;
 			this.lastSeenTick = tick;
 			this.forceAwakeUntil = tick + 20;
+			this.tickPhase = Math.floorMod(uuid.hashCode(), OptiminiumSettings.getMaxFarEntityTickInterval());
 		}
 	}
 
@@ -474,7 +484,7 @@ public final class OptiminiumOptimizer {
 		}
 
 		void releaseNearPlayers(MinecraftServer server, long tick) {
-			if ((tick & 3) != 0 || clouds.isEmpty()) {
+			if (tick % 20 != 0 || clouds.isEmpty()) {
 				return;
 			}
 			for (ServerLevel level : server.getAllLevels()) {
@@ -624,7 +634,7 @@ public final class OptiminiumOptimizer {
 			touchedNodes.put(new BlockKey(dimension, pos.immutable()), tick);
 		}
 
-		void endTick(long tick) {
+		void cleanup(long tick) {
 			recentUpdates.entrySet().removeIf(entry -> tick - entry.getValue() > REDSTONE_DUPLICATE_WINDOW_TICKS);
 			touchedNodes.entrySet().removeIf(entry -> tick - entry.getValue() > 20 * 60);
 		}
@@ -671,7 +681,7 @@ public final class OptiminiumOptimizer {
 		private int stableWindows;
 
 		void update(MinecraftServer server, long tick) {
-			if (tick % 100 != 0) {
+			if (tick % 200 != 0) {
 				return;
 			}
 			int current = server.getPlayerList().getSimulationDistance();

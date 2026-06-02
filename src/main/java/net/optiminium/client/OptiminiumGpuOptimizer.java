@@ -4,6 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleType;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
@@ -151,6 +152,20 @@ public final class OptiminiumGpuOptimizer {
 	public static int scaledBlockEntityViewDistance(int viewDistance) {
 		ensureFrameState();
 		return Math.max(1, Math.round(viewDistance * blockEntityDistanceScale));
+	}
+
+	public static boolean shouldSkipBlockEntityRender(BlockEntity blockEntity, int viewDistance) {
+		ensureFrameState();
+		if (!blockEntityCulling || !hasCamera) {
+			return false;
+		}
+		int scaledViewDistance = scaledBlockEntityViewDistance(viewDistance);
+		double distanceSqr = distanceToCameraSqr(blockEntity.getBlockPos().getX() + 0.5D, blockEntity.getBlockPos().getY() + 0.5D, blockEntity.getBlockPos().getZ() + 0.5D);
+		if (distanceSqr > scaledViewDistance * scaledViewDistance) {
+			recordCulledBlockEntityRender();
+			return true;
+		}
+		return false;
 	}
 
 	public static void recordCulledEntityRender() {

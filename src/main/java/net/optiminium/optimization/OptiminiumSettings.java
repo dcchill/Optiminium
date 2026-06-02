@@ -12,10 +12,9 @@ import java.util.Properties;
 public final class OptiminiumSettings {
 	private static final String ENABLED_KEY = "enabled";
 	private static final String FOG_DISTANCE_KEY = "fogDistanceBlocks";
-	private static final String CAMERA_CHUNK_LOADING_KEY = "cameraChunkLoading";
-	private static final String CAMERA_ALWAYS_TRACK_RADIUS_KEY = "cameraAlwaysTrackRadiusChunks";
-	private static final String CAMERA_YAW_STEP_DEGREES_KEY = "cameraYawStepDegrees";
-	private static final String CAMERA_CHUNK_GROUP_SIZE_KEY = "cameraChunkGroupSizeChunks";
+	private static final String CHUNK_REBUILD_SCHEDULING_KEY = "chunkRebuildScheduling";
+	private static final String CHUNK_REBUILDS_PER_FRAME_KEY = "chunkRebuildsPerFrame";
+	private static final String LIGHTING_DEDUPLICATION_KEY = "lightingDeduplication";
 	private static final String CLIENT_RENDER_CULLING_KEY = "clientRenderCulling";
 	private static final String ENTITY_RENDER_DISTANCE_SCALE_KEY = "entityRenderDistanceScalePercent";
 	private static final String BLOCK_ENTITY_CULLING_KEY = "blockEntityCulling";
@@ -43,15 +42,9 @@ public final class OptiminiumSettings {
 	private static final int MIN_FOG_DISTANCE_BLOCKS = 32;
 	private static final int MAX_FOG_DISTANCE_BLOCKS = 512;
 	private static final int DEFAULT_FOG_DISTANCE_BLOCKS = 192;
-	private static final int MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 0;
-	private static final int MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 4;
-	private static final int DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS = 2;
-	private static final int MIN_CAMERA_YAW_STEP_DEGREES = 1;
-	private static final int MAX_CAMERA_YAW_STEP_DEGREES = 45;
-	private static final int DEFAULT_CAMERA_YAW_STEP_DEGREES = 15;
-	private static final int MIN_CAMERA_CHUNK_GROUP_SIZE_CHUNKS = 1;
-	private static final int MAX_CAMERA_CHUNK_GROUP_SIZE_CHUNKS = 8;
-	private static final int DEFAULT_CAMERA_CHUNK_GROUP_SIZE_CHUNKS = 4;
+	private static final int MIN_CHUNK_REBUILDS_PER_FRAME = 1;
+	private static final int MAX_CHUNK_REBUILDS_PER_FRAME = 16;
+	private static final int DEFAULT_CHUNK_REBUILDS_PER_FRAME = 4;
 	private static final int MIN_DISTANCE_SCALE_PERCENT = 25;
 	private static final int MAX_DISTANCE_SCALE_PERCENT = 200;
 	private static final int DEFAULT_DISTANCE_SCALE_PERCENT = 100;
@@ -85,10 +78,9 @@ public final class OptiminiumSettings {
 
 	private static volatile boolean enabled = true;
 	private static volatile int fogDistanceBlocks = DEFAULT_FOG_DISTANCE_BLOCKS;
-	private static volatile boolean cameraChunkLoading = false;
-	private static volatile int cameraAlwaysTrackRadiusChunks = DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
-	private static volatile int cameraYawStepDegrees = DEFAULT_CAMERA_YAW_STEP_DEGREES;
-	private static volatile int cameraChunkGroupSizeChunks = DEFAULT_CAMERA_CHUNK_GROUP_SIZE_CHUNKS;
+	private static volatile boolean chunkRebuildScheduling = true;
+	private static volatile int chunkRebuildsPerFrame = DEFAULT_CHUNK_REBUILDS_PER_FRAME;
+	private static volatile boolean lightingDeduplication = true;
 	private static volatile boolean clientRenderCulling = true;
 	private static volatile int entityRenderDistanceScalePercent = DEFAULT_DISTANCE_SCALE_PERCENT;
 	private static volatile boolean blockEntityCulling = true;
@@ -134,80 +126,56 @@ public final class OptiminiumSettings {
 		return enabled;
 	}
 
-	public static boolean isCameraChunkLoading() {
-		return cameraChunkLoading;
+	public static boolean isChunkRebuildScheduling() {
+		return chunkRebuildScheduling;
 	}
 
-	public static void setCameraChunkLoading(boolean enabled) {
-		if (cameraChunkLoading != enabled) {
-			cameraChunkLoading = enabled;
+	public static boolean toggleChunkRebuildScheduling() {
+		setChunkRebuildScheduling(!chunkRebuildScheduling);
+		return chunkRebuildScheduling;
+	}
+
+	public static void setChunkRebuildScheduling(boolean enabled) {
+		if (chunkRebuildScheduling != enabled) {
+			chunkRebuildScheduling = enabled;
 			save();
 		}
 	}
 
-	public static boolean toggleCameraChunkLoading() {
-		setCameraChunkLoading(!cameraChunkLoading);
-		return cameraChunkLoading;
+	public static int getChunkRebuildsPerFrame() {
+		return chunkRebuildsPerFrame;
 	}
 
-	public static int getCameraAlwaysTrackRadiusChunks() {
-		return cameraAlwaysTrackRadiusChunks;
-	}
-
-	public static void setCameraAlwaysTrackRadiusChunks(int radiusChunks) {
-		int clamped = clamp(radiusChunks, MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS, MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS);
-		if (cameraAlwaysTrackRadiusChunks != clamped) {
-			cameraAlwaysTrackRadiusChunks = clamped;
+	public static void setChunkRebuildsPerFrame(int rebuildsPerFrame) {
+		int clamped = clamp(rebuildsPerFrame, MIN_CHUNK_REBUILDS_PER_FRAME, MAX_CHUNK_REBUILDS_PER_FRAME);
+		if (chunkRebuildsPerFrame != clamped) {
+			chunkRebuildsPerFrame = clamped;
 			save();
 		}
 	}
 
-	public static int getMinCameraAlwaysTrackRadiusChunks() {
-		return MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
+	public static int getMinChunkRebuildsPerFrame() {
+		return MIN_CHUNK_REBUILDS_PER_FRAME;
 	}
 
-	public static int getMaxCameraAlwaysTrackRadiusChunks() {
-		return MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS;
+	public static int getMaxChunkRebuildsPerFrame() {
+		return MAX_CHUNK_REBUILDS_PER_FRAME;
 	}
 
-	public static int getCameraYawStepDegrees() {
-		return cameraYawStepDegrees;
+	public static boolean isLightingDeduplication() {
+		return lightingDeduplication;
 	}
 
-	public static void setCameraYawStepDegrees(int yawStepDegrees) {
-		int clamped = clamp(yawStepDegrees, MIN_CAMERA_YAW_STEP_DEGREES, MAX_CAMERA_YAW_STEP_DEGREES);
-		if (cameraYawStepDegrees != clamped) {
-			cameraYawStepDegrees = clamped;
+	public static boolean toggleLightingDeduplication() {
+		setLightingDeduplication(!lightingDeduplication);
+		return lightingDeduplication;
+	}
+
+	public static void setLightingDeduplication(boolean enabled) {
+		if (lightingDeduplication != enabled) {
+			lightingDeduplication = enabled;
 			save();
 		}
-	}
-
-	public static int getMinCameraYawStepDegrees() {
-		return MIN_CAMERA_YAW_STEP_DEGREES;
-	}
-
-	public static int getMaxCameraYawStepDegrees() {
-		return MAX_CAMERA_YAW_STEP_DEGREES;
-	}
-
-	public static int getCameraChunkGroupSizeChunks() {
-		return cameraChunkGroupSizeChunks;
-	}
-
-	public static void setCameraChunkGroupSizeChunks(int groupSizeChunks) {
-		int clamped = clamp(groupSizeChunks, MIN_CAMERA_CHUNK_GROUP_SIZE_CHUNKS, MAX_CAMERA_CHUNK_GROUP_SIZE_CHUNKS);
-		if (cameraChunkGroupSizeChunks != clamped) {
-			cameraChunkGroupSizeChunks = clamped;
-			save();
-		}
-	}
-
-	public static int getMinCameraChunkGroupSizeChunks() {
-		return MIN_CAMERA_CHUNK_GROUP_SIZE_CHUNKS;
-	}
-
-	public static int getMaxCameraChunkGroupSizeChunks() {
-		return MAX_CAMERA_CHUNK_GROUP_SIZE_CHUNKS;
 	}
 
 	public static int getFogDistanceBlocks() {
@@ -619,12 +587,9 @@ public final class OptiminiumSettings {
 			properties.load(input);
 			enabled = parseBoolean(properties, ENABLED_KEY, true);
 			fogDistanceBlocks = parseClamped(properties, FOG_DISTANCE_KEY, DEFAULT_FOG_DISTANCE_BLOCKS, MIN_FOG_DISTANCE_BLOCKS, MAX_FOG_DISTANCE_BLOCKS);
-			cameraChunkLoading = parseBoolean(properties, CAMERA_CHUNK_LOADING_KEY, false);
-			cameraAlwaysTrackRadiusChunks = parseClamped(properties, CAMERA_ALWAYS_TRACK_RADIUS_KEY, DEFAULT_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS, MIN_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS,
-					MAX_CAMERA_ALWAYS_TRACK_RADIUS_CHUNKS);
-			cameraYawStepDegrees = parseClamped(properties, CAMERA_YAW_STEP_DEGREES_KEY, DEFAULT_CAMERA_YAW_STEP_DEGREES, MIN_CAMERA_YAW_STEP_DEGREES, MAX_CAMERA_YAW_STEP_DEGREES);
-			cameraChunkGroupSizeChunks = parseClamped(properties, CAMERA_CHUNK_GROUP_SIZE_KEY, DEFAULT_CAMERA_CHUNK_GROUP_SIZE_CHUNKS, MIN_CAMERA_CHUNK_GROUP_SIZE_CHUNKS,
-					MAX_CAMERA_CHUNK_GROUP_SIZE_CHUNKS);
+			chunkRebuildScheduling = parseBoolean(properties, CHUNK_REBUILD_SCHEDULING_KEY, true);
+			chunkRebuildsPerFrame = parseClamped(properties, CHUNK_REBUILDS_PER_FRAME_KEY, DEFAULT_CHUNK_REBUILDS_PER_FRAME, MIN_CHUNK_REBUILDS_PER_FRAME, MAX_CHUNK_REBUILDS_PER_FRAME);
+			lightingDeduplication = parseBoolean(properties, LIGHTING_DEDUPLICATION_KEY, true);
 			clientRenderCulling = parseBoolean(properties, CLIENT_RENDER_CULLING_KEY, true);
 			entityRenderDistanceScalePercent = parseClamped(properties, ENTITY_RENDER_DISTANCE_SCALE_KEY, DEFAULT_DISTANCE_SCALE_PERCENT, MIN_DISTANCE_SCALE_PERCENT, MAX_DISTANCE_SCALE_PERCENT);
 			blockEntityCulling = parseBoolean(properties, BLOCK_ENTITY_CULLING_KEY, true);
@@ -657,10 +622,9 @@ public final class OptiminiumSettings {
 		Properties properties = new Properties();
 		properties.setProperty(ENABLED_KEY, Boolean.toString(enabled));
 		properties.setProperty(FOG_DISTANCE_KEY, Integer.toString(fogDistanceBlocks));
-		properties.setProperty(CAMERA_CHUNK_LOADING_KEY, Boolean.toString(cameraChunkLoading));
-		properties.setProperty(CAMERA_ALWAYS_TRACK_RADIUS_KEY, Integer.toString(cameraAlwaysTrackRadiusChunks));
-		properties.setProperty(CAMERA_YAW_STEP_DEGREES_KEY, Integer.toString(cameraYawStepDegrees));
-		properties.setProperty(CAMERA_CHUNK_GROUP_SIZE_KEY, Integer.toString(cameraChunkGroupSizeChunks));
+		properties.setProperty(CHUNK_REBUILD_SCHEDULING_KEY, Boolean.toString(chunkRebuildScheduling));
+		properties.setProperty(CHUNK_REBUILDS_PER_FRAME_KEY, Integer.toString(chunkRebuildsPerFrame));
+		properties.setProperty(LIGHTING_DEDUPLICATION_KEY, Boolean.toString(lightingDeduplication));
 		properties.setProperty(CLIENT_RENDER_CULLING_KEY, Boolean.toString(clientRenderCulling));
 		properties.setProperty(ENTITY_RENDER_DISTANCE_SCALE_KEY, Integer.toString(entityRenderDistanceScalePercent));
 		properties.setProperty(BLOCK_ENTITY_CULLING_KEY, Boolean.toString(blockEntityCulling));

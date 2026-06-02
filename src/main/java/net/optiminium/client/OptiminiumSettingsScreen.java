@@ -105,15 +105,12 @@ public final class OptiminiumSettingsScreen extends Screen {
 		index = addToggle(index, "Optiminium", OptiminiumSettings::isEnabled, () -> OptiminiumSettings.toggleEnabled(), "Toggle every Optiminium optimization.");
 		index = addSlider(index, OptiminiumSettings::getFogDistanceBlocks, OptiminiumSettings::setFogDistanceBlocks, OptiminiumSettings.getMinFogDistanceBlocks(),
 			OptiminiumSettings.getMaxFogDistanceBlocks(), value -> Component.literal("Fog: " + value + " blocks"), "Set Optiminium's client fog far plane.");
-		index = addToggle(index, "Camera Chunks", OptiminiumSettings::isCameraChunkLoading, () -> OptiminiumSettings.toggleCameraChunkLoading(),
-			"Only track chunks inside the player's camera-facing view cone.");
-		index = addSlider(index, OptiminiumSettings::getCameraAlwaysTrackRadiusChunks, OptiminiumSettings::setCameraAlwaysTrackRadiusChunks,
-			OptiminiumSettings.getMinCameraAlwaysTrackRadiusChunks(), OptiminiumSettings.getMaxCameraAlwaysTrackRadiusChunks(),
-			value -> Component.literal("Camera Keep: " + value + " chunks"), "Keep this many chunks around the player loaded outside the camera cone.");
-		index = addSlider(index, OptiminiumSettings::getCameraYawStepDegrees, OptiminiumSettings::setCameraYawStepDegrees, OptiminiumSettings.getMinCameraYawStepDegrees(),
-			OptiminiumSettings.getMaxCameraYawStepDegrees(), value -> Component.literal("Camera Yaw: " + value + " deg"), "Smaller values update the chunk cone more often as the player turns.");
-		addSlider(index, OptiminiumSettings::getCameraChunkGroupSizeChunks, OptiminiumSettings::setCameraChunkGroupSizeChunks, OptiminiumSettings.getMinCameraChunkGroupSizeChunks(),
-			OptiminiumSettings.getMaxCameraChunkGroupSizeChunks(), value -> Component.literal("Chunk Group: " + value), "Load camera chunks in larger groups to reduce visual churn while moving.");
+		index = addToggle(index, "Rebuild Scheduler", OptiminiumSettings::isChunkRebuildScheduling, () -> OptiminiumSettings.toggleChunkRebuildScheduling(),
+			"Prioritize visible chunk mesh rebuilds near the player and crosshair.");
+		index = addSlider(index, OptiminiumSettings::getChunkRebuildsPerFrame, OptiminiumSettings::setChunkRebuildsPerFrame, OptiminiumSettings.getMinChunkRebuildsPerFrame(),
+			OptiminiumSettings.getMaxChunkRebuildsPerFrame(), value -> Component.literal("Rebuilds/Frame: " + value), "Limit async chunk mesh rebuilds scheduled each frame.");
+		addToggle(index, "Light Dedup", OptiminiumSettings::isLightingDeduplication, () -> OptiminiumSettings.toggleLightingDeduplication(),
+			"Merge duplicate light checks for the same block until the light engine drains.");
 	}
 
 	private void addRenderControls() {
@@ -200,6 +197,29 @@ public final class OptiminiumSettingsScreen extends Screen {
 		return index + 1;
 	}
 
+	private int addButton(int index, java.util.function.Supplier<Component> label, Runnable action, String tooltip) {
+		Button button = Button.builder(label.get(), pressed -> {
+			action.run();
+			pressed.setMessage(label.get());
+		})
+			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
+			.tooltip(Tooltip.create(Component.literal(tooltip)))
+			.build();
+		this.addRenderableWidget(button);
+		return index + 1;
+	}
+
+	private int addDisabled(int index, String label, String tooltip) {
+		Button button = Button.builder(Component.literal(label), pressed -> {
+		})
+			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
+			.tooltip(Tooltip.create(Component.literal(tooltip)))
+			.build();
+		button.active = false;
+		this.addRenderableWidget(button);
+		return index + 1;
+	}
+
 	private int controlX(int index) {
 		return controlsX + (index % controlsColumns) * (CONTROL_WIDTH + COLUMN_GAP);
 	}
@@ -213,7 +233,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 	}
 
 	private enum Page {
-		GENERAL("General", 6),
+		GENERAL("General", 5),
 		RENDER("Render", 6),
 		EFFECTS("Effects", 5),
 		SERVER("Server", 5),
