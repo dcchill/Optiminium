@@ -50,7 +50,7 @@ public final class OptiminiumFpsOptimizer {
 		player = Minecraft.getInstance().player;
 		double effectParticleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * 0.375D);
 		effectParticleDistanceSqr = effectParticleDistance * effectParticleDistance;
-		crowdRenderBudgetPercent = OptiminiumSettings.getCrowdRenderBudgetPercent();
+		crowdRenderBudgetPercent = Math.max(0, (int)Math.round(OptiminiumSettings.getCrowdRenderBudgetPercent() * OptiminiumGpuOptimizer.getGpuWorkScale()));
 	}
 
 	@SubscribeEvent

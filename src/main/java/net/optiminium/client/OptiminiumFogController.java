@@ -18,7 +18,7 @@ public final class OptiminiumFogController {
 			return;
 		}
 
-		float farPlane = OptiminiumSettings.getFogDistanceBlocks();
+		float farPlane = (float)Math.max(32.0D, OptiminiumSettings.getFogDistanceBlocks() * OptiminiumGpuOptimizer.getGpuWorkScale());
 		event.setNearPlaneDistance(Math.max(0.0F, farPlane * 0.7F));
 		event.setFarPlaneDistance(farPlane);
 		event.setCanceled(true);

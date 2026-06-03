@@ -20,6 +20,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.entity.TickingBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -33,6 +35,7 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -59,35 +62,63 @@ public final class OptiminiumOptimizer {
 	private static final int ITEM_RELEASES_PER_PLAYER_TICK = 2;
 	private static final int ITEM_SCAN_PERIOD_TICKS = 600;
 	private static final int ITEM_SCAN_PHASE_TICKS = 37;
+	private static final int ITEM_SCAN_BUDGET_PER_TICK = 96;
 	private static final int XP_SCAN_PERIOD_TICKS = 200;
 	private static final int XP_SCAN_PHASE_TICKS = 103;
+	private static final int XP_SCAN_BUDGET_PER_TICK = 128;
 	private static final int XP_PLAYER_SAFE_RADIUS = 8;
 	private static final int REGION_CHUNK_SIZE = 4;
 	private static final int REDSTONE_DUPLICATE_WINDOW_TICKS = 2;
 	private static final int REDSTONE_CLEANUP_PERIOD_TICKS = 20;
 	private static final int ENTITY_CLEANUP_PERIOD_TICKS = 200;
 	private static final int BLOCK_ENTITY_CLEANUP_PERIOD_TICKS = 600;
-	private static final int BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20 * 10;
 	private static final int NEARBY_IDLE_CROWD_SAMPLE_TICKS = 4;
 	private static final int VILLAGER_CROWD_THRESHOLD = 6;
 	private static final double VILLAGER_CROWD_RADIUS_BLOCKS = 5.0D;
+	private static final int DEGRADED_TPS_SAMPLE_TICKS = 20;
+	private static final int DEGRADED_TPS_HOLD_TICKS = 20 * 10;
+	private static final int DEGRADED_TPS_STABLE_RECOVERY_WINDOWS = 3;
+	private static final double DEGRADED_MSPT_MARGIN = 3.0D;
+	private static final double RECOVERED_MSPT_MARGIN = 8.0D;
 
+	private static final ServerHealthMonitor serverHealth = new ServerHealthMonitor();
 	private static final PredictiveTickScheduler predictiveTicks = new PredictiveTickScheduler();
 	private static final VirtualizedItemSystem virtualItems = new VirtualizedItemSystem();
 	private static final RedstoneGraphSolver redstoneGraph = new RedstoneGraphSolver();
 	private static final AdaptiveSimulationDistance adaptiveDistance = new AdaptiveSimulationDistance();
 	private static final BlockEntitySleepIndex blockEntitySleep = new BlockEntitySleepIndex();
 	private static final XpOrbOptimizer xpOrbs = new XpOrbOptimizer();
+	private static final PlayerSnapshotIndex playerSnapshots = new PlayerSnapshotIndex();
+
+	@SubscribeEvent
+	public static void onServerTickPre(ServerTickEvent.Pre event) {
+		MinecraftServer server = event.getServer();
+		long tick = server.getTickCount();
+		if (!OptiminiumSettings.isEnabled()) {
+			serverHealth.reset();
+			return;
+		}
+		serverHealth.update(server, tick);
+		if (needsPlayerSnapshots()) {
+			playerSnapshots.refresh(server, tick);
+		}
+		if (shouldRunBlockEntityThrottling()) {
+			blockEntitySleep.beginTick(tick);
+		}
+	}
 
 	@SubscribeEvent
 	public static void onServerTickPost(ServerTickEvent.Post event) {
 		MinecraftServer server = event.getServer();
 		long tick = server.getTickCount();
 		if (!OptiminiumSettings.isEnabled()) {
+			serverHealth.reset();
 			adaptiveDistance.pause(server);
 			virtualItems.releaseAll(server, 64);
+			xpOrbs.pauseScans();
 			return;
 		}
+		boolean degradedTps = serverHealth.isDegraded();
 		if (OptiminiumSettings.isAdaptiveSimulationDistance()) {
 			adaptiveDistance.update(server, tick);
 		} else {
@@ -107,6 +138,10 @@ public final class OptiminiumOptimizer {
 		} else {
 			virtualItems.releaseAll(server, 64);
 		}
+		if (OptiminiumSettings.isAdaptiveOptimizer() && !degradedTps) {
+			virtualItems.pauseScans();
+			xpOrbs.pauseScans();
+		}
 	}
 
 	@SubscribeEvent
@@ -116,11 +151,11 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			if (OptiminiumSettings.isItemVirtualization() && Math.floorMod(tick + level.dimension().location().hashCode(), ITEM_SCAN_PERIOD_TICKS) == ITEM_SCAN_PHASE_TICKS) {
-				virtualItems.absorbDenseItemRegions(level, tick);
+			if (OptiminiumSettings.isItemVirtualization() && shouldRunAdaptiveOptimizations()) {
+				virtualItems.tickScan(level, tick);
 			}
-			if (OptiminiumSettings.isXpOrbMerging() && Math.floorMod(tick + level.dimension().location().hashCode(), XP_SCAN_PERIOD_TICKS) == XP_SCAN_PHASE_TICKS) {
-				xpOrbs.mergeDenseOrbRegions(level);
+			if (OptiminiumSettings.isXpOrbMerging() && shouldRunAdaptiveOptimizations()) {
+				xpOrbs.tickScan(level, tick);
 			}
 		}
 	}
@@ -219,8 +254,10 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getEntity().level() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			if (OptiminiumSettings.isRedstoneDeduplication()) {
+			if (shouldRunBlockEntityThrottling()) {
+				blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
+			}
+			if (shouldRunRedstoneDeduplication()) {
 				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
 			}
 		}
@@ -234,11 +271,13 @@ public final class OptiminiumOptimizer {
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
 			BlockPos pos = event.getPos();
-			blockEntitySleep.markDirty(level.dimension(), pos, tick);
-			for (Direction direction : event.getNotifiedSides()) {
-				blockEntitySleep.markDirty(level.dimension(), pos.relative(direction), tick);
+			if (shouldRunBlockEntityThrottling()) {
+				blockEntitySleep.markDirty(level.dimension(), pos, tick);
+				for (Direction direction : event.getNotifiedSides()) {
+					blockEntitySleep.markDirty(level.dimension(), pos.relative(direction), tick);
+				}
 			}
-			if (OptiminiumSettings.isRedstoneDeduplication() && redstoneGraph.isDuplicate(level.dimension(), pos, event.getState(), event.getNotifiedSides(), tick)) {
+			if (shouldRunRedstoneDeduplication() && redstoneGraph.isDuplicate(level.dimension(), pos, event.getState(), event.getNotifiedSides(), tick)) {
 				event.setCanceled(true);
 			}
 		}
@@ -251,8 +290,10 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			if (OptiminiumSettings.isRedstoneDeduplication()) {
+			if (shouldRunBlockEntityThrottling()) {
+				blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
+			}
+			if (shouldRunRedstoneDeduplication()) {
 				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
 			}
 		}
@@ -265,8 +306,10 @@ public final class OptiminiumOptimizer {
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
 			long tick = level.getServer().getTickCount();
-			blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
-			if (OptiminiumSettings.isRedstoneDeduplication()) {
+			if (shouldRunBlockEntityThrottling()) {
+				blockEntitySleep.markDirty(level.dimension(), event.getPos(), tick);
+			}
+			if (shouldRunRedstoneDeduplication()) {
 				redstoneGraph.markTouched(level.dimension(), event.getPos(), tick);
 			}
 		}
@@ -278,14 +321,53 @@ public final class OptiminiumOptimizer {
 		}
 	}
 
-	private static boolean hasNearbyPlayer(ServerLevel level, Vec3 position, double radius) {
-		double radiusSqr = radius * radius;
-		for (ServerPlayer player : level.players()) {
-			if (!player.isSpectator() && player.position().distanceToSqr(position) <= radiusSqr) {
-				return true;
-			}
+	public static boolean shouldSleepBlockEntity(ServerLevel level, TickingBlockEntity tickingBlockEntity) {
+		if (!shouldRunBlockEntityThrottling()) {
+			return false;
 		}
-		return false;
+		BlockPos pos = tickingBlockEntity.getPos();
+		BlockEntity blockEntity = level.getBlockEntity(pos);
+		if (blockEntity == null || !isSleepEligibleBlockEntity(blockEntity)) {
+			return false;
+		}
+
+		long tick = level.getServer().getTickCount();
+		blockEntitySleep.observe(level, blockEntity, tick);
+		if (hasNearbyPlayer(level, Vec3.atCenterOf(pos), OptiminiumSettings.getBlockEntityWakeRadiusBlocks())) {
+			blockEntitySleep.markDirty(level.dimension(), pos, tick);
+			return false;
+		}
+		return blockEntitySleep.canSleep(level, blockEntity, tick) && !blockEntitySleep.allowSleepingTick(level, blockEntity, tick);
+	}
+
+	private static boolean needsPlayerSnapshots() {
+		return OptiminiumSettings.isServerEntityTickThrottling()
+			|| OptiminiumSettings.isItemVirtualization() && shouldRunAdaptiveOptimizations()
+			|| OptiminiumSettings.isXpOrbMerging() && shouldRunAdaptiveOptimizations()
+			|| OptiminiumSettings.isBlockEntityUpdateThrottling() && shouldRunAdaptiveOptimizations();
+	}
+
+	private static boolean shouldRunAdaptiveOptimizations() {
+		return !OptiminiumSettings.isAdaptiveOptimizer() || serverHealth.isDegraded();
+	}
+
+	private static boolean shouldRunBlockEntityThrottling() {
+		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityUpdateThrottling() && shouldRunAdaptiveOptimizations();
+	}
+
+	private static boolean shouldRunRedstoneDeduplication() {
+		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isRedstoneDeduplication() && shouldRunAdaptiveOptimizations();
+	}
+
+	private static boolean isSleepEligibleBlockEntity(BlockEntity blockEntity) {
+		BlockEntityType<?> type = blockEntity.getType();
+		return type == BlockEntityType.MOB_SPAWNER
+			|| type == BlockEntityType.TRIAL_SPAWNER
+			|| type == BlockEntityType.VAULT;
+	}
+
+	private static boolean hasNearbyPlayer(ServerLevel level, Vec3 position, double radius) {
+		return playerSnapshots.hasNearbyPlayer(level, position, radius);
 	}
 
 	private static boolean hasLineOfSightFromAnyPlayer(ServerLevel level, Entity entity, double maxRadius) {
@@ -299,13 +381,7 @@ public final class OptiminiumOptimizer {
 	}
 
 	private static double nearestPlayerDistanceSqr(ServerLevel level, Entity entity) {
-		double nearest = Double.MAX_VALUE;
-		for (ServerPlayer player : level.players()) {
-			if (!player.isSpectator()) {
-				nearest = Math.min(nearest, player.distanceToSqr(entity));
-			}
-		}
-		return nearest;
+		return playerSnapshots.nearestDistanceSqr(level, entity.position());
 	}
 
 	private static RegionKey regionKey(ResourceKey<Level> dimension, ChunkPos chunkPos) {
@@ -316,6 +392,116 @@ public final class OptiminiumOptimizer {
 	}
 
 	private record BlockKey(ResourceKey<Level> dimension, BlockPos pos) {
+	}
+
+	private static final class PlayerSnapshotIndex {
+		private final Map<ResourceKey<Level>, PlayerSnapshot> snapshots = new ConcurrentHashMap<>();
+
+		void refresh(MinecraftServer server, long tick) {
+			for (ServerLevel level : server.getAllLevels()) {
+				List<Vec3> positions = new ArrayList<>();
+				for (ServerPlayer player : level.players()) {
+					if (!player.isSpectator()) {
+						positions.add(player.position());
+					}
+				}
+				snapshots.put(level.dimension(), new PlayerSnapshot(tick, positions));
+			}
+		}
+
+		boolean hasNearbyPlayer(ServerLevel level, Vec3 position, double radius) {
+			PlayerSnapshot snapshot = snapshots.get(level.dimension());
+			if (snapshot == null) {
+				return hasNearbyPlayerDirect(level, position, radius);
+			}
+			double radiusSqr = radius * radius;
+			for (Vec3 playerPosition : snapshot.positions) {
+				if (playerPosition.distanceToSqr(position) <= radiusSqr) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		double nearestDistanceSqr(ServerLevel level, Vec3 position) {
+			PlayerSnapshot snapshot = snapshots.get(level.dimension());
+			if (snapshot == null) {
+				return nearestPlayerDistanceSqrDirect(level, position);
+			}
+			double nearest = Double.MAX_VALUE;
+			for (Vec3 playerPosition : snapshot.positions) {
+				nearest = Math.min(nearest, playerPosition.distanceToSqr(position));
+			}
+			return nearest;
+		}
+
+		private boolean hasNearbyPlayerDirect(ServerLevel level, Vec3 position, double radius) {
+			double radiusSqr = radius * radius;
+			for (ServerPlayer player : level.players()) {
+				if (!player.isSpectator() && player.position().distanceToSqr(position) <= radiusSqr) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private double nearestPlayerDistanceSqrDirect(ServerLevel level, Vec3 position) {
+			double nearest = Double.MAX_VALUE;
+			for (ServerPlayer player : level.players()) {
+				if (!player.isSpectator()) {
+					nearest = Math.min(nearest, player.position().distanceToSqr(position));
+				}
+			}
+			return nearest;
+		}
+	}
+
+	private record PlayerSnapshot(long tick, List<Vec3> positions) {
+	}
+
+	private static final class ServerHealthMonitor {
+		private boolean degraded;
+		private long degradedUntilTick;
+		private int stableRecoveryWindows;
+
+		void update(MinecraftServer server, long tick) {
+			if (tick % DEGRADED_TPS_SAMPLE_TICKS != 0) {
+				return;
+			}
+			double mspt = server.getAverageTickTimeNanos() / 1_000_000.0;
+			int targetMspt = OptiminiumSettings.getAdaptiveSimulationTargetMspt();
+			if (mspt >= targetMspt + DEGRADED_MSPT_MARGIN) {
+				degraded = true;
+				degradedUntilTick = tick + DEGRADED_TPS_HOLD_TICKS;
+				stableRecoveryWindows = 0;
+				return;
+			}
+			if (!degraded) {
+				return;
+			}
+			if (tick < degradedUntilTick) {
+				return;
+			}
+			if (mspt <= targetMspt - RECOVERED_MSPT_MARGIN) {
+				stableRecoveryWindows++;
+				if (stableRecoveryWindows >= DEGRADED_TPS_STABLE_RECOVERY_WINDOWS) {
+					degraded = false;
+					stableRecoveryWindows = 0;
+				}
+			} else {
+				stableRecoveryWindows = 0;
+			}
+		}
+
+		boolean isDegraded() {
+			return degraded;
+		}
+
+		void reset() {
+			degraded = false;
+			degradedUntilTick = 0;
+			stableRecoveryWindows = 0;
+		}
 	}
 
 	private static final class PredictiveTickScheduler {
@@ -458,17 +644,41 @@ public final class OptiminiumOptimizer {
 
 	private static final class VirtualizedItemSystem {
 		private final Map<RegionKey, ItemCloud> clouds = new ConcurrentHashMap<>();
+		private final Map<ResourceKey<Level>, ItemScan> scans = new ConcurrentHashMap<>();
 
-		void absorbDenseItemRegions(ServerLevel level, long tick) {
-			Map<RegionKey, List<ItemEntity>> byRegion = new HashMap<>();
-			for (Entity entity : level.getAllEntities()) {
-				if (entity instanceof ItemEntity item && item.isAlive() && item.getAge() >= ITEM_ABSORB_MIN_AGE && !item.getItem().isEmpty()) {
-					if (!hasNearbyPlayer(level, item.position(), ITEM_PLAYER_SAFE_RADIUS)) {
-						RegionKey key = regionKey(level.dimension(), item.chunkPosition());
-						byRegion.computeIfAbsent(key, ignored -> new ArrayList<>()).add(item);
+		void tickScan(ServerLevel level, long tick) {
+			ResourceKey<Level> dimension = level.dimension();
+			ItemScan scan = scans.get(dimension);
+			if (scan == null && Math.floorMod(tick + dimension.location().hashCode(), ITEM_SCAN_PERIOD_TICKS) == ITEM_SCAN_PHASE_TICKS) {
+				scan = new ItemScan(level.getAllEntities().iterator());
+				scans.put(dimension, scan);
+			}
+			if (scan == null) {
+				return;
+			}
+
+			try {
+				int scanned = 0;
+				while (scan.iterator.hasNext() && scanned++ < ITEM_SCAN_BUDGET_PER_TICK) {
+					Entity entity = scan.iterator.next();
+					if (entity instanceof ItemEntity item && item.isAlive() && item.getAge() >= ITEM_ABSORB_MIN_AGE && !item.getItem().isEmpty()) {
+						if (!hasNearbyPlayer(level, item.position(), ITEM_PLAYER_SAFE_RADIUS)) {
+							RegionKey key = regionKey(dimension, item.chunkPosition());
+							scan.byRegion.computeIfAbsent(key, ignored -> new ArrayList<>()).add(item);
+						}
 					}
 				}
+			} catch (ConcurrentModificationException ignored) {
+				scans.remove(dimension);
+				return;
 			}
+			if (!scan.iterator.hasNext()) {
+				absorbDenseItemRegions(level, tick, scan.byRegion);
+				scans.remove(dimension);
+			}
+		}
+
+		private void absorbDenseItemRegions(ServerLevel level, long tick, Map<RegionKey, List<ItemEntity>> byRegion) {
 			for (Map.Entry<RegionKey, List<ItemEntity>> entry : byRegion.entrySet()) {
 				ItemCloud existing = clouds.get(entry.getKey());
 				if (existing == null && entry.getValue().size() < OptiminiumSettings.getItemClusterThreshold()) {
@@ -476,9 +686,14 @@ public final class OptiminiumOptimizer {
 				}
 				ItemCloud cloud = clouds.computeIfAbsent(entry.getKey(), ignored -> new ItemCloud());
 				for (ItemEntity item : entry.getValue()) {
-					cloud.add(item.getItem(), item.position(), tick);
-					item.discard();
-					OptiminiumMetrics.virtualizedItems(1);
+					if (item.isAlive() && !item.getItem().isEmpty() && !hasNearbyPlayer(level, item.position(), ITEM_PLAYER_SAFE_RADIUS)) {
+						cloud.add(item.getItem(), item.position(), tick);
+						item.discard();
+						OptiminiumMetrics.virtualizedItems(1);
+					}
+				}
+				if (cloud.isEmpty()) {
+					clouds.remove(entry.getKey(), cloud);
 				}
 			}
 		}
@@ -518,6 +733,7 @@ public final class OptiminiumOptimizer {
 		}
 
 		void releaseAll(MinecraftServer server, int maxStacks) {
+			scans.clear();
 			if (clouds.isEmpty() || maxStacks <= 0) {
 				return;
 			}
@@ -544,6 +760,19 @@ public final class OptiminiumOptimizer {
 					return;
 				}
 			}
+		}
+
+		void pauseScans() {
+			scans.clear();
+		}
+	}
+
+	private static final class ItemScan {
+		private final Iterator<Entity> iterator;
+		private final Map<RegionKey, List<ItemEntity>> byRegion = new HashMap<>();
+
+		private ItemScan(Iterator<Entity> iterator) {
+			this.iterator = iterator;
 		}
 	}
 
@@ -644,16 +873,45 @@ public final class OptiminiumOptimizer {
 	}
 
 	private static final class XpOrbOptimizer {
-		void mergeDenseOrbRegions(ServerLevel level) {
-			Map<RegionKey, List<ExperienceOrb>> byRegion = new HashMap<>();
-			for (Entity entity : level.getAllEntities()) {
-				if (entity instanceof ExperienceOrb orb && orb.isAlive()) {
-					if (!hasNearbyPlayer(level, orb.position(), XP_PLAYER_SAFE_RADIUS)) {
-						RegionKey key = regionKey(level.dimension(), orb.chunkPosition());
-						byRegion.computeIfAbsent(key, ignored -> new ArrayList<>()).add(orb);
+		private final Map<ResourceKey<Level>, XpOrbScan> scans = new ConcurrentHashMap<>();
+
+		void tickScan(ServerLevel level, long tick) {
+			ResourceKey<Level> dimension = level.dimension();
+			XpOrbScan scan = scans.get(dimension);
+			if (scan == null && Math.floorMod(tick + dimension.location().hashCode(), XP_SCAN_PERIOD_TICKS) == XP_SCAN_PHASE_TICKS) {
+				scan = new XpOrbScan(level.getAllEntities().iterator());
+				scans.put(dimension, scan);
+			}
+			if (scan == null) {
+				return;
+			}
+
+			try {
+				int scanned = 0;
+				while (scan.iterator.hasNext() && scanned++ < XP_SCAN_BUDGET_PER_TICK) {
+					Entity entity = scan.iterator.next();
+					if (entity instanceof ExperienceOrb orb && orb.isAlive()) {
+						if (!hasNearbyPlayer(level, orb.position(), XP_PLAYER_SAFE_RADIUS)) {
+							RegionKey key = regionKey(dimension, orb.chunkPosition());
+							scan.byRegion.computeIfAbsent(key, ignored -> new ArrayList<>()).add(orb);
+						}
 					}
 				}
+			} catch (ConcurrentModificationException ignored) {
+				scans.remove(dimension);
+				return;
 			}
+			if (!scan.iterator.hasNext()) {
+				mergeDenseOrbRegions(level, scan.byRegion);
+				scans.remove(dimension);
+			}
+		}
+
+		void pauseScans() {
+			scans.clear();
+		}
+
+		private void mergeDenseOrbRegions(ServerLevel level, Map<RegionKey, List<ExperienceOrb>> byRegion) {
 			for (List<ExperienceOrb> orbs : byRegion.values()) {
 				if (orbs.size() < OptiminiumSettings.getXpMergeThreshold()) {
 					continue;
@@ -662,16 +920,27 @@ public final class OptiminiumOptimizer {
 				int value = 0;
 				int merged = 0;
 				for (ExperienceOrb orb : orbs) {
-					position = position.add(orb.position());
-					value += orb.getValue();
-					merged++;
-					orb.discard();
+					if (orb.isAlive() && !hasNearbyPlayer(level, orb.position(), XP_PLAYER_SAFE_RADIUS)) {
+						position = position.add(orb.position());
+						value += orb.getValue();
+						merged++;
+						orb.discard();
+					}
 				}
 				if (merged > 0 && value > 0) {
 					ExperienceOrb.award(level, position.scale(1.0 / merged), value);
 					OptiminiumMetrics.mergedXpOrbs(merged, value);
 				}
 			}
+		}
+	}
+
+	private static final class XpOrbScan {
+		private final Iterator<Entity> iterator;
+		private final Map<RegionKey, List<ExperienceOrb>> byRegion = new HashMap<>();
+
+		private XpOrbScan(Iterator<Entity> iterator) {
+			this.iterator = iterator;
 		}
 	}
 
@@ -724,6 +993,15 @@ public final class OptiminiumOptimizer {
 	private static final class BlockEntitySleepIndex {
 		private final Map<BlockKey, Long> dirtyTicks = new ConcurrentHashMap<>();
 		private final Map<BlockKey, Long> observedTicks = new ConcurrentHashMap<>();
+		private long currentTick = -1;
+		private int sleepingTicksUsed;
+
+		void beginTick(long tick) {
+			if (currentTick != tick) {
+				currentTick = tick;
+				sleepingTicksUsed = 0;
+			}
+		}
 
 		void observe(ServerLevel level, BlockEntity blockEntity, long tick) {
 			BlockKey key = new BlockKey(level.dimension(), blockEntity.getBlockPos().immutable());
@@ -738,7 +1016,21 @@ public final class OptiminiumOptimizer {
 		boolean canSleep(ServerLevel level, BlockEntity blockEntity, long tick) {
 			BlockKey key = new BlockKey(level.dimension(), blockEntity.getBlockPos().immutable());
 			Long dirtyTick = dirtyTicks.get(key);
-			return dirtyTick != null && tick - dirtyTick >= BLOCK_ENTITY_SLEEP_AFTER_TICKS;
+			return dirtyTick != null && tick - dirtyTick >= OptiminiumSettings.getBlockEntitySleepAfterTicks();
+		}
+
+		boolean allowSleepingTick(ServerLevel level, BlockEntity blockEntity, long tick) {
+			int budget = OptiminiumSettings.getSleepingBlockEntityTicksPerTick();
+			if (budget <= 0 || sleepingTicksUsed >= budget) {
+				return false;
+			}
+			int interval = OptiminiumSettings.getSleepingBlockEntityTickInterval();
+			BlockKey key = new BlockKey(level.dimension(), blockEntity.getBlockPos().immutable());
+			if (Math.floorMod(tick + key.hashCode(), interval) != 0) {
+				return false;
+			}
+			sleepingTicksUsed++;
+			return true;
 		}
 
 		void cleanup(long tick) {

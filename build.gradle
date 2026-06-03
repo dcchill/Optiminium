@@ -48,6 +48,7 @@ def optiminiumMixinJson = '''{
   "minVersion": "0.8",
   "package": "net.optiminium.mixin",
   "mixins": [
+    "LevelBlockEntityTickMixin",
     "LevelLightEngineMixin"
   ],
   "client": [

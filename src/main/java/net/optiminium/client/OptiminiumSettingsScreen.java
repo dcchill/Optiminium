@@ -109,12 +109,22 @@ public final class OptiminiumSettingsScreen extends Screen {
 			"Prioritize visible chunk mesh rebuilds near the player and crosshair.");
 		index = addSlider(index, OptiminiumSettings::getChunkRebuildsPerFrame, OptiminiumSettings::setChunkRebuildsPerFrame, OptiminiumSettings.getMinChunkRebuildsPerFrame(),
 			OptiminiumSettings.getMaxChunkRebuildsPerFrame(), value -> Component.literal("Rebuilds/Frame: " + value), "Limit async chunk mesh rebuilds scheduled each frame.");
+		index = addSlider(index, OptiminiumSettings::getSyncChunkRebuildsPerFrame, OptiminiumSettings::setSyncChunkRebuildsPerFrame, OptiminiumSettings.getMinSyncChunkRebuildsPerFrame(),
+			OptiminiumSettings.getMaxSyncChunkRebuildsPerFrame(), value -> Component.literal("Sync Rebuilds: " + value), "Synchronous chunk rebuilds allowed on the render thread each frame.");
 		addToggle(index, "Light Dedup", OptiminiumSettings::isLightingDeduplication, () -> OptiminiumSettings.toggleLightingDeduplication(),
 			"Merge duplicate light checks for the same block until the light engine drains.");
 	}
 
 	private void addRenderControls() {
 		int index = 0;
+		index = addToggle(index, "GPU Optimizer", OptiminiumSettings::isGpuOptimizer, () -> OptiminiumSettings.toggleGpuOptimizer(),
+			"Adapt render workload when client frame time is above the target.");
+		index = addSlider(index, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps,
+			OptiminiumSettings.getMinGpuTargetFps(), OptiminiumSettings.getMaxGpuTargetFps(),
+			value -> Component.literal("GPU Target: " + value + " FPS"), "Frame-rate target used by adaptive GPU scaling.");
+		index = addSlider(index, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent,
+			OptiminiumSettings.getMinGpuMinRenderScalePercent(), OptiminiumSettings.getMaxGpuMinRenderScalePercent(),
+			value -> Component.literal("GPU Min Scale: " + value + "%"), "Lowest render workload scale adaptive GPU mode may use.");
 		index = addToggle(index, "Render Culling", OptiminiumSettings::isClientRenderCulling, () -> OptiminiumSettings.toggleClientRenderCulling(),
 			"Skip distant low-value entity renders and name tags.");
 		index = addSlider(index, OptiminiumSettings::getEntityRenderDistanceScalePercent, OptiminiumSettings::setEntityRenderDistanceScalePercent,
@@ -154,6 +164,8 @@ public final class OptiminiumSettingsScreen extends Screen {
 			"Tick idle far mobs less often while keeping active mobs awake.");
 		index = addSlider(index, OptiminiumSettings::getFarEntityTickInterval, OptiminiumSettings::setFarEntityTickInterval, OptiminiumSettings.getMinFarEntityTickInterval(),
 			OptiminiumSettings.getMaxFarEntityTickInterval(), value -> Component.literal("Far Tick Gap: " + value), "Ticks between updates for quiet mobs far from every player.");
+		index = addToggle(index, "Adaptive Optimizer", OptiminiumSettings::isAdaptiveOptimizer, () -> OptiminiumSettings.toggleAdaptiveOptimizer(),
+			"Only run low-impact world checks after server tick time is already degraded.");
 		index = addToggle(index, "Adaptive Sim", OptiminiumSettings::isAdaptiveSimulationDistance, () -> OptiminiumSettings.toggleAdaptiveSimulationDistance(),
 			"Lower simulation distance under sustained server tick pressure.");
 		index = addSlider(index, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt,
@@ -174,8 +186,22 @@ public final class OptiminiumSettingsScreen extends Screen {
 			"Merge dense unattended XP orb groups.");
 		index = addSlider(index, OptiminiumSettings::getXpMergeThreshold, OptiminiumSettings::setXpMergeThreshold, OptiminiumSettings.getMinXpMergeThreshold(),
 			OptiminiumSettings.getMaxXpMergeThreshold(), value -> Component.literal("XP Cluster: " + value), "Minimum XP orb group size before merging starts.");
-		addToggle(index, "Redstone Dedup", OptiminiumSettings::isRedstoneDeduplication, () -> OptiminiumSettings.toggleRedstoneDeduplication(),
+		index = addToggle(index, "Redstone Dedup", OptiminiumSettings::isRedstoneDeduplication, () -> OptiminiumSettings.toggleRedstoneDeduplication(),
 			"Suppress duplicate redstone neighbor notifications in the same short tick window.");
+		index = addToggle(index, "BE Updates", OptiminiumSettings::isBlockEntityUpdateThrottling, () -> OptiminiumSettings.toggleBlockEntityUpdateThrottling(),
+			"Tick stable distant block entities less often.");
+		index = addSlider(index, OptiminiumSettings::getBlockEntitySleepAfterTicks, OptiminiumSettings::setBlockEntitySleepAfterTicks,
+			OptiminiumSettings.getMinBlockEntitySleepAfterTicks(), OptiminiumSettings.getMaxBlockEntitySleepAfterTicks(),
+			value -> Component.literal("BE Sleep: " + value + " ticks"), "Ticks since the last change before eligible block entities may sleep.");
+		index = addSlider(index, OptiminiumSettings::getBlockEntityWakeRadiusBlocks, OptiminiumSettings::setBlockEntityWakeRadiusBlocks,
+			OptiminiumSettings.getMinBlockEntityWakeRadiusBlocks(), OptiminiumSettings.getMaxBlockEntityWakeRadiusBlocks(),
+			value -> Component.literal("BE Wake: " + value + " blocks"), "Player radius that keeps eligible block entities awake.");
+		index = addSlider(index, OptiminiumSettings::getSleepingBlockEntityTicksPerTick, OptiminiumSettings::setSleepingBlockEntityTicksPerTick,
+			OptiminiumSettings.getMinSleepingBlockEntityTicksPerTick(), OptiminiumSettings.getMaxSleepingBlockEntityTicksPerTick(),
+			value -> Component.literal("BE Budget: " + value), "Sleeping block entities allowed to sample-tick each server tick.");
+		addSlider(index, OptiminiumSettings::getSleepingBlockEntityTickInterval, OptiminiumSettings::setSleepingBlockEntityTickInterval,
+			OptiminiumSettings.getMinSleepingBlockEntityTickInterval(), OptiminiumSettings.getMaxSleepingBlockEntityTickInterval(),
+			value -> Component.literal("BE Sample: " + value + " ticks"), "Interval between sample ticks for sleeping block entities.");
 	}
 
 	private int addToggle(int index, String label, BooleanSupplier getter, Runnable toggler, String tooltip) {
@@ -233,11 +259,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 	}
 
 	private enum Page {
-		GENERAL("General", 5),
-		RENDER("Render", 6),
+		GENERAL("General", 6),
+		RENDER("Render", 9),
 		EFFECTS("Effects", 5),
-		SERVER("Server", 5),
-		WORLD("World", 5);
+		SERVER("Server", 6),
+		WORLD("World", 10);
 
 		private final String label;
 		private final int controlCount;

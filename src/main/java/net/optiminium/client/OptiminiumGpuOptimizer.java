@@ -23,6 +23,9 @@ public final class OptiminiumGpuOptimizer {
 	private static final double HANGING_ENTITY_RENDER_DISTANCE_SQR = 64.0D * 64.0D;
 	private static final double PROJECTILE_RENDER_DISTANCE_SQR = 96.0D * 96.0D;
 	private static final double FALLING_BLOCK_RENDER_DISTANCE_SQR = 96.0D * 96.0D;
+	private static final double FRAME_SMOOTHING = 0.12D;
+	private static final double GPU_SCALE_STEP_DOWN = 0.04D;
+	private static final double GPU_SCALE_STEP_UP = 0.015D;
 
 	private static int particlesThisFrame;
 	private static int lowPriorityParticlesThisFrame;
@@ -46,6 +49,9 @@ public final class OptiminiumGpuOptimizer {
 	private static double fallingBlockRenderDistanceSqr;
 	private static double particleRenderDistanceSqr;
 	private static double lowPriorityParticleDistanceSqr;
+	private static double gpuWorkScale = 1.0D;
+	private static long lastFrameNanos;
+	private static double smoothedFrameNanos;
 	private static int maxParticlesPerFrame;
 	private static int maxLowPriorityParticlesPerFrame;
 	private static float blockEntityDistanceScale;
@@ -58,11 +64,12 @@ public final class OptiminiumGpuOptimizer {
 		particlesThisFrame = 0;
 		lowPriorityParticlesThisFrame = 0;
 		boolean enabled = OptiminiumSettings.isEnabled();
+		updateGpuWorkScale(enabled);
 		clientRenderCulling = enabled && OptiminiumSettings.isClientRenderCulling();
 		blockEntityCulling = enabled && OptiminiumSettings.isBlockEntityCulling();
 		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
 
-		double entityDistanceScale = OptiminiumSettings.getEntityRenderDistanceScalePercent() / 100.0D;
+		double entityDistanceScale = OptiminiumSettings.getEntityRenderDistanceScalePercent() / 100.0D * gpuWorkScale;
 		double entityDistanceScaleSqr = entityDistanceScale * entityDistanceScale;
 		itemEntityRenderDistanceSqr = ITEM_ENTITY_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 		experienceOrbRenderDistanceSqr = EXPERIENCE_ORB_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
@@ -70,13 +77,13 @@ public final class OptiminiumGpuOptimizer {
 		projectileRenderDistanceSqr = PROJECTILE_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 		fallingBlockRenderDistanceSqr = FALLING_BLOCK_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 
-		double particleDistance = OptiminiumSettings.getParticleRenderDistanceBlocks();
+		double particleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * gpuWorkScale);
 		double lowPriorityDistance = Math.max(8.0D, particleDistance * 0.5D);
 		particleRenderDistanceSqr = particleDistance * particleDistance;
 		lowPriorityParticleDistanceSqr = lowPriorityDistance * lowPriorityDistance;
-		maxParticlesPerFrame = OptiminiumSettings.getMaxParticlesPerFrame();
+		maxParticlesPerFrame = Math.max(8, (int)Math.round(OptiminiumSettings.getMaxParticlesPerFrame() * gpuWorkScale));
 		maxLowPriorityParticlesPerFrame = Math.max(4, maxParticlesPerFrame / 3);
-		blockEntityDistanceScale = OptiminiumSettings.getBlockEntityDistanceScalePercent() / 100.0F;
+		blockEntityDistanceScale = (float)(OptiminiumSettings.getBlockEntityDistanceScalePercent() / 100.0D * gpuWorkScale);
 
 		Minecraft minecraft = Minecraft.getInstance();
 		cameraEntity = minecraft.cameraEntity;
@@ -168,6 +175,27 @@ public final class OptiminiumGpuOptimizer {
 		return false;
 	}
 
+	public static double getGpuWorkScale() {
+		ensureFrameState();
+		return gpuWorkScale;
+	}
+
+	public static int scaledChunkRebuildBudget(int configuredBudget) {
+		ensureFrameState();
+		if (configuredBudget <= 0) {
+			return 0;
+		}
+		return Math.max(1, (int)Math.floor(configuredBudget * gpuWorkScale));
+	}
+
+	public static int scaledSyncChunkRebuildBudget(int configuredBudget) {
+		ensureFrameState();
+		if (configuredBudget <= 0) {
+			return 0;
+		}
+		return gpuWorkScale < 0.75D ? 0 : Math.max(1, (int)Math.floor(configuredBudget * gpuWorkScale));
+	}
+
 	public static void recordCulledEntityRender() {
 		pendingCulledEntityRenders++;
 	}
@@ -198,6 +226,34 @@ public final class OptiminiumGpuOptimizer {
 	private static void ensureFrameState() {
 		if (!frameStateReady) {
 			onFrameStart();
+		}
+	}
+
+	private static void updateGpuWorkScale(boolean enabled) {
+		long now = System.nanoTime();
+		if (lastFrameNanos == 0L) {
+			lastFrameNanos = now;
+			gpuWorkScale = 1.0D;
+			return;
+		}
+		long frameNanos = Math.max(1L, now - lastFrameNanos);
+		lastFrameNanos = now;
+		if (!enabled || !OptiminiumSettings.isGpuOptimizer()) {
+			gpuWorkScale = 1.0D;
+			smoothedFrameNanos = 0.0D;
+			return;
+		}
+		if (smoothedFrameNanos <= 0.0D) {
+			smoothedFrameNanos = frameNanos;
+		} else {
+			smoothedFrameNanos += (frameNanos - smoothedFrameNanos) * FRAME_SMOOTHING;
+		}
+		double targetFrameNanos = 1_000_000_000.0D / OptiminiumSettings.getGpuTargetFps();
+		double minScale = OptiminiumSettings.getGpuMinRenderScalePercent() / 100.0D;
+		if (smoothedFrameNanos > targetFrameNanos * 1.10D) {
+			gpuWorkScale = Math.max(minScale, gpuWorkScale - GPU_SCALE_STEP_DOWN);
+		} else if (smoothedFrameNanos < targetFrameNanos * 0.86D) {
+			gpuWorkScale = Math.min(1.0D, gpuWorkScale + GPU_SCALE_STEP_UP);
 		}
 	}
 

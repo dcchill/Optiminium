@@ -10,6 +10,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.Vec3;
+import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.optimization.OptiminiumSettings;
 import org.joml.Vector3f;
 import org.spongepowered.asm.mixin.Final;
@@ -47,11 +48,11 @@ public abstract class LevelRendererMixin {
 		LevelLightEngine lightEngine = this.level.getLightEngine();
 		RenderRegionCache renderRegionCache = new RenderRegionCache();
 		BlockPos cameraBlock = camera.getBlockPosition();
-		int asyncBudget = OptiminiumSettings.getChunkRebuildsPerFrame();
+		int asyncBudget = OptiminiumGpuOptimizer.scaledChunkRebuildBudget(OptiminiumSettings.getChunkRebuildsPerFrame());
 		SectionRenderDispatcher.RenderSection[] candidates = new SectionRenderDispatcher.RenderSection[asyncBudget];
 		double[] priorities = new double[asyncBudget];
 		int candidateCount = 0;
-		int syncBudget = 1;
+		int syncBudget = OptiminiumGpuOptimizer.scaledSyncChunkRebuildBudget(OptiminiumSettings.getSyncChunkRebuildsPerFrame());
 
 		for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
 			SectionPos sectionPos = SectionPos.of(section.getOrigin());

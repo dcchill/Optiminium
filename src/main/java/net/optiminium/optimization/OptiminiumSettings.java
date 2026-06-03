@@ -14,7 +14,11 @@ public final class OptiminiumSettings {
 	private static final String FOG_DISTANCE_KEY = "fogDistanceBlocks";
 	private static final String CHUNK_REBUILD_SCHEDULING_KEY = "chunkRebuildScheduling";
 	private static final String CHUNK_REBUILDS_PER_FRAME_KEY = "chunkRebuildsPerFrame";
+	private static final String SYNC_CHUNK_REBUILDS_PER_FRAME_KEY = "syncChunkRebuildsPerFrame";
 	private static final String LIGHTING_DEDUPLICATION_KEY = "lightingDeduplication";
+	private static final String GPU_OPTIMIZER_KEY = "gpuOptimizer";
+	private static final String GPU_TARGET_FPS_KEY = "gpuTargetFps";
+	private static final String GPU_MIN_RENDER_SCALE_KEY = "gpuMinRenderScalePercent";
 	private static final String CLIENT_RENDER_CULLING_KEY = "clientRenderCulling";
 	private static final String ENTITY_RENDER_DISTANCE_SCALE_KEY = "entityRenderDistanceScalePercent";
 	private static final String BLOCK_ENTITY_CULLING_KEY = "blockEntityCulling";
@@ -28,6 +32,7 @@ public final class OptiminiumSettings {
 	private static final String AMBIENT_SOUND_BUDGET_KEY = "ambientSoundBudget";
 	private static final String SERVER_ENTITY_TICK_THROTTLING_KEY = "serverEntityTickThrottling";
 	private static final String FAR_ENTITY_TICK_INTERVAL_KEY = "farEntityTickInterval";
+	private static final String ADAPTIVE_OPTIMIZER_KEY = "adaptiveOptimizer";
 	private static final String ADAPTIVE_SIMULATION_DISTANCE_KEY = "adaptiveSimulationDistance";
 	private static final String ADAPTIVE_SIMULATION_TARGET_MSPT_KEY = "adaptiveSimulationTargetMspt";
 	private static final String ADAPTIVE_SIMULATION_MIN_DISTANCE_KEY = "adaptiveSimulationMinDistanceChunks";
@@ -36,6 +41,11 @@ public final class OptiminiumSettings {
 	private static final String XP_ORB_MERGING_KEY = "xpOrbMerging";
 	private static final String XP_MERGE_THRESHOLD_KEY = "xpMergeThreshold";
 	private static final String REDSTONE_DEDUPLICATION_KEY = "redstoneDeduplication";
+	private static final String BLOCK_ENTITY_UPDATE_THROTTLING_KEY = "blockEntityUpdateThrottling";
+	private static final String BLOCK_ENTITY_SLEEP_AFTER_TICKS_KEY = "blockEntitySleepAfterTicks";
+	private static final String BLOCK_ENTITY_WAKE_RADIUS_BLOCKS_KEY = "blockEntityWakeRadiusBlocks";
+	private static final String SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK_KEY = "sleepingBlockEntityTicksPerTick";
+	private static final String SLEEPING_BLOCK_ENTITY_TICK_INTERVAL_KEY = "sleepingBlockEntityTickInterval";
 
 	private static final Path CONFIG_FILE = FMLPaths.CONFIGDIR.get().resolve("optiminium.properties");
 
@@ -44,7 +54,16 @@ public final class OptiminiumSettings {
 	private static final int DEFAULT_FOG_DISTANCE_BLOCKS = 192;
 	private static final int MIN_CHUNK_REBUILDS_PER_FRAME = 1;
 	private static final int MAX_CHUNK_REBUILDS_PER_FRAME = 16;
-	private static final int DEFAULT_CHUNK_REBUILDS_PER_FRAME = 4;
+	private static final int DEFAULT_CHUNK_REBUILDS_PER_FRAME = 2;
+	private static final int MIN_SYNC_CHUNK_REBUILDS_PER_FRAME = 0;
+	private static final int MAX_SYNC_CHUNK_REBUILDS_PER_FRAME = 4;
+	private static final int DEFAULT_SYNC_CHUNK_REBUILDS_PER_FRAME = 0;
+	private static final int MIN_GPU_TARGET_FPS = 30;
+	private static final int MAX_GPU_TARGET_FPS = 240;
+	private static final int DEFAULT_GPU_TARGET_FPS = 60;
+	private static final int MIN_GPU_MIN_RENDER_SCALE_PERCENT = 35;
+	private static final int MAX_GPU_MIN_RENDER_SCALE_PERCENT = 100;
+	private static final int DEFAULT_GPU_MIN_RENDER_SCALE_PERCENT = 60;
 	private static final int MIN_DISTANCE_SCALE_PERCENT = 25;
 	private static final int MAX_DISTANCE_SCALE_PERCENT = 200;
 	private static final int DEFAULT_DISTANCE_SCALE_PERCENT = 100;
@@ -75,12 +94,28 @@ public final class OptiminiumSettings {
 	private static final int MIN_XP_MERGE_THRESHOLD = 4;
 	private static final int MAX_XP_MERGE_THRESHOLD = 64;
 	private static final int DEFAULT_XP_MERGE_THRESHOLD = 8;
+	private static final int MIN_BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20;
+	private static final int MAX_BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20 * 60;
+	private static final int DEFAULT_BLOCK_ENTITY_SLEEP_AFTER_TICKS = 20 * 10;
+	private static final int MIN_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS = 16;
+	private static final int MAX_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS = 128;
+	private static final int DEFAULT_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS = 48;
+	private static final int MIN_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK = 0;
+	private static final int MAX_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK = 128;
+	private static final int DEFAULT_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK = 8;
+	private static final int MIN_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL = 20;
+	private static final int MAX_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL = 20 * 60;
+	private static final int DEFAULT_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL = 20 * 10;
 
 	private static volatile boolean enabled = true;
 	private static volatile int fogDistanceBlocks = DEFAULT_FOG_DISTANCE_BLOCKS;
 	private static volatile boolean chunkRebuildScheduling = true;
 	private static volatile int chunkRebuildsPerFrame = DEFAULT_CHUNK_REBUILDS_PER_FRAME;
+	private static volatile int syncChunkRebuildsPerFrame = DEFAULT_SYNC_CHUNK_REBUILDS_PER_FRAME;
 	private static volatile boolean lightingDeduplication = true;
+	private static volatile boolean gpuOptimizer = true;
+	private static volatile int gpuTargetFps = DEFAULT_GPU_TARGET_FPS;
+	private static volatile int gpuMinRenderScalePercent = DEFAULT_GPU_MIN_RENDER_SCALE_PERCENT;
 	private static volatile boolean clientRenderCulling = true;
 	private static volatile int entityRenderDistanceScalePercent = DEFAULT_DISTANCE_SCALE_PERCENT;
 	private static volatile boolean blockEntityCulling = true;
@@ -94,6 +129,7 @@ public final class OptiminiumSettings {
 	private static volatile int ambientSoundBudget = DEFAULT_AMBIENT_SOUND_BUDGET;
 	private static volatile boolean serverEntityTickThrottling = true;
 	private static volatile int farEntityTickInterval = DEFAULT_FAR_ENTITY_TICK_INTERVAL;
+	private static volatile boolean adaptiveOptimizer = true;
 	private static volatile boolean adaptiveSimulationDistance = true;
 	private static volatile int adaptiveSimulationTargetMspt = DEFAULT_ADAPTIVE_SIMULATION_TARGET_MSPT;
 	private static volatile int adaptiveSimulationMinDistanceChunks = DEFAULT_ADAPTIVE_SIMULATION_MIN_DISTANCE_CHUNKS;
@@ -102,6 +138,11 @@ public final class OptiminiumSettings {
 	private static volatile boolean xpOrbMerging = true;
 	private static volatile int xpMergeThreshold = DEFAULT_XP_MERGE_THRESHOLD;
 	private static volatile boolean redstoneDeduplication = true;
+	private static volatile boolean blockEntityUpdateThrottling = true;
+	private static volatile int blockEntitySleepAfterTicks = DEFAULT_BLOCK_ENTITY_SLEEP_AFTER_TICKS;
+	private static volatile int blockEntityWakeRadiusBlocks = DEFAULT_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS;
+	private static volatile int sleepingBlockEntityTicksPerTick = DEFAULT_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK;
+	private static volatile int sleepingBlockEntityTickInterval = DEFAULT_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL;
 
 	static {
 		load();
@@ -162,6 +203,26 @@ public final class OptiminiumSettings {
 		return MAX_CHUNK_REBUILDS_PER_FRAME;
 	}
 
+	public static int getSyncChunkRebuildsPerFrame() {
+		return syncChunkRebuildsPerFrame;
+	}
+
+	public static void setSyncChunkRebuildsPerFrame(int rebuildsPerFrame) {
+		int clamped = clamp(rebuildsPerFrame, MIN_SYNC_CHUNK_REBUILDS_PER_FRAME, MAX_SYNC_CHUNK_REBUILDS_PER_FRAME);
+		if (syncChunkRebuildsPerFrame != clamped) {
+			syncChunkRebuildsPerFrame = clamped;
+			save();
+		}
+	}
+
+	public static int getMinSyncChunkRebuildsPerFrame() {
+		return MIN_SYNC_CHUNK_REBUILDS_PER_FRAME;
+	}
+
+	public static int getMaxSyncChunkRebuildsPerFrame() {
+		return MAX_SYNC_CHUNK_REBUILDS_PER_FRAME;
+	}
+
 	public static boolean isLightingDeduplication() {
 		return lightingDeduplication;
 	}
@@ -176,6 +237,62 @@ public final class OptiminiumSettings {
 			lightingDeduplication = enabled;
 			save();
 		}
+	}
+
+	public static boolean isGpuOptimizer() {
+		return gpuOptimizer;
+	}
+
+	public static boolean toggleGpuOptimizer() {
+		setGpuOptimizer(!gpuOptimizer);
+		return gpuOptimizer;
+	}
+
+	public static void setGpuOptimizer(boolean enabled) {
+		if (gpuOptimizer != enabled) {
+			gpuOptimizer = enabled;
+			save();
+		}
+	}
+
+	public static int getGpuTargetFps() {
+		return gpuTargetFps;
+	}
+
+	public static void setGpuTargetFps(int targetFps) {
+		int clamped = clamp(targetFps, MIN_GPU_TARGET_FPS, MAX_GPU_TARGET_FPS);
+		if (gpuTargetFps != clamped) {
+			gpuTargetFps = clamped;
+			save();
+		}
+	}
+
+	public static int getMinGpuTargetFps() {
+		return MIN_GPU_TARGET_FPS;
+	}
+
+	public static int getMaxGpuTargetFps() {
+		return MAX_GPU_TARGET_FPS;
+	}
+
+	public static int getGpuMinRenderScalePercent() {
+		return gpuMinRenderScalePercent;
+	}
+
+	public static void setGpuMinRenderScalePercent(int scalePercent) {
+		int clamped = clamp(scalePercent, MIN_GPU_MIN_RENDER_SCALE_PERCENT, MAX_GPU_MIN_RENDER_SCALE_PERCENT);
+		if (gpuMinRenderScalePercent != clamped) {
+			gpuMinRenderScalePercent = clamped;
+			save();
+		}
+	}
+
+	public static int getMinGpuMinRenderScalePercent() {
+		return MIN_GPU_MIN_RENDER_SCALE_PERCENT;
+	}
+
+	public static int getMaxGpuMinRenderScalePercent() {
+		return MAX_GPU_MIN_RENDER_SCALE_PERCENT;
 	}
 
 	public static int getFogDistanceBlocks() {
@@ -434,6 +551,22 @@ public final class OptiminiumSettings {
 		return MAX_FAR_ENTITY_TICK_INTERVAL;
 	}
 
+	public static boolean isAdaptiveOptimizer() {
+		return adaptiveOptimizer;
+	}
+
+	public static boolean toggleAdaptiveOptimizer() {
+		setAdaptiveOptimizer(!adaptiveOptimizer);
+		return adaptiveOptimizer;
+	}
+
+	public static void setAdaptiveOptimizer(boolean enabled) {
+		if (adaptiveOptimizer != enabled) {
+			adaptiveOptimizer = enabled;
+			save();
+		}
+	}
+
 	public static boolean isAdaptiveSimulationDistance() {
 		return adaptiveSimulationDistance;
 	}
@@ -578,6 +711,102 @@ public final class OptiminiumSettings {
 		}
 	}
 
+	public static boolean isBlockEntityUpdateThrottling() {
+		return blockEntityUpdateThrottling;
+	}
+
+	public static boolean toggleBlockEntityUpdateThrottling() {
+		setBlockEntityUpdateThrottling(!blockEntityUpdateThrottling);
+		return blockEntityUpdateThrottling;
+	}
+
+	public static void setBlockEntityUpdateThrottling(boolean enabled) {
+		if (blockEntityUpdateThrottling != enabled) {
+			blockEntityUpdateThrottling = enabled;
+			save();
+		}
+	}
+
+	public static int getBlockEntitySleepAfterTicks() {
+		return blockEntitySleepAfterTicks;
+	}
+
+	public static void setBlockEntitySleepAfterTicks(int ticks) {
+		int clamped = clamp(ticks, MIN_BLOCK_ENTITY_SLEEP_AFTER_TICKS, MAX_BLOCK_ENTITY_SLEEP_AFTER_TICKS);
+		if (blockEntitySleepAfterTicks != clamped) {
+			blockEntitySleepAfterTicks = clamped;
+			save();
+		}
+	}
+
+	public static int getMinBlockEntitySleepAfterTicks() {
+		return MIN_BLOCK_ENTITY_SLEEP_AFTER_TICKS;
+	}
+
+	public static int getMaxBlockEntitySleepAfterTicks() {
+		return MAX_BLOCK_ENTITY_SLEEP_AFTER_TICKS;
+	}
+
+	public static int getBlockEntityWakeRadiusBlocks() {
+		return blockEntityWakeRadiusBlocks;
+	}
+
+	public static void setBlockEntityWakeRadiusBlocks(int radiusBlocks) {
+		int clamped = clamp(radiusBlocks, MIN_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS, MAX_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS);
+		if (blockEntityWakeRadiusBlocks != clamped) {
+			blockEntityWakeRadiusBlocks = clamped;
+			save();
+		}
+	}
+
+	public static int getMinBlockEntityWakeRadiusBlocks() {
+		return MIN_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS;
+	}
+
+	public static int getMaxBlockEntityWakeRadiusBlocks() {
+		return MAX_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS;
+	}
+
+	public static int getSleepingBlockEntityTicksPerTick() {
+		return sleepingBlockEntityTicksPerTick;
+	}
+
+	public static void setSleepingBlockEntityTicksPerTick(int ticksPerTick) {
+		int clamped = clamp(ticksPerTick, MIN_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK, MAX_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK);
+		if (sleepingBlockEntityTicksPerTick != clamped) {
+			sleepingBlockEntityTicksPerTick = clamped;
+			save();
+		}
+	}
+
+	public static int getMinSleepingBlockEntityTicksPerTick() {
+		return MIN_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK;
+	}
+
+	public static int getMaxSleepingBlockEntityTicksPerTick() {
+		return MAX_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK;
+	}
+
+	public static int getSleepingBlockEntityTickInterval() {
+		return sleepingBlockEntityTickInterval;
+	}
+
+	public static void setSleepingBlockEntityTickInterval(int tickInterval) {
+		int clamped = clamp(tickInterval, MIN_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL, MAX_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL);
+		if (sleepingBlockEntityTickInterval != clamped) {
+			sleepingBlockEntityTickInterval = clamped;
+			save();
+		}
+	}
+
+	public static int getMinSleepingBlockEntityTickInterval() {
+		return MIN_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL;
+	}
+
+	public static int getMaxSleepingBlockEntityTickInterval() {
+		return MAX_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL;
+	}
+
 	private static void load() {
 		if (!Files.isRegularFile(CONFIG_FILE)) {
 			return;
@@ -589,7 +818,13 @@ public final class OptiminiumSettings {
 			fogDistanceBlocks = parseClamped(properties, FOG_DISTANCE_KEY, DEFAULT_FOG_DISTANCE_BLOCKS, MIN_FOG_DISTANCE_BLOCKS, MAX_FOG_DISTANCE_BLOCKS);
 			chunkRebuildScheduling = parseBoolean(properties, CHUNK_REBUILD_SCHEDULING_KEY, true);
 			chunkRebuildsPerFrame = parseClamped(properties, CHUNK_REBUILDS_PER_FRAME_KEY, DEFAULT_CHUNK_REBUILDS_PER_FRAME, MIN_CHUNK_REBUILDS_PER_FRAME, MAX_CHUNK_REBUILDS_PER_FRAME);
+			syncChunkRebuildsPerFrame = parseClamped(properties, SYNC_CHUNK_REBUILDS_PER_FRAME_KEY, DEFAULT_SYNC_CHUNK_REBUILDS_PER_FRAME, MIN_SYNC_CHUNK_REBUILDS_PER_FRAME,
+					MAX_SYNC_CHUNK_REBUILDS_PER_FRAME);
 			lightingDeduplication = parseBoolean(properties, LIGHTING_DEDUPLICATION_KEY, true);
+			gpuOptimizer = parseBoolean(properties, GPU_OPTIMIZER_KEY, true);
+			gpuTargetFps = parseClamped(properties, GPU_TARGET_FPS_KEY, DEFAULT_GPU_TARGET_FPS, MIN_GPU_TARGET_FPS, MAX_GPU_TARGET_FPS);
+			gpuMinRenderScalePercent = parseClamped(properties, GPU_MIN_RENDER_SCALE_KEY, DEFAULT_GPU_MIN_RENDER_SCALE_PERCENT, MIN_GPU_MIN_RENDER_SCALE_PERCENT,
+					MAX_GPU_MIN_RENDER_SCALE_PERCENT);
 			clientRenderCulling = parseBoolean(properties, CLIENT_RENDER_CULLING_KEY, true);
 			entityRenderDistanceScalePercent = parseClamped(properties, ENTITY_RENDER_DISTANCE_SCALE_KEY, DEFAULT_DISTANCE_SCALE_PERCENT, MIN_DISTANCE_SCALE_PERCENT, MAX_DISTANCE_SCALE_PERCENT);
 			blockEntityCulling = parseBoolean(properties, BLOCK_ENTITY_CULLING_KEY, true);
@@ -604,6 +839,7 @@ public final class OptiminiumSettings {
 			ambientSoundBudget = parseClamped(properties, AMBIENT_SOUND_BUDGET_KEY, DEFAULT_AMBIENT_SOUND_BUDGET, MIN_AMBIENT_SOUND_BUDGET, MAX_AMBIENT_SOUND_BUDGET);
 			serverEntityTickThrottling = parseBoolean(properties, SERVER_ENTITY_TICK_THROTTLING_KEY, true);
 			farEntityTickInterval = parseClamped(properties, FAR_ENTITY_TICK_INTERVAL_KEY, DEFAULT_FAR_ENTITY_TICK_INTERVAL, MIN_FAR_ENTITY_TICK_INTERVAL, MAX_FAR_ENTITY_TICK_INTERVAL);
+			adaptiveOptimizer = parseBoolean(properties, ADAPTIVE_OPTIMIZER_KEY, true);
 			adaptiveSimulationDistance = parseBoolean(properties, ADAPTIVE_SIMULATION_DISTANCE_KEY, true);
 			adaptiveSimulationTargetMspt = parseClamped(properties, ADAPTIVE_SIMULATION_TARGET_MSPT_KEY, DEFAULT_ADAPTIVE_SIMULATION_TARGET_MSPT, MIN_ADAPTIVE_SIMULATION_TARGET_MSPT,
 					MAX_ADAPTIVE_SIMULATION_TARGET_MSPT);
@@ -614,6 +850,15 @@ public final class OptiminiumSettings {
 			xpOrbMerging = parseBoolean(properties, XP_ORB_MERGING_KEY, true);
 			xpMergeThreshold = parseClamped(properties, XP_MERGE_THRESHOLD_KEY, DEFAULT_XP_MERGE_THRESHOLD, MIN_XP_MERGE_THRESHOLD, MAX_XP_MERGE_THRESHOLD);
 			redstoneDeduplication = parseBoolean(properties, REDSTONE_DEDUPLICATION_KEY, true);
+			blockEntityUpdateThrottling = parseBoolean(properties, BLOCK_ENTITY_UPDATE_THROTTLING_KEY, true);
+			blockEntitySleepAfterTicks = parseClamped(properties, BLOCK_ENTITY_SLEEP_AFTER_TICKS_KEY, DEFAULT_BLOCK_ENTITY_SLEEP_AFTER_TICKS, MIN_BLOCK_ENTITY_SLEEP_AFTER_TICKS,
+					MAX_BLOCK_ENTITY_SLEEP_AFTER_TICKS);
+			blockEntityWakeRadiusBlocks = parseClamped(properties, BLOCK_ENTITY_WAKE_RADIUS_BLOCKS_KEY, DEFAULT_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS, MIN_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS,
+					MAX_BLOCK_ENTITY_WAKE_RADIUS_BLOCKS);
+			sleepingBlockEntityTicksPerTick = parseClamped(properties, SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK_KEY, DEFAULT_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK,
+					MIN_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK, MAX_SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK);
+			sleepingBlockEntityTickInterval = parseClamped(properties, SLEEPING_BLOCK_ENTITY_TICK_INTERVAL_KEY, DEFAULT_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL,
+					MIN_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL, MAX_SLEEPING_BLOCK_ENTITY_TICK_INTERVAL);
 		} catch (IOException ignored) {
 		}
 	}
@@ -624,7 +869,11 @@ public final class OptiminiumSettings {
 		properties.setProperty(FOG_DISTANCE_KEY, Integer.toString(fogDistanceBlocks));
 		properties.setProperty(CHUNK_REBUILD_SCHEDULING_KEY, Boolean.toString(chunkRebuildScheduling));
 		properties.setProperty(CHUNK_REBUILDS_PER_FRAME_KEY, Integer.toString(chunkRebuildsPerFrame));
+		properties.setProperty(SYNC_CHUNK_REBUILDS_PER_FRAME_KEY, Integer.toString(syncChunkRebuildsPerFrame));
 		properties.setProperty(LIGHTING_DEDUPLICATION_KEY, Boolean.toString(lightingDeduplication));
+		properties.setProperty(GPU_OPTIMIZER_KEY, Boolean.toString(gpuOptimizer));
+		properties.setProperty(GPU_TARGET_FPS_KEY, Integer.toString(gpuTargetFps));
+		properties.setProperty(GPU_MIN_RENDER_SCALE_KEY, Integer.toString(gpuMinRenderScalePercent));
 		properties.setProperty(CLIENT_RENDER_CULLING_KEY, Boolean.toString(clientRenderCulling));
 		properties.setProperty(ENTITY_RENDER_DISTANCE_SCALE_KEY, Integer.toString(entityRenderDistanceScalePercent));
 		properties.setProperty(BLOCK_ENTITY_CULLING_KEY, Boolean.toString(blockEntityCulling));
@@ -638,6 +887,7 @@ public final class OptiminiumSettings {
 		properties.setProperty(AMBIENT_SOUND_BUDGET_KEY, Integer.toString(ambientSoundBudget));
 		properties.setProperty(SERVER_ENTITY_TICK_THROTTLING_KEY, Boolean.toString(serverEntityTickThrottling));
 		properties.setProperty(FAR_ENTITY_TICK_INTERVAL_KEY, Integer.toString(farEntityTickInterval));
+		properties.setProperty(ADAPTIVE_OPTIMIZER_KEY, Boolean.toString(adaptiveOptimizer));
 		properties.setProperty(ADAPTIVE_SIMULATION_DISTANCE_KEY, Boolean.toString(adaptiveSimulationDistance));
 		properties.setProperty(ADAPTIVE_SIMULATION_TARGET_MSPT_KEY, Integer.toString(adaptiveSimulationTargetMspt));
 		properties.setProperty(ADAPTIVE_SIMULATION_MIN_DISTANCE_KEY, Integer.toString(adaptiveSimulationMinDistanceChunks));
@@ -646,6 +896,11 @@ public final class OptiminiumSettings {
 		properties.setProperty(XP_ORB_MERGING_KEY, Boolean.toString(xpOrbMerging));
 		properties.setProperty(XP_MERGE_THRESHOLD_KEY, Integer.toString(xpMergeThreshold));
 		properties.setProperty(REDSTONE_DEDUPLICATION_KEY, Boolean.toString(redstoneDeduplication));
+		properties.setProperty(BLOCK_ENTITY_UPDATE_THROTTLING_KEY, Boolean.toString(blockEntityUpdateThrottling));
+		properties.setProperty(BLOCK_ENTITY_SLEEP_AFTER_TICKS_KEY, Integer.toString(blockEntitySleepAfterTicks));
+		properties.setProperty(BLOCK_ENTITY_WAKE_RADIUS_BLOCKS_KEY, Integer.toString(blockEntityWakeRadiusBlocks));
+		properties.setProperty(SLEEPING_BLOCK_ENTITY_TICKS_PER_TICK_KEY, Integer.toString(sleepingBlockEntityTicksPerTick));
+		properties.setProperty(SLEEPING_BLOCK_ENTITY_TICK_INTERVAL_KEY, Integer.toString(sleepingBlockEntityTickInterval));
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {
