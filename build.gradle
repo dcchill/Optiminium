@@ -4,7 +4,8 @@ plugins {
 }
 
 version = '1.0'
-base.archivesName = "modid"
+group = 'net.optiminium'
+base.archivesName = 'optiminium'
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
@@ -14,13 +15,6 @@ neoForge {
     runs {
         client {
             client()
-
-            def mcreatorJvmOptions = System.getenv('MCREATOR_JVM_OPTIONS')
-            if (mcreatorJvmOptions) {
-                mcreatorJvmOptions.split("\\s+").findAll { it.trim() }.each { arg ->
-                    jvmArgument(arg)
-                }
-            }
         }
         server {
             server()
@@ -33,7 +27,7 @@ neoForge {
     }
 
     mods {
-        mcreator {
+        optiminium {
             sourceSet sourceSets.main
         }
     }
@@ -42,51 +36,3 @@ neoForge {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
-
-def optiminiumMixinJson = '''{
-  "required": true,
-  "minVersion": "0.8",
-  "package": "net.optiminium.mixin",
-  "mixins": [
-    "LevelBlockEntityTickMixin",
-    "LevelLightEngineMixin"
-  ],
-  "client": [
-    "EntityRenderDispatcherMixin",
-    "LevelRendererMixin",
-    "ParticleEngineMixin"
-  ],
-  "injectors": {
-    "defaultRequire": 1
-  }
-}
-'''
-
-tasks.register('writeOptiminiumMixinResources') {
-    dependsOn tasks.named('processResources')
-    def resourcesDir = layout.buildDirectory.dir('resources/main')
-    outputs.file(resourcesDir.map { it.file('optiminium.mixins.json') })
-    outputs.upToDateWhen { false }
-    doLast {
-        def outputDir = resourcesDir.get().asFile
-        outputDir.mkdirs()
-        new File(outputDir, 'optiminium.mixins.json').text = optiminiumMixinJson
-
-        def modsToml = new File(outputDir, 'META-INF/neoforge.mods.toml')
-        if (modsToml.isFile()) {
-            def text = modsToml.text
-            if (!text.contains('config="optiminium.mixins.json"')) {
-                modsToml.text = text.replace(
-                    '# Start of user code block mod configuration',
-                    '# Start of user code block mod configuration\n[[mixins]]\nconfig="optiminium.mixins.json"'
-                )
-            }
-        }
-    }
-}
-
-tasks.named('classes') {
-    dependsOn tasks.named('writeOptiminiumMixinResources')
-}
-
-apply from: 'mcreator.gradle'

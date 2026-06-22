@@ -5,6 +5,7 @@ import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleType;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
@@ -26,9 +27,13 @@ public final class OptiminiumGpuOptimizer {
 	private static final double FRAME_SMOOTHING = 0.12D;
 	private static final double GPU_SCALE_STEP_DOWN = 0.04D;
 	private static final double GPU_SCALE_STEP_UP = 0.015D;
+	private static final double SHADOW_CULL_DISTANCE_SQR = 18.0D * 18.0D;
+	private static final double NON_LIVING_SHADOW_CULL_DISTANCE_SQR = 10.0D * 10.0D;
+	private static final double BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR = 14.0D * 14.0D;
 
 	private static int particlesThisFrame;
 	private static int lowPriorityParticlesThisFrame;
+	private static int distantBlockEntityRendersThisFrame;
 	private static int pendingCulledEntityRenders;
 	private static int pendingCulledBlockEntityRenders;
 	private static int pendingHiddenNameTags;
@@ -52,6 +57,7 @@ public final class OptiminiumGpuOptimizer {
 	private static double gpuWorkScale = 1.0D;
 	private static long lastFrameNanos;
 	private static double smoothedFrameNanos;
+	private static long latestCpuFrameNanos;
 	private static int maxParticlesPerFrame;
 	private static int maxLowPriorityParticlesPerFrame;
 	private static float blockEntityDistanceScale;
@@ -63,6 +69,7 @@ public final class OptiminiumGpuOptimizer {
 		flushMetrics();
 		particlesThisFrame = 0;
 		lowPriorityParticlesThisFrame = 0;
+		distantBlockEntityRendersThisFrame = 0;
 		boolean enabled = OptiminiumSettings.isEnabled();
 		updateGpuWorkScale(enabled);
 		clientRenderCulling = enabled && OptiminiumSettings.isClientRenderCulling();
@@ -172,12 +179,36 @@ public final class OptiminiumGpuOptimizer {
 			recordCulledBlockEntityRender();
 			return true;
 		}
+		if (shouldDeferBlockEntityRender(blockEntity, distanceSqr)) {
+			recordCulledBlockEntityRender();
+			return true;
+		}
 		return false;
 	}
 
 	public static double getGpuWorkScale() {
 		ensureFrameState();
 		return gpuWorkScale;
+	}
+
+	public static long getLatestCpuFrameNanos() {
+		return latestCpuFrameNanos;
+	}
+
+	public static double getSmoothedFrameNanos() {
+		return smoothedFrameNanos;
+	}
+
+	public static String diagnosticLine() {
+		ensureFrameState();
+		return String.format(
+			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, pendingGpuUploads=%d",
+			OptiminiumGpuTimer.status(),
+			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
+			latestCpuFrameNanos / 1_000_000.0D,
+			gpuWorkScale,
+			OptiminiumGpuUploadQueue.pendingUploads()
+		);
 	}
 
 	public static int scaledChunkRebuildBudget(int configuredBudget) {
@@ -194,6 +225,28 @@ public final class OptiminiumGpuOptimizer {
 			return 0;
 		}
 		return gpuWorkScale < 0.75D ? 0 : Math.max(1, (int)Math.floor(configuredBudget * gpuWorkScale));
+	}
+
+	public static boolean shouldSkipEntityShadow(Entity entity) {
+		ensureFrameState();
+		if (!shouldCullGraphicsEffects() || !hasCamera || entity instanceof Player || entity == cameraEntity || entity.hasGlowingTag() || entity.hasCustomName()) {
+			return false;
+		}
+		double distanceSqr = distanceToCameraSqr(entity.getX(), entity.getY(), entity.getZ());
+		if (!(entity instanceof LivingEntity)) {
+			return gpuWorkScale <= 0.92D && distanceSqr > NON_LIVING_SHADOW_CULL_DISTANCE_SQR;
+		}
+		return gpuWorkScale <= 0.82D && distanceSqr > SHADOW_CULL_DISTANCE_SQR;
+	}
+
+	public static boolean shouldSkipClouds() {
+		ensureFrameState();
+		return shouldCullGraphicsEffects() && gpuWorkScale <= 0.68D;
+	}
+
+	public static boolean shouldSkipWeather() {
+		ensureFrameState();
+		return shouldCullGraphicsEffects() && gpuWorkScale <= 0.74D;
 	}
 
 	public static void recordCulledEntityRender() {
@@ -229,6 +282,44 @@ public final class OptiminiumGpuOptimizer {
 		}
 	}
 
+	private static boolean shouldCullGraphicsEffects() {
+		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isGpuOptimizer() && OptiminiumSettings.isGraphicsEffectCulling();
+	}
+
+	private static boolean shouldDeferBlockEntityRender(BlockEntity blockEntity, double distanceSqr) {
+		if (!OptiminiumSettings.isGpuOptimizer() || gpuWorkScale > 0.90D || distanceSqr <= BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR || isPriorityBlockEntity(blockEntity)) {
+			return false;
+		}
+		int budget = maxDistantBlockEntityRendersPerFrame();
+		if (distantBlockEntityRendersThisFrame >= budget) {
+			return true;
+		}
+		distantBlockEntityRendersThisFrame++;
+		return false;
+	}
+
+	private static int maxDistantBlockEntityRendersPerFrame() {
+		if (gpuWorkScale <= 0.60D) {
+			return 12;
+		}
+		if (gpuWorkScale <= 0.70D) {
+			return 24;
+		}
+		if (gpuWorkScale <= 0.80D) {
+			return 40;
+		}
+		return 64;
+	}
+
+	private static boolean isPriorityBlockEntity(BlockEntity blockEntity) {
+		BlockEntityType<?> type = blockEntity.getType();
+		return type == BlockEntityType.BEACON
+			|| type == BlockEntityType.CONDUIT
+			|| type == BlockEntityType.END_PORTAL
+			|| type == BlockEntityType.END_GATEWAY
+			|| type == BlockEntityType.PISTON;
+	}
+
 	private static void updateGpuWorkScale(boolean enabled) {
 		long now = System.nanoTime();
 		if (lastFrameNanos == 0L) {
@@ -238,21 +329,29 @@ public final class OptiminiumGpuOptimizer {
 		}
 		long frameNanos = Math.max(1L, now - lastFrameNanos);
 		lastFrameNanos = now;
+		latestCpuFrameNanos = frameNanos;
 		if (!enabled || !OptiminiumSettings.isGpuOptimizer()) {
 			gpuWorkScale = 1.0D;
 			smoothedFrameNanos = 0.0D;
 			return;
 		}
-		if (smoothedFrameNanos <= 0.0D) {
+		double pacingNanos;
+		if (OptiminiumGpuTimer.isActive() && OptiminiumGpuTimer.hasTiming()) {
+			pacingNanos = OptiminiumGpuTimer.getSmoothedGpuNanos();
 			smoothedFrameNanos = frameNanos;
 		} else {
-			smoothedFrameNanos += (frameNanos - smoothedFrameNanos) * FRAME_SMOOTHING;
+			if (smoothedFrameNanos <= 0.0D) {
+				smoothedFrameNanos = frameNanos;
+			} else {
+				smoothedFrameNanos += (frameNanos - smoothedFrameNanos) * FRAME_SMOOTHING;
+			}
+			pacingNanos = smoothedFrameNanos;
 		}
 		double targetFrameNanos = 1_000_000_000.0D / OptiminiumSettings.getGpuTargetFps();
 		double minScale = OptiminiumSettings.getGpuMinRenderScalePercent() / 100.0D;
-		if (smoothedFrameNanos > targetFrameNanos * 1.10D) {
+		if (pacingNanos > targetFrameNanos * 1.10D) {
 			gpuWorkScale = Math.max(minScale, gpuWorkScale - GPU_SCALE_STEP_DOWN);
-		} else if (smoothedFrameNanos < targetFrameNanos * 0.86D) {
+		} else if (pacingNanos < targetFrameNanos * 0.86D) {
 			gpuWorkScale = Math.min(1.0D, gpuWorkScale + GPU_SCALE_STEP_UP);
 		}
 	}

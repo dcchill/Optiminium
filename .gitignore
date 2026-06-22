@@ -8,9 +8,9 @@ build/
 .settings/
 .classpath
 .project
+.agents/
+.vscode/
 
-# MCreator workspace
-.mcreator/
 
 # Minecraft client/server files
 run/

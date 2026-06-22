@@ -38,7 +38,6 @@ public final class OptiminiumFpsOptimizer {
 
 	@SubscribeEvent
 	public static void onFrameStart(RenderFrameEvent.Pre event) {
-		OptiminiumKeyBindings.handleClientInput();
 		if (!renderedCrowdByCell.isEmpty()) {
 			renderedCrowdByCell.clear();
 		}

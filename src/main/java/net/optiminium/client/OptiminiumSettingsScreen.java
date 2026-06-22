@@ -3,57 +3,81 @@ package net.optiminium.client;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.optiminium.optimization.OptiminiumSettings;
 
-import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
-import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
 
 public final class OptiminiumSettingsScreen extends Screen {
-	private static final Component TITLE = Component.literal("Optiminium Settings");
-	private static final int CONTROL_WIDTH = 220;
-	private static final int CONTROL_HEIGHT = 20;
-	private static final int COLUMN_GAP = 12;
-	private static final int ROW_GAP = 6;
-	private static final int PAGE_BUTTON_WIDTH = 64;
-	private static final int PAGE_BUTTON_GAP = 6;
-
+	private static final Component TITLE = Component.literal("Optiminium");
+	private static final int BUTTON_WIDTH = 220;
+	private static final int BUTTON_HEIGHT = 20;
 	private final Screen lastScreen;
-	private final Page selectedPage;
-	private int controlsX;
-	private int controlsY;
-	private int controlsColumns;
 
 	public OptiminiumSettingsScreen(Screen lastScreen) {
-		this(lastScreen, Page.GENERAL);
-	}
-
-	private OptiminiumSettingsScreen(Screen lastScreen, Page selectedPage) {
 		super(TITLE);
 		this.lastScreen = lastScreen;
-		this.selectedPage = selectedPage;
 	}
 
 	@Override
 	protected void init() {
-		addPageButtons();
-		configureControlLayout(selectedPage.controlCount);
-
-		switch (selectedPage) {
-			case GENERAL -> addGeneralControls();
-			case RENDER -> addRenderControls();
-			case EFFECTS -> addEffectsControls();
-			case SERVER -> addServerControls();
-			case WORLD -> addWorldControls();
-		}
-
-		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, pressed -> this.onClose())
-			.bounds((this.width - 200) / 2, this.height - 30, 200, CONTROL_HEIGHT)
+		boolean twoColumns = this.width >= BUTTON_WIDTH * 2 + 24;
+		int leftX = twoColumns ? this.width / 2 - BUTTON_WIDTH - 6 : (this.width - BUTTON_WIDTH) / 2;
+		int rightX = twoColumns ? this.width / 2 + 6 : leftX;
+		int rightY = twoColumns ? 42 : 214;
+		int x = leftX;
+		int y = 42;
+		this.addRenderableWidget(Button.builder(enabledLabel(), button -> button.setMessage(Component.literal("Optiminium: " + (OptiminiumSettings.toggleEnabled() ? "ON" : "OFF"))))
+			.bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(asyncResourceStreamingLabel(), button -> button.setMessage(Component.literal("Async Resource Streaming: " + (OptiminiumSettings.toggleAsyncResourceStreaming() ? "ON" : "OFF"))))
+			.bounds(x, y + 26, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(shaderResourceCacheLabel(), button -> button.setMessage(Component.literal("Shader Resource Cache: " + (OptiminiumSettings.toggleShaderResourceCache() ? "ON" : "OFF"))))
+			.bounds(x, y + 52, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(framePacingLabel(), button -> button.setMessage(Component.literal("Frame Pacing: " + (OptiminiumSettings.toggleFramePacing() ? "ON" : "OFF"))))
+			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(gpuTimerPacingLabel(), button -> button.setMessage(Component.literal("GPU Timer Pacing: " + (OptiminiumSettings.toggleGpuTimerPacing() ? "ON" : "OFF"))))
+			.bounds(x, y + 112, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 138, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 164, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 190, OptiminiumSettings::getChunkUploadsPerFrame, OptiminiumSettings::setChunkUploadsPerFrame, 1, 64, "Chunk Uploads/Frame"));
+		x = rightX;
+		y = rightY;
+		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
+			.bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 26, OptiminiumSettings::getParticleRenderDistanceBlocks, OptiminiumSettings::setParticleRenderDistanceBlocks, 16, 160, "Particle Distance"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getMaxParticlesPerFrame, OptiminiumSettings::setMaxParticlesPerFrame, 16, 512, "Particles/Frame"));
+		this.addRenderableWidget(Button.builder(blockEntityCullingLabel(), button -> button.setMessage(Component.literal("Block Entity Culling: " + (OptiminiumSettings.toggleBlockEntityCulling() ? "ON" : "OFF"))))
+			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 112, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
+		this.addRenderableWidget(Button.builder(occlusionRebuildPriorityLabel(), button -> button.setMessage(Component.literal("Occlusion Rebuild Priority: " + (OptiminiumSettings.toggleOcclusionRebuildPriority() ? "ON" : "OFF"))))
+			.bounds(x, y + 146, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(adaptiveSimulationLabel(), button -> button.setMessage(Component.literal("Dynamic Simulation Distance: " + (OptiminiumSettings.toggleAdaptiveSimulationDistance() ? "ON" : "OFF"))))
+			.bounds(x, y + 180, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 206, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt, 35, 80, "Target MSPT"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 232, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks, 2, 12, "Min Sim Distance"));
+		this.addRenderableWidget(Button.builder(smartTickLabel(), button -> button.setMessage(Component.literal("SmartTick Scheduler: " + (OptiminiumSettings.toggleSmartTickScheduler() ? "ON" : "OFF"))))
+			.bounds(x, y + 266, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(aiPathfindingLabel(), button -> button.setMessage(Component.literal("AI Pathfinding Optimizer: " + (OptiminiumSettings.toggleAiPathfindingOptimizer() ? "ON" : "OFF"))))
+			.bounds(x, y + 292, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
+			.bounds(x, y + 326, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
+			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
 			.build());
 	}
 
@@ -61,6 +85,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		super.render(graphics, mouseX, mouseY, partialTick);
 		graphics.drawCenteredString(this.font, TITLE, this.width / 2, 16, 0xFFFFFF);
+		graphics.drawCenteredString(this.font, "GPU Timer: " + OptiminiumGpuTimer.status(), this.width / 2, 28, 0xA0A0A0);
 	}
 
 	@Override
@@ -68,232 +93,70 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.minecraft.setScreen(this.lastScreen);
 	}
 
-	private void addPageButtons() {
-		Page[] pages = Page.values();
-		int buttonWidth = Math.min(PAGE_BUTTON_WIDTH, Math.max(52, (this.width - 20 - (pages.length - 1) * PAGE_BUTTON_GAP) / pages.length));
-		int totalWidth = pages.length * buttonWidth + (pages.length - 1) * PAGE_BUTTON_GAP;
-		int x = (this.width - totalWidth) / 2;
-		int y = 34;
-		for (Page page : pages) {
-			Button button = Button.builder(Component.literal(page.label), pressed -> switchPage(page))
-				.bounds(x, y, buttonWidth, CONTROL_HEIGHT)
-				.build();
-			button.active = page != selectedPage;
-			this.addRenderableWidget(button);
-			x += buttonWidth + PAGE_BUTTON_GAP;
-		}
+	private static Component framePacingLabel() {
+		return Component.literal("Frame Pacing: " + (OptiminiumSettings.isGpuOptimizer() ? "ON" : "OFF"));
 	}
 
-	private void switchPage(Page page) {
-		if (page != selectedPage && this.minecraft != null) {
-			this.minecraft.setScreen(new OptiminiumSettingsScreen(this.lastScreen, page));
-		}
+	private static Component gpuTimerPacingLabel() {
+		return Component.literal("GPU Timer Pacing: " + (OptiminiumSettings.isGpuTimerPacing() ? "ON" : "OFF"));
 	}
 
-	private void configureControlLayout(int controlCount) {
-		boolean twoColumns = this.width >= CONTROL_WIDTH * 2 + COLUMN_GAP + 40 && controlCount > 6;
-		this.controlsColumns = twoColumns ? 2 : 1;
-		int totalWidth = this.controlsColumns * CONTROL_WIDTH + (this.controlsColumns - 1) * COLUMN_GAP;
-		this.controlsX = (this.width - totalWidth) / 2;
-		int rows = (controlCount + this.controlsColumns - 1) / this.controlsColumns;
-		int totalHeight = rows * CONTROL_HEIGHT + Math.max(0, rows - 1) * ROW_GAP;
-		this.controlsY = Math.max(58, Math.min(64, this.height - 42 - totalHeight));
+	private static Component enabledLabel() {
+		return Component.literal("Optiminium: " + (OptiminiumSettings.isEnabled() ? "ON" : "OFF"));
 	}
 
-	private void addGeneralControls() {
-		int index = 0;
-		index = addToggle(index, "Optiminium", OptiminiumSettings::isEnabled, () -> OptiminiumSettings.toggleEnabled(), "Toggle every Optiminium optimization.");
-		index = addSlider(index, OptiminiumSettings::getFogDistanceBlocks, OptiminiumSettings::setFogDistanceBlocks, OptiminiumSettings.getMinFogDistanceBlocks(),
-			OptiminiumSettings.getMaxFogDistanceBlocks(), value -> Component.literal("Fog: " + value + " blocks"), "Set Optiminium's client fog far plane.");
-		index = addToggle(index, "Rebuild Scheduler", OptiminiumSettings::isChunkRebuildScheduling, () -> OptiminiumSettings.toggleChunkRebuildScheduling(),
-			"Prioritize visible chunk mesh rebuilds near the player and crosshair.");
-		index = addSlider(index, OptiminiumSettings::getChunkRebuildsPerFrame, OptiminiumSettings::setChunkRebuildsPerFrame, OptiminiumSettings.getMinChunkRebuildsPerFrame(),
-			OptiminiumSettings.getMaxChunkRebuildsPerFrame(), value -> Component.literal("Rebuilds/Frame: " + value), "Limit async chunk mesh rebuilds scheduled each frame.");
-		index = addSlider(index, OptiminiumSettings::getSyncChunkRebuildsPerFrame, OptiminiumSettings::setSyncChunkRebuildsPerFrame, OptiminiumSettings.getMinSyncChunkRebuildsPerFrame(),
-			OptiminiumSettings.getMaxSyncChunkRebuildsPerFrame(), value -> Component.literal("Sync Rebuilds: " + value), "Synchronous chunk rebuilds allowed on the render thread each frame.");
-		addToggle(index, "Light Dedup", OptiminiumSettings::isLightingDeduplication, () -> OptiminiumSettings.toggleLightingDeduplication(),
-			"Merge duplicate light checks for the same block until the light engine drains.");
+	private static Component asyncResourceStreamingLabel() {
+		return Component.literal("Async Resource Streaming: " + (OptiminiumSettings.isAsyncResourceStreaming() ? "ON" : "OFF"));
 	}
 
-	private void addRenderControls() {
-		int index = 0;
-		index = addToggle(index, "GPU Optimizer", OptiminiumSettings::isGpuOptimizer, () -> OptiminiumSettings.toggleGpuOptimizer(),
-			"Adapt render workload when client frame time is above the target.");
-		index = addSlider(index, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps,
-			OptiminiumSettings.getMinGpuTargetFps(), OptiminiumSettings.getMaxGpuTargetFps(),
-			value -> Component.literal("GPU Target: " + value + " FPS"), "Frame-rate target used by adaptive GPU scaling.");
-		index = addSlider(index, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent,
-			OptiminiumSettings.getMinGpuMinRenderScalePercent(), OptiminiumSettings.getMaxGpuMinRenderScalePercent(),
-			value -> Component.literal("GPU Min Scale: " + value + "%"), "Lowest render workload scale adaptive GPU mode may use.");
-		index = addToggle(index, "Render Culling", OptiminiumSettings::isClientRenderCulling, () -> OptiminiumSettings.toggleClientRenderCulling(),
-			"Skip distant low-value entity renders and name tags.");
-		index = addSlider(index, OptiminiumSettings::getEntityRenderDistanceScalePercent, OptiminiumSettings::setEntityRenderDistanceScalePercent,
-			OptiminiumSettings.getMinEntityRenderDistanceScalePercent(), OptiminiumSettings.getMaxEntityRenderDistanceScalePercent(),
-			value -> Component.literal("Entity Dist: " + value + "%"), "Scale distance cutoffs for item, XP, projectile, and hanging entity renders.");
-		index = addToggle(index, "Block Entities", OptiminiumSettings::isBlockEntityCulling, () -> OptiminiumSettings.toggleBlockEntityCulling(),
-			"Skip distant block entity renderers such as signs, chests, and spawners.");
-		index = addSlider(index, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent,
-			OptiminiumSettings.getMinBlockEntityDistanceScalePercent(), OptiminiumSettings.getMaxBlockEntityDistanceScalePercent(),
-			value -> Component.literal("Block Entity Dist: " + value + "%"), "Scale distance cutoffs for block entity renderers.");
-		index = addToggle(index, "Crowd Culling", OptiminiumSettings::isCrowdCulling, () -> OptiminiumSettings.toggleCrowdCulling(),
-			"Limit how many idle mobs render inside crowded distant cells.");
-		addSlider(index, OptiminiumSettings::getCrowdRenderBudgetPercent, OptiminiumSettings::setCrowdRenderBudgetPercent,
-			OptiminiumSettings.getMinCrowdRenderBudgetPercent(), OptiminiumSettings.getMaxCrowdRenderBudgetPercent(),
-			value -> Component.literal("Crowd Budget: " + value + "%"), "Scale the render budget for dense idle mob crowds.");
+	private static Component shaderResourceCacheLabel() {
+		return Component.literal("Shader Resource Cache: " + (OptiminiumSettings.isShaderResourceCache() ? "ON" : "OFF"));
 	}
 
-	private void addEffectsControls() {
-		int index = 0;
-		index = addToggle(index, "Particle Limiter", OptiminiumSettings::isParticleLimiter, () -> OptiminiumSettings.toggleParticleLimiter(),
-			"Drop distant and excessive low-priority particles.");
-		index = addSlider(index, OptiminiumSettings::getParticleRenderDistanceBlocks, OptiminiumSettings::setParticleRenderDistanceBlocks,
-			OptiminiumSettings.getMinParticleRenderDistanceBlocks(), OptiminiumSettings.getMaxParticleRenderDistanceBlocks(),
-			value -> Component.literal("Particle Dist: " + value), "Distance cutoff for non-critical particles.");
-		index = addSlider(index, OptiminiumSettings::getMaxParticlesPerFrame, OptiminiumSettings::setMaxParticlesPerFrame,
-			OptiminiumSettings.getMinMaxParticlesPerFrame(), OptiminiumSettings.getMaxMaxParticlesPerFrame(),
-			value -> Component.literal("Particle Budget: " + value), "Maximum non-critical particles Optiminium allows each frame.");
-		index = addToggle(index, "Sound Limiter", OptiminiumSettings::isAmbientSoundLimiter, () -> OptiminiumSettings.toggleAmbientSoundLimiter(),
-			"Limit repeated ambient sounds from dense groups of entities.");
-		addSlider(index, OptiminiumSettings::getAmbientSoundBudget, OptiminiumSettings::setAmbientSoundBudget, OptiminiumSettings.getMinAmbientSoundBudget(),
-			OptiminiumSettings.getMaxAmbientSoundBudget(), value -> Component.literal("Sound Budget: " + value), "Ambient entity sounds allowed per quarter second.");
+	private static Component particleLimiterLabel() {
+		return Component.literal("Particle Limiter: " + (OptiminiumSettings.isParticleLimiter() ? "ON" : "OFF"));
 	}
 
-	private void addServerControls() {
-		int index = 0;
-		index = addToggle(index, "Tick Throttle", OptiminiumSettings::isServerEntityTickThrottling, () -> OptiminiumSettings.toggleServerEntityTickThrottling(),
-			"Tick idle far mobs less often while keeping active mobs awake.");
-		index = addSlider(index, OptiminiumSettings::getFarEntityTickInterval, OptiminiumSettings::setFarEntityTickInterval, OptiminiumSettings.getMinFarEntityTickInterval(),
-			OptiminiumSettings.getMaxFarEntityTickInterval(), value -> Component.literal("Far Tick Gap: " + value), "Ticks between updates for quiet mobs far from every player.");
-		index = addToggle(index, "Adaptive Optimizer", OptiminiumSettings::isAdaptiveOptimizer, () -> OptiminiumSettings.toggleAdaptiveOptimizer(),
-			"Only run low-impact world checks after server tick time is already degraded.");
-		index = addToggle(index, "Adaptive Sim", OptiminiumSettings::isAdaptiveSimulationDistance, () -> OptiminiumSettings.toggleAdaptiveSimulationDistance(),
-			"Lower simulation distance under sustained server tick pressure.");
-		index = addSlider(index, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt,
-			OptiminiumSettings.getMinAdaptiveSimulationTargetMspt(), OptiminiumSettings.getMaxAdaptiveSimulationTargetMspt(),
-			value -> Component.literal("Target MSPT: " + value), "Tick-time target used by adaptive simulation distance.");
-		addSlider(index, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks,
-			OptiminiumSettings.getMinAdaptiveSimulationMinDistanceChunks(), OptiminiumSettings.getMaxAdaptiveSimulationMinDistanceChunks(),
-			value -> Component.literal("Min Sim Dist: " + value), "Lowest simulation distance adaptive mode may use.");
+	private static Component blockEntityCullingLabel() {
+		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
 	}
 
-	private void addWorldControls() {
-		int index = 0;
-		index = addToggle(index, "Item Clouds", OptiminiumSettings::isItemVirtualization, () -> OptiminiumSettings.toggleItemVirtualization(),
-			"Compress large unattended item piles into lightweight virtual stacks.");
-		index = addSlider(index, OptiminiumSettings::getItemClusterThreshold, OptiminiumSettings::setItemClusterThreshold, OptiminiumSettings.getMinItemClusterThreshold(),
-			OptiminiumSettings.getMaxItemClusterThreshold(), value -> Component.literal("Item Cluster: " + value), "Minimum unattended item count before cloud compression starts.");
-		index = addToggle(index, "XP Merge", OptiminiumSettings::isXpOrbMerging, () -> OptiminiumSettings.toggleXpOrbMerging(),
-			"Merge dense unattended XP orb groups.");
-		index = addSlider(index, OptiminiumSettings::getXpMergeThreshold, OptiminiumSettings::setXpMergeThreshold, OptiminiumSettings.getMinXpMergeThreshold(),
-			OptiminiumSettings.getMaxXpMergeThreshold(), value -> Component.literal("XP Cluster: " + value), "Minimum XP orb group size before merging starts.");
-		index = addToggle(index, "Redstone Dedup", OptiminiumSettings::isRedstoneDeduplication, () -> OptiminiumSettings.toggleRedstoneDeduplication(),
-			"Suppress duplicate redstone neighbor notifications in the same short tick window.");
-		index = addToggle(index, "BE Updates", OptiminiumSettings::isBlockEntityUpdateThrottling, () -> OptiminiumSettings.toggleBlockEntityUpdateThrottling(),
-			"Tick stable distant block entities less often.");
-		index = addSlider(index, OptiminiumSettings::getBlockEntitySleepAfterTicks, OptiminiumSettings::setBlockEntitySleepAfterTicks,
-			OptiminiumSettings.getMinBlockEntitySleepAfterTicks(), OptiminiumSettings.getMaxBlockEntitySleepAfterTicks(),
-			value -> Component.literal("BE Sleep: " + value + " ticks"), "Ticks since the last change before eligible block entities may sleep.");
-		index = addSlider(index, OptiminiumSettings::getBlockEntityWakeRadiusBlocks, OptiminiumSettings::setBlockEntityWakeRadiusBlocks,
-			OptiminiumSettings.getMinBlockEntityWakeRadiusBlocks(), OptiminiumSettings.getMaxBlockEntityWakeRadiusBlocks(),
-			value -> Component.literal("BE Wake: " + value + " blocks"), "Player radius that keeps eligible block entities awake.");
-		index = addSlider(index, OptiminiumSettings::getSleepingBlockEntityTicksPerTick, OptiminiumSettings::setSleepingBlockEntityTicksPerTick,
-			OptiminiumSettings.getMinSleepingBlockEntityTicksPerTick(), OptiminiumSettings.getMaxSleepingBlockEntityTicksPerTick(),
-			value -> Component.literal("BE Budget: " + value), "Sleeping block entities allowed to sample-tick each server tick.");
-		addSlider(index, OptiminiumSettings::getSleepingBlockEntityTickInterval, OptiminiumSettings::setSleepingBlockEntityTickInterval,
-			OptiminiumSettings.getMinSleepingBlockEntityTickInterval(), OptiminiumSettings.getMaxSleepingBlockEntityTickInterval(),
-			value -> Component.literal("BE Sample: " + value + " ticks"), "Interval between sample ticks for sleeping block entities.");
+	private static Component occlusionRebuildPriorityLabel() {
+		return Component.literal("Occlusion Rebuild Priority: " + (OptiminiumSettings.isOcclusionRebuildPriority() ? "ON" : "OFF"));
 	}
 
-	private int addToggle(int index, String label, BooleanSupplier getter, Runnable toggler, String tooltip) {
-		Button button = Button.builder(toggleLabel(label, getter.getAsBoolean()), pressed -> {
-			toggler.run();
-			pressed.setMessage(toggleLabel(label, getter.getAsBoolean()));
-		})
-			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal(tooltip)))
-			.build();
-		this.addRenderableWidget(button);
-		return index + 1;
+	private static Component adaptiveSimulationLabel() {
+		return Component.literal("Dynamic Simulation Distance: " + (OptiminiumSettings.isAdaptiveSimulationDistance() ? "ON" : "OFF"));
 	}
 
-	private int addSlider(int index, IntSupplier getter, IntConsumer setter, int min, int max, IntFunction<Component> labelFactory, String tooltip) {
-		SettingsSlider slider = new SettingsSlider(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT, getter, setter, min, max, labelFactory);
-		slider.setTooltip(Tooltip.create(Component.literal(tooltip)));
-		this.addRenderableWidget(slider);
-		return index + 1;
+	private static Component smartTickLabel() {
+		return Component.literal("SmartTick Scheduler: " + (OptiminiumSettings.isSmartTickScheduler() ? "ON" : "OFF"));
 	}
 
-	private int addButton(int index, java.util.function.Supplier<Component> label, Runnable action, String tooltip) {
-		Button button = Button.builder(label.get(), pressed -> {
-			action.run();
-			pressed.setMessage(label.get());
-		})
-			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal(tooltip)))
-			.build();
-		this.addRenderableWidget(button);
-		return index + 1;
-	}
-
-	private int addDisabled(int index, String label, String tooltip) {
-		Button button = Button.builder(Component.literal(label), pressed -> {
-		})
-			.bounds(controlX(index), controlY(index), CONTROL_WIDTH, CONTROL_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal(tooltip)))
-			.build();
-		button.active = false;
-		this.addRenderableWidget(button);
-		return index + 1;
-	}
-
-	private int controlX(int index) {
-		return controlsX + (index % controlsColumns) * (CONTROL_WIDTH + COLUMN_GAP);
-	}
-
-	private int controlY(int index) {
-		return controlsY + (index / controlsColumns) * (CONTROL_HEIGHT + ROW_GAP);
-	}
-
-	private static Component toggleLabel(String name, boolean enabled) {
-		return Component.literal(name + ": " + (enabled ? "ON" : "OFF"));
-	}
-
-	private enum Page {
-		GENERAL("General", 6),
-		RENDER("Render", 9),
-		EFFECTS("Effects", 5),
-		SERVER("Server", 6),
-		WORLD("World", 10);
-
-		private final String label;
-		private final int controlCount;
-
-		Page(String label, int controlCount) {
-			this.label = label;
-			this.controlCount = controlCount;
-		}
+	private static Component aiPathfindingLabel() {
+		return Component.literal("AI Pathfinding Optimizer: " + (OptiminiumSettings.isAiPathfindingOptimizer() ? "ON" : "OFF"));
 	}
 
 	private static final class SettingsSlider extends AbstractSliderButton {
 		private final IntSupplier getter;
 		private final IntConsumer setter;
-		private final IntFunction<Component> labelFactory;
 		private final int min;
 		private final int max;
+		private final String label;
 
-		private SettingsSlider(int x, int y, int width, int height, IntSupplier getter, IntConsumer setter, int min, int max, IntFunction<Component> labelFactory) {
-			super(x, y, width, height, Component.empty(), normalize(getter.getAsInt(), min, max));
+		private SettingsSlider(int x, int y, IntSupplier getter, IntConsumer setter, int min, int max, String label) {
+			super(x, y, BUTTON_WIDTH, BUTTON_HEIGHT, Component.empty(), normalize(getter.getAsInt(), min, max));
 			this.getter = getter;
 			this.setter = setter;
 			this.min = min;
 			this.max = max;
-			this.labelFactory = labelFactory;
+			this.label = label;
 			updateMessage();
 		}
 
 		@Override
 		protected void updateMessage() {
-			setMessage(labelFactory.apply(valueFromSlider()));
+			setMessage(Component.literal(label + ": " + valueFromSlider()));
 		}
 
 		@Override
@@ -302,7 +165,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 			if (getter.getAsInt() != value) {
 				setter.accept(value);
 			}
-			updateMessage();
 		}
 
 		private int valueFromSlider() {
@@ -310,9 +172,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 		}
 
 		private static double normalize(int value, int min, int max) {
-			if (max <= min) {
-				return 0.0D;
-			}
 			return Math.max(0.0D, Math.min(1.0D, (value - min) / (double)(max - min)));
 		}
 	}

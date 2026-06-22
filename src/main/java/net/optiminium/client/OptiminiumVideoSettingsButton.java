@@ -2,7 +2,6 @@ package net.optiminium.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.gui.screens.options.VideoSettingsScreen;
@@ -14,10 +13,6 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumVideoSettingsButton {
-	private static final int BUTTON_WIDTH = 150;
-	private static final int BUTTON_HEIGHT = 20;
-	private static final int PADDING = 6;
-
 	private OptiminiumVideoSettingsButton() {
 	}
 
@@ -28,12 +23,8 @@ public final class OptiminiumVideoSettingsButton {
 			return;
 		}
 
-		int x = Math.max(PADDING, screen.width - BUTTON_WIDTH - PADDING);
-		int y = PADDING;
-		Button button = Button.builder(Component.literal("Optiminium..."), pressed -> Minecraft.getInstance().setScreen(new OptiminiumSettingsScreen(screen)))
-			.bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.tooltip(Tooltip.create(Component.literal("Open Optiminium rendering and optimization settings.")))
-			.build();
-		event.addListener(button);
+		event.addListener(Button.builder(Component.literal("Optiminium..."), button -> Minecraft.getInstance().setScreen(new OptiminiumSettingsScreen(screen)))
+			.bounds(Math.max(6, screen.width - 156), 6, 150, 20)
+			.build());
 	}
 }

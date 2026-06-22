@@ -1,17 +1,22 @@
 package net.optiminium.mixin;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.chunk.RenderRegionCache;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.lighting.LevelLightEngine;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.optimization.OptiminiumSettings;
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,6 +25,8 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.Queue;
 
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererMixin {
@@ -71,7 +78,7 @@ public abstract class LevelRendererMixin {
 		}
 
 		this.minecraft.getProfiler().popPush("upload");
-		this.sectionRenderDispatcher.uploadAllPendingUploads();
+		optiminium$uploadPendingChunks();
 		this.minecraft.getProfiler().popPush("optiminium_schedule_async_compile");
 
 		for (int scheduled = 0; scheduled < candidateCount; scheduled++) {
@@ -85,6 +92,34 @@ public abstract class LevelRendererMixin {
 		}
 
 		this.minecraft.getProfiler().pop();
+	}
+
+	@Unique
+	private void optiminium$uploadPendingChunks() {
+		Queue<Runnable> uploads = ((SectionRenderDispatcherAccessor)this.sectionRenderDispatcher).optiminium$getToUpload();
+		int budget = Math.max(1, (int)Math.floor(OptiminiumSettings.getChunkUploadsPerFrame() * OptiminiumGpuOptimizer.getGpuWorkScale()));
+		for (int uploaded = 0; uploaded < budget; uploaded++) {
+			Runnable upload = uploads.poll();
+			if (upload == null) {
+				return;
+			}
+			upload.run();
+		}
+	}
+
+	@Inject(method = "renderSnowAndRain", at = @At("HEAD"), cancellable = true)
+	private void optiminium$skipWeatherUnderGpuPressure(LightTexture lightTexture, float partialTick, double cameraX, double cameraY, double cameraZ, CallbackInfo callback) {
+		if (OptiminiumGpuOptimizer.shouldSkipWeather()) {
+			callback.cancel();
+		}
+	}
+
+	@Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true)
+	private void optiminium$skipCloudsUnderGpuPressure(PoseStack poseStack, Matrix4f projectionMatrix, Matrix4f frustumMatrix, float partialTick, double cameraX, double cameraY, double cameraZ,
+			CallbackInfo callback) {
+		if (OptiminiumGpuOptimizer.shouldSkipClouds()) {
+			callback.cancel();
+		}
 	}
 
 	@Unique
@@ -137,7 +172,20 @@ public abstract class LevelRendererMixin {
 		if (section.isDirtyFromPlayer()) {
 			priority -= 4096.0D;
 		}
+		if (OptiminiumSettings.isOcclusionRebuildPriority() && optiminium$isOccluded(cameraPosition, centerX, centerY, centerZ)) {
+			priority += 8192.0D;
+		}
 		return priority;
+	}
+
+	@Unique
+	private boolean optiminium$isOccluded(Vec3 cameraPosition, double centerX, double centerY, double centerZ) {
+		Vec3 sectionCenter = new Vec3(centerX, centerY, centerZ);
+		if (cameraPosition.distanceToSqr(sectionCenter) < 32.0D * 32.0D) {
+			return false;
+		}
+		HitResult hit = this.level.clip(new ClipContext(cameraPosition, sectionCenter, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this.minecraft.cameraEntity));
+		return hit.getType() == HitResult.Type.BLOCK && hit.getLocation().distanceToSqr(cameraPosition) + 16.0D < sectionCenter.distanceToSqr(cameraPosition);
 	}
 
 	@Unique

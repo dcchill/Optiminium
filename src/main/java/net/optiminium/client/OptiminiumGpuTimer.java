@@ -1,0 +1,141 @@
+package net.optiminium.client;
+
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.EventPriority;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.optiminium.optimization.OptiminiumSettings;
+import org.lwjgl.opengl.GL;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL33C;
+import org.lwjgl.opengl.ARBTimerQuery;
+
+@EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
+public final class OptiminiumGpuTimer {
+	private static final int QUERY_COUNT = 4;
+	private static final double SMOOTHING = 0.12D;
+	private static final int[] queries = new int[QUERY_COUNT];
+	private static boolean initialized;
+	private static boolean supported;
+	private static boolean useArbTimerQuery;
+	private static boolean queryOpen;
+	private static int writeIndex;
+	private static int pendingQueries;
+	private static long latestGpuNanos;
+	private static long worstGpuNanos;
+	private static long sampleCount;
+	private static double smoothedGpuNanos;
+	private static String unavailableReason = "not initialized";
+
+	private OptiminiumGpuTimer() {
+	}
+
+	@SubscribeEvent(priority = EventPriority.HIGHEST)
+	public static void onFrameStart(RenderFrameEvent.Pre event) {
+		initialize();
+		readReadyResults();
+		if (!isActive() || pendingQueries >= QUERY_COUNT) {
+			return;
+		}
+		GL15.glBeginQuery(GL33C.GL_TIME_ELAPSED, queries[writeIndex]);
+		queryOpen = true;
+	}
+
+	@SubscribeEvent(priority = EventPriority.LOWEST)
+	public static void onFrameEnd(RenderFrameEvent.Post event) {
+		if (!queryOpen) {
+			return;
+		}
+		GL15.glEndQuery(GL33C.GL_TIME_ELAPSED);
+		queryOpen = false;
+		writeIndex = (writeIndex + 1) % QUERY_COUNT;
+		pendingQueries = Math.min(QUERY_COUNT, pendingQueries + 1);
+	}
+
+	public static boolean isActive() {
+		return supported && OptiminiumSettings.isGpuTimerPacing();
+	}
+
+	public static boolean hasTiming() {
+		return latestGpuNanos > 0L;
+	}
+
+	public static long getLatestGpuNanos() {
+		return latestGpuNanos;
+	}
+
+	public static double getSmoothedGpuNanos() {
+		return smoothedGpuNanos;
+	}
+
+	public static long getWorstGpuNanos() {
+		return worstGpuNanos;
+	}
+
+	public static long getSampleCount() {
+		return sampleCount;
+	}
+
+	public static void resetWorstGpuNanos() {
+		worstGpuNanos = 0L;
+	}
+
+	public static String status() {
+		if (!initialized) {
+			return "not initialized";
+		}
+		if (!supported) {
+			return "unsupported: " + unavailableReason;
+		}
+		return OptiminiumSettings.isGpuTimerPacing() ? "active" : "disabled";
+	}
+
+	private static void initialize() {
+		if (initialized) {
+			return;
+		}
+		initialized = true;
+		try {
+			if (GL.getCapabilities() == null) {
+				unavailableReason = "no GL capabilities";
+				return;
+			}
+			if (!GL.getCapabilities().OpenGL33 && !GL.getCapabilities().GL_ARB_timer_query) {
+				unavailableReason = "timer query extension missing";
+				return;
+			}
+			useArbTimerQuery = !GL.getCapabilities().OpenGL33;
+			for (int i = 0; i < QUERY_COUNT; i++) {
+				queries[i] = GL15.glGenQueries();
+			}
+			supported = true;
+			unavailableReason = "";
+		} catch (RuntimeException exception) {
+			supported = false;
+			unavailableReason = exception.getClass().getSimpleName();
+		}
+	}
+
+	private static void readReadyResults() {
+		if (!supported || pendingQueries <= 0) {
+			return;
+		}
+		int readIndex = Math.floorMod(writeIndex - pendingQueries, QUERY_COUNT);
+		while (pendingQueries > 0 && GL15.glGetQueryObjecti(queries[readIndex], GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
+			long nanos = useArbTimerQuery
+				? ARBTimerQuery.glGetQueryObjectui64(queries[readIndex], GL15.GL_QUERY_RESULT)
+				: GL33C.glGetQueryObjectui64(queries[readIndex], GL15.GL_QUERY_RESULT);
+			latestGpuNanos = nanos;
+			sampleCount++;
+			worstGpuNanos = Math.max(worstGpuNanos, nanos);
+			if (smoothedGpuNanos <= 0.0D) {
+				smoothedGpuNanos = nanos;
+			} else {
+				smoothedGpuNanos += (nanos - smoothedGpuNanos) * SMOOTHING;
+			}
+			pendingQueries--;
+			readIndex = (readIndex + 1) % QUERY_COUNT;
+		}
+	}
+}

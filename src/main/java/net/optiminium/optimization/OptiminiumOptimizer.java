@@ -25,7 +25,9 @@ import net.minecraft.world.level.block.entity.TickingBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
@@ -49,7 +51,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>NeoForge exposes cancellable entity tick events, so entity and item optimizations are active here.
  * Block-entity and pathfinding systems are tracked conservatively because replacing vanilla internals safely
- * requires deeper core hooks than an MCreator workspace normally enables.</p>
+ * requires deeper core hooks.</p>
  */
 @EventBusSubscriber(modid = "optiminium")
 public final class OptiminiumOptimizer {
@@ -162,7 +164,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityJoin(EntityJoinLevelEvent event) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
+		if (!OptiminiumSettings.isEnabled() || !needsEntityScheduler()) {
 			return;
 		}
 		if (event.getLevel() instanceof ServerLevel level) {
@@ -172,7 +174,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityTickPre(EntityTickEvent.Pre event) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isSmartTickScheduler()) {
 			return;
 		}
 		Entity entity = event.getEntity();
@@ -198,6 +200,7 @@ public final class OptiminiumOptimizer {
 						+ ", hiddenNameTags=" + snapshot.hiddenNameTags()
 						+ ", hiddenParticles=" + snapshot.hiddenParticles()
 						+ ", suppressedSounds=" + snapshot.suppressedSounds()
+						+ clientStats()
 				), false);
 				return 1;
 			}))
@@ -206,22 +209,12 @@ public final class OptiminiumOptimizer {
 				context.getSource().sendSuccess(() -> Component.literal("Optiminium stats reset."), false);
 				return 1;
 			}))
-			.then(Commands.literal("on").executes(context -> {
-				OptiminiumSettings.setEnabled(true);
-				context.getSource().sendSuccess(() -> Component.literal("Optiminium enabled."), true);
-				return 1;
-			}))
-			.then(Commands.literal("off").executes(context -> {
-				OptiminiumSettings.setEnabled(false);
-				context.getSource().sendSuccess(() -> Component.literal("Optiminium disabled."), true);
-				return 1;
-			}))
 		);
 	}
 
 	@SubscribeEvent
 	public static void onEntityTickPost(EntityTickEvent.Post event) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
+		if (!OptiminiumSettings.isEnabled() || !needsEntityScheduler()) {
 			return;
 		}
 		Entity entity = event.getEntity();
@@ -233,7 +226,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
+		if (!OptiminiumSettings.isEnabled() || !needsEntityScheduler()) {
 			return;
 		}
 		wakeInteractedEntity(event.getTarget(), event.getEntity());
@@ -241,7 +234,7 @@ public final class OptiminiumOptimizer {
 
 	@SubscribeEvent
 	public static void onEntityInteractSpecific(PlayerInteractEvent.EntityInteractSpecific event) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isServerEntityTickThrottling()) {
+		if (!OptiminiumSettings.isEnabled() || !needsEntityScheduler()) {
 			return;
 		}
 		wakeInteractedEntity(event.getTarget(), event.getEntity());
@@ -341,10 +334,14 @@ public final class OptiminiumOptimizer {
 	}
 
 	private static boolean needsPlayerSnapshots() {
-		return OptiminiumSettings.isServerEntityTickThrottling()
+		return needsEntityScheduler()
 			|| OptiminiumSettings.isItemVirtualization() && shouldRunAdaptiveOptimizations()
 			|| OptiminiumSettings.isXpOrbMerging() && shouldRunAdaptiveOptimizations()
 			|| OptiminiumSettings.isBlockEntityUpdateThrottling() && shouldRunAdaptiveOptimizations();
+	}
+
+	private static boolean needsEntityScheduler() {
+		return OptiminiumSettings.isSmartTickScheduler() || OptiminiumSettings.isAiPathfindingOptimizer();
 	}
 
 	private static boolean shouldRunAdaptiveOptimizations() {
@@ -364,6 +361,18 @@ public final class OptiminiumOptimizer {
 		return type == BlockEntityType.MOB_SPAWNER
 			|| type == BlockEntityType.TRIAL_SPAWNER
 			|| type == BlockEntityType.VAULT;
+	}
+
+	private static String clientStats() {
+		if (FMLEnvironment.dist != Dist.CLIENT) {
+			return "";
+		}
+		try {
+			Class<?> optimizer = Class.forName("net.optiminium.client.OptiminiumGpuOptimizer");
+			return (String)optimizer.getMethod("diagnosticLine").invoke(null);
+		} catch (ReflectiveOperationException exception) {
+			return ", gpuStats=unavailable";
+		}
 	}
 
 	private static boolean hasNearbyPlayer(ServerLevel level, Vec3 position, double radius) {
@@ -544,6 +553,7 @@ public final class OptiminiumOptimizer {
 			state.lastPosition = now;
 			state.lastSeenTick = tick;
 			state.currentInterval = intervalFor(entity, level, state);
+			optimizePathfinding(entity, level, state);
 		}
 
 		void wake(Entity entity, long untilTick) {
@@ -570,6 +580,9 @@ public final class OptiminiumOptimizer {
 			if (distanceSqr < 24.0 * 24.0) {
 				return 1;
 			}
+			if (serverHealth.isDegraded() && distanceSqr > 48.0 * 48.0) {
+				return OptiminiumSettings.getFarEntityTickInterval();
+			}
 			if (distanceSqr > 96.0 * 96.0) {
 				return OptiminiumSettings.getFarEntityTickInterval();
 			}
@@ -577,6 +590,15 @@ public final class OptiminiumOptimizer {
 				return OCCLUDED_SAMPLE_TICKS;
 			}
 			return IDLE_SAMPLE_TICKS;
+		}
+
+		private void optimizePathfinding(Entity entity, ServerLevel level, EntityTickState state) {
+			if (!OptiminiumSettings.isAiPathfindingOptimizer() || !(entity instanceof Mob mob) || state.quietTicks < 40 || isCombatActive(entity)) {
+				return;
+			}
+			if (nearestPlayerDistanceSqr(level, entity) > 48.0 * 48.0 && !mob.getNavigation().isDone()) {
+				mob.getNavigation().stop();
+			}
 		}
 
 		private boolean isEligible(Entity entity) {
