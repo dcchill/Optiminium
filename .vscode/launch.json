@@ -12,13 +12,13 @@
       "projectName": "optiminium",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@${workspaceFolder}/build/moddev/clientRunProgramArgs.txt"
+        "@C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\build\\moddev\\clientRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@${workspaceFolder}/build/moddev/clientRunVmArgs.txt",
-        "-Dfml.modFolders\u003doptiminium%%${workspaceFolder}/bin/main"
+        "@C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\build\\moddev\\clientRunVmArgs.txt",
+        "-Dfml.modFolders\u003doptiminium%%C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"
@@ -34,13 +34,13 @@
       "projectName": "optiminium",
       "mainClass": "net.neoforged.devlaunch.Main",
       "args": [
-        "@${workspaceFolder}/build/moddev/serverRunProgramArgs.txt"
+        "@C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\build\\moddev\\serverRunProgramArgs.txt"
       ],
       "vmArgs": [
-        "@${workspaceFolder}/build/moddev/serverRunVmArgs.txt",
-        "-Dfml.modFolders\u003doptiminium%%${workspaceFolder}/bin/main"
+        "@C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\build\\moddev\\serverRunVmArgs.txt",
+        "-Dfml.modFolders\u003doptiminium%%C:\\Users\\dsmar\\Documents\\GitHub\\Optiminium\\bin\\main"
       ],
-      "cwd": "${workspaceFolder}/run",
+      "cwd": "${workspaceFolder}\\run",
       "env": {},
       "console": "internalConsole",
       "shortenCommandLine": "none"
