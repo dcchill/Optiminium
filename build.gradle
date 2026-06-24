@@ -21,6 +21,7 @@ neoForge {
         }
 
         configureEach {
+            gameDirectory = layout.projectDirectory.dir('run')
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
         }
@@ -35,4 +36,12 @@ neoForge {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+def deleteStaleModidJar = tasks.register('deleteStaleModidJar', Delete) {
+    delete layout.buildDirectory.file("libs/modid-${version}.jar")
+}
+
+tasks.named('jar') {
+    dependsOn deleteStaleModidJar
 }
