@@ -23,8 +23,13 @@ public final class OptiminiumSettings {
 	private static volatile boolean asyncResourceStreaming = true;
 	private static volatile boolean blockEntityCulling = true;
 	private static volatile int blockEntityDistanceScalePercent = 100;
+	private static volatile int denseBlockEntityThreshold = 512;
+	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean occlusionRebuildPriority = true;
 	private static volatile boolean shaderResourceCache = true;
+	private static volatile boolean experimentalRendererFeatures = false;
+	private static volatile boolean experimentalUploadStallLimiter = false;
+	private static volatile boolean experimentalTemporalSignificance = false;
 	private static volatile boolean adaptiveSimulationDistance = true;
 	private static volatile int adaptiveSimulationTargetMspt = 50;
 	private static volatile int adaptiveSimulationMinDistanceChunks = 4;
@@ -150,6 +155,36 @@ public final class OptiminiumSettings {
 		return shaderResourceCache;
 	}
 
+	public static boolean isExperimentalRendererFeatures() {
+		return experimentalRendererFeatures;
+	}
+
+	public static boolean toggleExperimentalRendererFeatures() {
+		experimentalRendererFeatures = !experimentalRendererFeatures;
+		save();
+		return experimentalRendererFeatures;
+	}
+
+	public static boolean isExperimentalUploadStallLimiter() {
+		return experimentalRendererFeatures && experimentalUploadStallLimiter;
+	}
+
+	public static boolean toggleExperimentalUploadStallLimiter() {
+		experimentalUploadStallLimiter = !experimentalUploadStallLimiter;
+		save();
+		return experimentalUploadStallLimiter;
+	}
+
+	public static boolean isExperimentalTemporalSignificance() {
+		return experimentalRendererFeatures && experimentalTemporalSignificance;
+	}
+
+	public static boolean toggleExperimentalTemporalSignificance() {
+		experimentalTemporalSignificance = !experimentalTemporalSignificance;
+		save();
+		return experimentalTemporalSignificance;
+	}
+
 	public static int getFogDistanceBlocks() {
 		return 192;
 	}
@@ -179,6 +214,26 @@ public final class OptiminiumSettings {
 	public static void setBlockEntityDistanceScalePercent(int scalePercent) {
 		blockEntityDistanceScalePercent = clamp(scalePercent, 25, 200);
 		save();
+	}
+
+	public static int getDenseBlockEntityThreshold() {
+		return denseBlockEntityThreshold;
+	}
+
+	public static void setDenseBlockEntityThreshold(int threshold) {
+		denseBlockEntityThreshold = clamp(threshold, 64, 4096);
+		save();
+	}
+
+	public static DenseSceneAdaptiveMode getDenseSceneAdaptiveMode() {
+		return denseSceneAdaptiveMode;
+	}
+
+	public static DenseSceneAdaptiveMode cycleDenseSceneAdaptiveMode() {
+		DenseSceneAdaptiveMode[] modes = DenseSceneAdaptiveMode.values();
+		denseSceneAdaptiveMode = modes[(denseSceneAdaptiveMode.ordinal() + 1) % modes.length];
+		save();
+		return denseSceneAdaptiveMode;
 	}
 
 	public static boolean isCrowdCulling() {
@@ -348,8 +403,13 @@ public final class OptiminiumSettings {
 			asyncResourceStreaming = Boolean.parseBoolean(properties.getProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming)));
 			blockEntityCulling = Boolean.parseBoolean(properties.getProperty("blockEntityCulling", Boolean.toString(blockEntityCulling)));
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
+			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
+			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
 			occlusionRebuildPriority = Boolean.parseBoolean(properties.getProperty("occlusionRebuildPriority", Boolean.toString(occlusionRebuildPriority)));
 			shaderResourceCache = Boolean.parseBoolean(properties.getProperty("shaderResourceCache", Boolean.toString(shaderResourceCache)));
+			experimentalRendererFeatures = Boolean.parseBoolean(properties.getProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures)));
+			experimentalUploadStallLimiter = Boolean.parseBoolean(properties.getProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter)));
+			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("experimentalTemporalSignificance", Boolean.toString(experimentalTemporalSignificance)));
 			adaptiveSimulationDistance = Boolean.parseBoolean(properties.getProperty("adaptiveSimulationDistance", Boolean.toString(adaptiveSimulationDistance)));
 			adaptiveSimulationTargetMspt = clamp(Integer.parseInt(properties.getProperty("adaptiveSimulationTargetMspt", Integer.toString(adaptiveSimulationTargetMspt))), 35, 80);
 			adaptiveSimulationMinDistanceChunks = clamp(Integer.parseInt(properties.getProperty("adaptiveSimulationMinDistanceChunks", Integer.toString(adaptiveSimulationMinDistanceChunks))), 2, 12);
@@ -373,8 +433,13 @@ public final class OptiminiumSettings {
 		properties.setProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming));
 		properties.setProperty("blockEntityCulling", Boolean.toString(blockEntityCulling));
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
+		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
+		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
 		properties.setProperty("occlusionRebuildPriority", Boolean.toString(occlusionRebuildPriority));
 		properties.setProperty("shaderResourceCache", Boolean.toString(shaderResourceCache));
+		properties.setProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures));
+		properties.setProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter));
+		properties.setProperty("experimentalTemporalSignificance", Boolean.toString(experimentalTemporalSignificance));
 		properties.setProperty("adaptiveSimulationDistance", Boolean.toString(adaptiveSimulationDistance));
 		properties.setProperty("adaptiveSimulationTargetMspt", Integer.toString(adaptiveSimulationTargetMspt));
 		properties.setProperty("adaptiveSimulationMinDistanceChunks", Integer.toString(adaptiveSimulationMinDistanceChunks));
@@ -391,5 +456,20 @@ public final class OptiminiumSettings {
 
 	private static int clamp(int value, int min, int max) {
 		return Math.max(min, Math.min(max, value));
+	}
+
+	public enum DenseSceneAdaptiveMode {
+		OFF,
+		CONSERVATIVE,
+		BALANCED,
+		AGGRESSIVE;
+
+		private static DenseSceneAdaptiveMode parse(String value) {
+			try {
+				return DenseSceneAdaptiveMode.valueOf(value.toUpperCase());
+			} catch (IllegalArgumentException exception) {
+				return BALANCED;
+			}
+		}
 	}
 }

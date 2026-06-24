@@ -42,6 +42,8 @@ public final class OptiminiumFpsOptimizer {
 			renderedCrowdByCell.clear();
 		}
 		OptiminiumGpuOptimizer.onFrameStart();
+		OptiminiumRenderProfiler.onFrameStart();
+		OptiminiumVisualSignificance.onFrameStart();
 		boolean enabled = OptiminiumSettings.isEnabled();
 		crowdCulling = enabled && OptiminiumSettings.isCrowdCulling();
 		clientRenderCulling = enabled && OptiminiumSettings.isClientRenderCulling();

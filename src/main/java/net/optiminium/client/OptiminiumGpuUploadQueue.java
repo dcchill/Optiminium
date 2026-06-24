@@ -26,9 +26,11 @@ public final class OptiminiumGpuUploadQueue {
 
 	@SubscribeEvent
 	public static void onFrame(RenderFrameEvent.Pre event) {
-		int budget = Math.max(1, (int)Math.floor(OptiminiumSettings.getChunkUploadsPerFrame() * OptiminiumGpuOptimizer.getGpuWorkScale()));
+		int budget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
 		for (int i = 0; i < budget; i++) {
+			long profileStart = OptiminiumGpuOptimizer.profileStart();
 			Runnable upload = uploads.poll();
+			OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
 			if (upload == null) {
 				return;
 			}

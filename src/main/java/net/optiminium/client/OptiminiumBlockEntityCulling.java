@@ -100,20 +100,26 @@ public final class OptiminiumBlockEntityCulling {
 			if (OptiminiumGpuOptimizer.shouldSkipBlockEntityRender(blockEntity, viewDistance)) {
 				return;
 			}
+			OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
 			delegate.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
 		}
 
 		@Override
 		public boolean shouldRender(T blockEntity, Vec3 cameraPos) {
-			if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
-				return delegate.shouldRender(blockEntity, cameraPos);
+			long profileStart = OptiminiumGpuOptimizer.profileStart();
+			try {
+				if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
+					return delegate.shouldRender(blockEntity, cameraPos);
+				}
+				int scaledViewDistance = OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
+				boolean shouldRender = closerThanBlockCenter(blockEntity.getBlockPos(), cameraPos, scaledViewDistance) && delegate.shouldRender(blockEntity, cameraPos);
+				if (!shouldRender) {
+					OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
+				}
+				return shouldRender;
+			} finally {
+				OptiminiumGpuOptimizer.recordBlockEntityProfileNanos(profileStart);
 			}
-			int scaledViewDistance = OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
-			boolean shouldRender = closerThanBlockCenter(blockEntity.getBlockPos(), cameraPos, scaledViewDistance) && delegate.shouldRender(blockEntity, cameraPos);
-			if (!shouldRender) {
-				OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
-			}
-			return shouldRender;
 		}
 
 		@Override

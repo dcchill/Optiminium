@@ -8,8 +8,10 @@
   ],
   "client": [
     "EntityRenderDispatcherMixin",
+    "GlStateManagerMixin",
     "LevelRendererMixin",
     "ParticleEngineMixin",
+    "RenderStateShardMixin",
     "SectionRenderDispatcherAccessor"
   ],
   "injectors": {

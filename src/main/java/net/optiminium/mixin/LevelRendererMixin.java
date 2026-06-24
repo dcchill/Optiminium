@@ -3,18 +3,24 @@ package net.optiminium.mixin;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.chunk.RenderRegionCache;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.optiminium.client.OptiminiumGpuOptimizer;
+import net.optiminium.client.OptiminiumRenderProfiler;
+import net.optiminium.client.OptiminiumVisualSignificance;
 import net.optiminium.optimization.OptiminiumSettings;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -27,6 +33,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.Queue;
+import java.util.Set;
 
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererMixin {
@@ -42,10 +49,15 @@ public abstract class LevelRendererMixin {
 	private ObjectArrayList<SectionRenderDispatcher.RenderSection> visibleSections;
 
 	@Shadow
+	@Final
+	private Set<BlockEntity> globalBlockEntities;
+
+	@Shadow
 	private SectionRenderDispatcher sectionRenderDispatcher;
 
 	@Inject(method = "compileSections", at = @At("HEAD"), cancellable = true)
 	private void optiminium$compileSectionsPaced(Camera camera, CallbackInfo callback) {
+		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
 		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isChunkRebuildScheduling() || this.level == null || this.sectionRenderDispatcher == null) {
 			return;
 		}
@@ -94,12 +106,44 @@ public abstract class LevelRendererMixin {
 		this.minecraft.getProfiler().pop();
 	}
 
+	@Inject(method = "renderLevel", at = @At("HEAD"))
+	private void optiminium$recordRawVisibleBlockEntitiesForFrame(DeltaTracker deltaTracker, boolean renderBlockOutline, Camera camera, GameRenderer gameRenderer, LightTexture lightTexture,
+			Matrix4f frustumMatrix, Matrix4f projectionMatrix, CallbackInfo callback) {
+		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
+	}
+
+	@Unique
+	private void optiminium$recordRawVisibleBlockEntities(Vec3 cameraPosition) {
+		int count = 0;
+		boolean recordSignificance = OptiminiumVisualSignificance.isEnabled();
+		for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
+			var blockEntities = section.getCompiled().getRenderableBlockEntities();
+			count += blockEntities.size();
+			if (recordSignificance) {
+				for (BlockEntity blockEntity : blockEntities) {
+					OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPosition);
+				}
+			}
+		}
+		synchronized (this.globalBlockEntities) {
+			count += this.globalBlockEntities.size();
+			if (recordSignificance) {
+				for (BlockEntity blockEntity : this.globalBlockEntities) {
+					OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPosition);
+				}
+			}
+		}
+		OptiminiumGpuOptimizer.recordRawVisibleBlockEntitiesBeforeCulling(count);
+	}
+
 	@Unique
 	private void optiminium$uploadPendingChunks() {
 		Queue<Runnable> uploads = ((SectionRenderDispatcherAccessor)this.sectionRenderDispatcher).optiminium$getToUpload();
-		int budget = Math.max(1, (int)Math.floor(OptiminiumSettings.getChunkUploadsPerFrame() * OptiminiumGpuOptimizer.getGpuWorkScale()));
+		int budget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
 		for (int uploaded = 0; uploaded < budget; uploaded++) {
+			long profileStart = OptiminiumGpuOptimizer.profileStart();
 			Runnable upload = uploads.poll();
+			OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
 			if (upload == null) {
 				return;
 			}
@@ -119,6 +163,15 @@ public abstract class LevelRendererMixin {
 			CallbackInfo callback) {
 		if (OptiminiumGpuOptimizer.shouldSkipClouds()) {
 			callback.cancel();
+		}
+	}
+
+	@Inject(method = "renderSectionLayer", at = @At("HEAD"))
+	private void optiminium$profileRenderSectionLayer(RenderType renderType, double cameraX, double cameraY, double cameraZ, Matrix4f frustumMatrix, Matrix4f projectionMatrix, CallbackInfo callback) {
+		if (renderType == RenderType.translucent()) {
+			OptiminiumRenderProfiler.recordTranslucentRender();
+		} else if (renderType == RenderType.solid() || renderType == RenderType.cutoutMipped() || renderType == RenderType.cutout()) {
+			OptiminiumRenderProfiler.recordTerrainRender();
 		}
 	}
 
