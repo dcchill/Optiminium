@@ -15,11 +15,12 @@ import org.lwjgl.opengl.ARBTimerQuery;
 public final class OptiminiumGpuTimer {
 	private static final int QUERY_COUNT = 4;
 	private static final double SMOOTHING = 0.12D;
-	private static final int[] queries = new int[QUERY_COUNT];
+	private static final int[] startQueries = new int[QUERY_COUNT];
+	private static final int[] endQueries = new int[QUERY_COUNT];
 	private static boolean initialized;
 	private static boolean supported;
 	private static boolean useArbTimerQuery;
-	private static boolean queryOpen;
+	private static boolean sampleOpen;
 	private static int writeIndex;
 	private static int pendingQueries;
 	private static long latestGpuNanos;
@@ -38,17 +39,17 @@ public final class OptiminiumGpuTimer {
 		if (!isActive() || pendingQueries >= QUERY_COUNT) {
 			return;
 		}
-		GL15.glBeginQuery(GL33C.GL_TIME_ELAPSED, queries[writeIndex]);
-		queryOpen = true;
+		queryCounter(startQueries[writeIndex]);
+		sampleOpen = true;
 	}
 
 	@SubscribeEvent(priority = EventPriority.LOWEST)
 	public static void onFrameEnd(RenderFrameEvent.Post event) {
-		if (!queryOpen) {
+		if (!sampleOpen) {
 			return;
 		}
-		GL15.glEndQuery(GL33C.GL_TIME_ELAPSED);
-		queryOpen = false;
+		sampleOpen = false;
+		queryCounter(endQueries[writeIndex]);
 		writeIndex = (writeIndex + 1) % QUERY_COUNT;
 		pendingQueries = Math.min(QUERY_COUNT, pendingQueries + 1);
 	}
@@ -107,7 +108,8 @@ public final class OptiminiumGpuTimer {
 			}
 			useArbTimerQuery = !GL.getCapabilities().OpenGL33;
 			for (int i = 0; i < QUERY_COUNT; i++) {
-				queries[i] = GL15.glGenQueries();
+				startQueries[i] = GL15.glGenQueries();
+				endQueries[i] = GL15.glGenQueries();
 			}
 			supported = true;
 			unavailableReason = "";
@@ -122,10 +124,8 @@ public final class OptiminiumGpuTimer {
 			return;
 		}
 		int readIndex = Math.floorMod(writeIndex - pendingQueries, QUERY_COUNT);
-		while (pendingQueries > 0 && GL15.glGetQueryObjecti(queries[readIndex], GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
-			long nanos = useArbTimerQuery
-				? ARBTimerQuery.glGetQueryObjectui64(queries[readIndex], GL15.GL_QUERY_RESULT)
-				: GL33C.glGetQueryObjectui64(queries[readIndex], GL15.GL_QUERY_RESULT);
+		while (pendingQueries > 0 && GL15.glGetQueryObjecti(endQueries[readIndex], GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
+			long nanos = Math.max(0L, queryResult(endQueries[readIndex]) - queryResult(startQueries[readIndex]));
 			latestGpuNanos = nanos;
 			sampleCount++;
 			worstGpuNanos = Math.max(worstGpuNanos, nanos);
@@ -137,5 +137,19 @@ public final class OptiminiumGpuTimer {
 			pendingQueries--;
 			readIndex = (readIndex + 1) % QUERY_COUNT;
 		}
+	}
+
+	private static void queryCounter(int query) {
+		if (useArbTimerQuery) {
+			ARBTimerQuery.glQueryCounter(query, ARBTimerQuery.GL_TIMESTAMP);
+		} else {
+			GL33C.glQueryCounter(query, GL33C.GL_TIMESTAMP);
+		}
+	}
+
+	private static long queryResult(int query) {
+		return useArbTimerQuery
+			? ARBTimerQuery.glGetQueryObjectui64(query, GL15.GL_QUERY_RESULT)
+			: GL33C.glGetQueryObjectui64(query, GL15.GL_QUERY_RESULT);
 	}
 }

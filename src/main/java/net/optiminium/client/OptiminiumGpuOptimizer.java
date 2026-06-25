@@ -23,13 +23,12 @@ public final class OptiminiumGpuOptimizer {
 	private static final double ITEM_ENTITY_RENDER_DISTANCE_SQR = 48.0D * 48.0D;
 	private static final double EXPERIENCE_ORB_RENDER_DISTANCE_SQR = 32.0D * 32.0D;
 	private static final double HANGING_ENTITY_RENDER_DISTANCE_SQR = 64.0D * 64.0D;
-	private static final double PROJECTILE_RENDER_DISTANCE_SQR = 96.0D * 96.0D;
-	private static final double FALLING_BLOCK_RENDER_DISTANCE_SQR = 96.0D * 96.0D;
 	private static final double FRAME_SMOOTHING = 0.12D;
 	private static final double GPU_SCALE_STEP_DOWN = 0.04D;
 	private static final double GPU_SCALE_STEP_UP = 0.015D;
 	private static final double RAW_SPIKE_TRIGGER_SCALE = 1.20D;
 	private static final double PACING_SPIKE_TRIGGER_SCALE = 1.10D;
+	private static final int SUSTAINED_PRESSURE_FRAMES = 20;
 	private static final double SHADOW_CULL_DISTANCE_SQR = 18.0D * 18.0D;
 	private static final double NON_LIVING_SHADOW_CULL_DISTANCE_SQR = 10.0D * 10.0D;
 	private static final double BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR = 14.0D * 14.0D;
@@ -57,6 +56,7 @@ public final class OptiminiumGpuOptimizer {
 	private static int pendingHiddenNameTags;
 	private static int pendingHiddenParticles;
 	private static long culledBlockEntitiesThisRun;
+	private static long renderedBlockEntitiesThisRun;
 	private static boolean frameStateReady;
 	private static boolean clientRenderCulling;
 	private static boolean blockEntityCulling;
@@ -69,8 +69,6 @@ public final class OptiminiumGpuOptimizer {
 	private static double itemEntityRenderDistanceSqr;
 	private static double experienceOrbRenderDistanceSqr;
 	private static double hangingEntityRenderDistanceSqr;
-	private static double projectileRenderDistanceSqr;
-	private static double fallingBlockRenderDistanceSqr;
 	private static double particleRenderDistanceSqr;
 	private static double lowPriorityParticleDistanceSqr;
 	private static double gpuWorkScale = 1.0D;
@@ -94,6 +92,8 @@ public final class OptiminiumGpuOptimizer {
 	private static boolean lastRawSpike;
 	private static boolean lastPacingSpike;
 	private static boolean lastDenseSceneTrigger;
+	private static boolean sustainedFramePressure;
+	private static int consecutivePressureFrames;
 	private static String lastAdaptiveReason = "not sampled";
 	private static long denseSceneFrames;
 	private static long denseAdaptiveFrames;
@@ -138,8 +138,8 @@ public final class OptiminiumGpuOptimizer {
 		countedDenseRebuildBudgetFrame = false;
 		countedDenseUploadBudgetFrame = false;
 		boolean enabled = OptiminiumSettings.isEnabled();
-		updateGpuWorkScale(enabled);
 		updateDenseSceneState(enabled);
+		updateGpuWorkScale(enabled);
 		updateAdaptiveScales(enabled);
 		clientRenderCulling = enabled && OptiminiumSettings.isClientRenderCulling();
 		blockEntityCulling = enabled && OptiminiumSettings.isBlockEntityCulling();
@@ -150,8 +150,6 @@ public final class OptiminiumGpuOptimizer {
 		itemEntityRenderDistanceSqr = ITEM_ENTITY_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 		experienceOrbRenderDistanceSqr = EXPERIENCE_ORB_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 		hangingEntityRenderDistanceSqr = HANGING_ENTITY_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
-		projectileRenderDistanceSqr = PROJECTILE_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
-		fallingBlockRenderDistanceSqr = FALLING_BLOCK_RENDER_DISTANCE_SQR * entityDistanceScaleSqr;
 
 		double particleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * particleWorkScale);
 		double lowPriorityDistance = Math.max(8.0D, particleDistance * 0.5D);
@@ -180,9 +178,15 @@ public final class OptiminiumGpuOptimizer {
 		long profileStart = profileStart();
 		try {
 			if (!clientRenderCulling || !hasCamera || entity instanceof LivingEntity || entity instanceof Player || entity == cameraEntity) {
+				OptiminiumVisualSignificance.recordEntity(entity, false);
 				return false;
 			}
-			if (entity.hasGlowingTag() || entity.hasCustomName() || entity.isPassenger() || !entity.getPassengers().isEmpty() || entity.displayFireAnimation()) {
+			if (entity instanceof Projectile || entity instanceof FallingBlockEntity || entity.hasGlowingTag() || entity.hasCustomName() || entity.isPassenger() || !entity.getPassengers().isEmpty() || entity.displayFireAnimation()) {
+				OptiminiumVisualSignificance.recordEntity(entity, false);
+				return false;
+			}
+			if (OptiminiumVisualSignificance.shouldProtectEntity(entity)) {
+				OptiminiumVisualSignificance.recordEntity(entity, false);
 				return false;
 			}
 
@@ -194,14 +198,11 @@ public final class OptiminiumGpuOptimizer {
 				skip = distanceSqr > experienceOrbRenderDistanceSqr;
 			} else if (entity instanceof HangingEntity) {
 				skip = distanceSqr > hangingEntityRenderDistanceSqr;
-			} else if (entity instanceof Projectile) {
-				skip = distanceSqr > projectileRenderDistanceSqr;
-			} else if (entity instanceof FallingBlockEntity) {
-				skip = distanceSqr > fallingBlockRenderDistanceSqr;
 			}
 			if (skip) {
 				recordCulledEntityRender();
 			}
+			OptiminiumVisualSignificance.recordEntity(entity, skip);
 			return skip;
 		} finally {
 			recordProfileNanos(PROFILE_ENTITY_CULLING, profileStart);
@@ -213,6 +214,7 @@ public final class OptiminiumGpuOptimizer {
 		long profileStart = profileStart();
 		try {
 			if (!particleLimiter || !hasCamera || isImportantParticle(options)) {
+				OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
 				return false;
 			}
 
@@ -224,6 +226,7 @@ public final class OptiminiumGpuOptimizer {
 				|| lowPriority && lowPriorityParticlesThisFrame >= maxLowPriorityParticlesPerFrame;
 			if (skip) {
 				recordHiddenParticle();
+				OptiminiumVisualSignificance.recordParticle(options, x, y, z, true);
 				return true;
 			}
 
@@ -231,6 +234,7 @@ public final class OptiminiumGpuOptimizer {
 			if (lowPriority) {
 				lowPriorityParticlesThisFrame++;
 			}
+			OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
 			return false;
 		} finally {
 			recordProfileNanos(PROFILE_PARTICLE_CULLING, profileStart);
@@ -252,6 +256,9 @@ public final class OptiminiumGpuOptimizer {
 		long profileStart = profileStart();
 		try {
 			if (!blockEntityCulling || !hasCamera) {
+				return false;
+			}
+			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
 				return false;
 			}
 			int scaledViewDistance = scaledBlockEntityViewDistance(viewDistance);
@@ -279,6 +286,11 @@ public final class OptiminiumGpuOptimizer {
 		return latestCpuFrameNanos;
 	}
 
+	public static boolean hasVisualSignificancePressure() {
+		ensureFrameState();
+		return denseSceneActive || sustainedFramePressure;
+	}
+
 	public static double getSmoothedFrameNanos() {
 		return smoothedFrameNanos;
 	}
@@ -288,7 +300,7 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d",
+			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d",
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
 			latestCpuFrameNanos / 1_000_000.0D,
@@ -310,6 +322,7 @@ public final class OptiminiumGpuOptimizer {
 			lastRawVisibleBlockEntities,
 			maxRawVisibleBlockEntities,
 			lastRenderedBlockEntities,
+			renderedBlockEntitiesThisRun,
 			culledBlockEntitiesThisRun,
 			maxRawVisibleBlockEntities,
 			maxRenderedBlockEntities,
@@ -342,6 +355,7 @@ public final class OptiminiumGpuOptimizer {
 			maxRawVisibleBlockEntities,
 			lastRenderedBlockEntities,
 			maxRenderedBlockEntities,
+			renderedBlockEntitiesThisRun,
 			culledBlockEntitiesThisRun,
 			denseSceneFrames,
 			OptiminiumVisualSignificance.snapshot()
@@ -408,13 +422,11 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	public static boolean shouldSkipClouds() {
-		ensureFrameState();
-		return shouldCullGraphicsEffects() && particleWorkScale <= 0.68D;
+		return false;
 	}
 
 	public static boolean shouldSkipWeather() {
-		ensureFrameState();
-		return shouldCullGraphicsEffects() && particleWorkScale <= 0.74D;
+		return false;
 	}
 
 	public static void recordCulledEntityRender() {
@@ -440,6 +452,7 @@ public final class OptiminiumGpuOptimizer {
 
 	public static void recordRenderedBlockEntityAfterCulling() {
 		renderedBlockEntitiesThisFrame++;
+		renderedBlockEntitiesThisRun++;
 	}
 
 	public static void resetAdaptiveStats() {
@@ -458,6 +471,8 @@ public final class OptiminiumGpuOptimizer {
 		adaptiveUploadFrames = 0L;
 		rawSpikeTriggerFrames = 0L;
 		pacingSpikeTriggerFrames = 0L;
+		sustainedFramePressure = false;
+		consecutivePressureFrames = 0;
 		minParticleScale = 1.0D;
 		minBlockEntityScale = 1.0D;
 		rawVisibleBlockEntitiesThisFrame = 0;
@@ -467,6 +482,7 @@ public final class OptiminiumGpuOptimizer {
 		maxRawVisibleBlockEntities = 0;
 		maxRenderedBlockEntities = 0;
 		culledBlockEntitiesThisRun = 0L;
+		renderedBlockEntitiesThisRun = 0L;
 		OptiminiumVisualSignificance.reset();
 		consecutiveDenseSceneFrames = 0;
 		denseSceneHoldFrames = 0;
@@ -673,6 +689,8 @@ public final class OptiminiumGpuOptimizer {
 			smoothedFrameNanos = 0.0D;
 			lastRawSpike = false;
 			lastPacingSpike = false;
+			sustainedFramePressure = false;
+			consecutivePressureFrames = 0;
 			return;
 		}
 		double pacingNanos;
@@ -698,14 +716,22 @@ public final class OptiminiumGpuOptimizer {
 			pacingSpikeTriggerFrames++;
 		}
 		if (lastRawSpike || lastPacingSpike) {
+			consecutivePressureFrames++;
+		} else {
+			consecutivePressureFrames = 0;
+		}
+		sustainedFramePressure = consecutivePressureFrames >= SUSTAINED_PRESSURE_FRAMES;
+		if (denseSceneActive || sustainedFramePressure) {
 			gpuWorkScale = Math.max(minScale, gpuWorkScale - GPU_SCALE_STEP_DOWN);
 		} else if (pacingNanos < targetFrameNanos * 0.86D) {
 			gpuWorkScale = Math.min(1.0D, gpuWorkScale + GPU_SCALE_STEP_UP);
+		} else {
+			gpuWorkScale = 1.0D;
 		}
 	}
 
 	private static void recordAdaptiveActivation() {
-		boolean attempted = lastRawSpike || lastPacingSpike || lastDenseSceneTrigger;
+		boolean attempted = sustainedFramePressure || lastDenseSceneTrigger;
 		boolean particleActive = particleWorkScale < 1.0D;
 		boolean blockEntityActive = blockEntityWorkScale < 1.0D;
 		boolean uploadActive = uploadWorkScale < 1.0D;
@@ -736,9 +762,9 @@ public final class OptiminiumGpuOptimizer {
 			return "gpu optimizer off";
 		}
 		if (attempted && (particleActive || blockEntityActive || uploadActive || rebuildWorkScale < 1.0D)) {
-			return "active: rawSpike=" + lastRawSpike + ", pacingSpike=" + lastPacingSpike + ", denseScene=" + lastDenseSceneTrigger;
+			return "active: sustainedPressure=" + sustainedFramePressure + ", denseScene=" + lastDenseSceneTrigger;
 		}
-		return "inactive: rawSpike=" + lastRawSpike + ", pacingSpike=" + lastPacingSpike + ", denseScene=" + lastDenseSceneTrigger
+		return "inactive: sustainedPressure=" + sustainedFramePressure + ", rawSpike=" + lastRawSpike + ", pacingSpike=" + lastPacingSpike + ", denseScene=" + lastDenseSceneTrigger
 			+ ", rawVisibleBlockEntities=" + lastRawVisibleBlockEntities + "/" + OptiminiumSettings.getDenseBlockEntityThreshold();
 	}
 
@@ -859,6 +885,7 @@ public final class OptiminiumGpuOptimizer {
 		int maxRawVisibleBlockEntities,
 		int renderedBlockEntitiesAfterCulling,
 		int maxRenderedBlockEntitiesAfterCulling,
+		long renderedBlockEntitiesThisRun,
 		long culledBlockEntitiesThisRun,
 		long denseSceneFrames,
 		OptiminiumVisualSignificance.Snapshot significanceBands

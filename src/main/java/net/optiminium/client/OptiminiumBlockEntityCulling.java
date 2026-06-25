@@ -55,6 +55,10 @@ public final class OptiminiumBlockEntityCulling {
 	private OptiminiumBlockEntityCulling() {
 	}
 
+	public static boolean isDistanceCullingRenderer(Object renderer) {
+		return renderer instanceof DistanceCullingRenderer<?>;
+	}
+
 	@SubscribeEvent
 	public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
 		register(event, BlockEntityType.SIGN, SignRenderer::new, 24);

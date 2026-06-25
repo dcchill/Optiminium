@@ -11,20 +11,24 @@ import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBenchmark {
-	private static final String FORMAT_VERSION = "scene-v2";
+	private static final String FORMAT_VERSION = "scene-v3";
 	private static final int PHASE_TICKS = 20 * 12;
+	private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
 	private static boolean running;
 	private static boolean previousEnabled;
 	private static boolean cameraStable;
 	private static int ticks;
 	private static Phase phase = Phase.OFF;
 	private static long lastFrameNanos;
+	private static long lastThreadCpuNanos;
 	private static long lastGpuSample;
 	private static String offDiagnostics = "";
 	private static OptiminiumGpuOptimizer.ProfileSnapshot offProfile = emptyProfile();
@@ -36,6 +40,8 @@ public final class OptiminiumBenchmark {
 	private static CameraSnapshot offCameraSnapshot = CameraSnapshot.EMPTY;
 	private static final List<Long> offFrames = new ArrayList<>();
 	private static final List<Long> onFrames = new ArrayList<>();
+	private static final List<Long> offThreadCpuFrames = new ArrayList<>();
+	private static final List<Long> onThreadCpuFrames = new ArrayList<>();
 	private static final List<Long> offGpuFrames = new ArrayList<>();
 	private static final List<Long> onGpuFrames = new ArrayList<>();
 
@@ -51,6 +57,7 @@ public final class OptiminiumBenchmark {
 		phase = Phase.OFF;
 		ticks = 0;
 		lastFrameNanos = 0L;
+		lastThreadCpuNanos = readThreadCpuNanos();
 		lastGpuSample = OptiminiumGpuTimer.getSampleCount();
 		OptiminiumGpuOptimizer.flushPendingMetrics();
 		offDiagnostics = "";
@@ -64,6 +71,8 @@ public final class OptiminiumBenchmark {
 		cameraStable = true;
 		offFrames.clear();
 		onFrames.clear();
+		offThreadCpuFrames.clear();
+		onThreadCpuFrames.clear();
 		offGpuFrames.clear();
 		onGpuFrames.clear();
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
@@ -79,10 +88,15 @@ public final class OptiminiumBenchmark {
 			return;
 		}
 		long now = System.nanoTime();
+		long threadCpuNanos = readThreadCpuNanos();
 		if (lastFrameNanos != 0L) {
 			(phase == Phase.OFF ? offFrames : onFrames).add(now - lastFrameNanos);
 		}
+		if (lastThreadCpuNanos != 0L && threadCpuNanos != 0L) {
+			(phase == Phase.OFF ? offThreadCpuFrames : onThreadCpuFrames).add(Math.max(0L, threadCpuNanos - lastThreadCpuNanos));
+		}
 		lastFrameNanos = now;
+		lastThreadCpuNanos = threadCpuNanos;
 		long gpuSample = OptiminiumGpuTimer.getSampleCount();
 		if (gpuSample != lastGpuSample && OptiminiumGpuTimer.hasTiming()) {
 			(phase == Phase.OFF ? offGpuFrames : onGpuFrames).add(OptiminiumGpuTimer.getLatestGpuNanos());
@@ -111,6 +125,7 @@ public final class OptiminiumBenchmark {
 			phase = Phase.ON;
 			ticks = 0;
 			lastFrameNanos = 0L;
+			lastThreadCpuNanos = readThreadCpuNanos();
 			lastGpuSample = OptiminiumGpuTimer.getSampleCount();
 			OptiminiumGpuOptimizer.resetAdaptiveStats();
 			OptiminiumRenderProfiler.reset();
@@ -149,13 +164,16 @@ public final class OptiminiumBenchmark {
 		List<String> lines = new ArrayList<>();
 		lines.add("Optiminium benchmark " + FORMAT_VERSION + ": OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
 		lines.add(String.format("Optiminium benchmark net: GPU savings=%.2f ms, CPU overhead=%.3f ms/frame, net frame gain=%.2f ms, FPS gain=%.1f", gpuSavingsMs, onProfile.totalOptiminiumCpuMs(), frameSavingsMs, fpsGain));
+		lines.add("Optiminium benchmark normalized OFF[" + normalizedCpuLine(offFrames, offThreadCpuFrames, offGpuFrames, offProfile) + "] ON[" + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, onProfile) + "]");
 		lines.add(String.format("Optiminium benchmark prevented: particles=%d, blockEntities=%d, entities=%d", particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
 		lines.add("Optiminium benchmark scene OFF[" + sceneLine(offScene) + "] ON[" + sceneLine(onScene) + "]");
+		lines.add("Optiminium benchmark significance OFF[" + significanceLine(offScene.significanceBands(), offMetrics, offScene) + "] ON[" + significanceLine(onScene.significanceBands(), onMetrics, onScene) + "]");
+		lines.add("Optiminium benchmark significance summary OFF[" + significanceSummary(offScene.significanceBands()) + "] ON[" + significanceSummary(onScene.significanceBands()) + "]");
 		lines.add(String.format("Optiminium benchmark FPS estimate: particleCulling=%.1f, blockEntityCulling=%.1f, entityCulling=%.1f, uploadManagement=not isolated, adaptiveQuality=not isolated", estimatedFpsGain(fpsGain, particlesPrevented, totalPrevented), estimatedFpsGain(fpsGain, blockEntitiesPrevented, totalPrevented), estimatedFpsGain(fpsGain, entitiesPrevented, totalPrevented)));
 		lines.add("Optiminium benchmark CPU OFF[" + profileLine(offProfile) + "]");
 		lines.add("Optiminium benchmark CPU ON[" + profileLine(onProfile) + "]");
-		lines.add("Optiminium benchmark render OFF[" + renderProfileLine(offRenderProfile) + "]");
-		lines.add("Optiminium benchmark render ON[" + renderProfileLine(onRenderProfile) + "]");
+		lines.add("Optiminium benchmark render OFF[" + renderProfileLine(offRenderProfile, offFrames.size()) + "]");
+		lines.add("Optiminium benchmark render ON[" + renderProfileLine(onRenderProfile, onFrames.size()) + "]");
 		lines.add("Optiminium benchmark render delta: " + renderDeltaLine(offRenderProfile, onRenderProfile));
 		lines.add("Optiminium benchmark low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
 		lines.add("Optiminium benchmark recommendation: " + recommendation(onProfile, offRenderProfile, onRenderProfile, particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
@@ -198,29 +216,92 @@ public final class OptiminiumBenchmark {
 		);
 	}
 
+	private static String normalizedCpuLine(List<Long> frames, List<Long> threadCpuFrames, List<Long> gpuFrames, OptiminiumGpuOptimizer.ProfileSnapshot profile) {
+		double avgCpuMs = averageNanosOrZero(frames) / 1_000_000.0D;
+		double renderThreadCpuMs = averageNanosOrZero(threadCpuFrames) / 1_000_000.0D;
+		double optiminiumCpuMs = profile.totalOptiminiumCpuMs();
+		double externalCpuMs = Math.max(0.0D, renderThreadCpuMs - optiminiumCpuMs);
+		double gpuWaitOrStallMs = renderThreadCpuMs <= 0.0D ? 0.0D : Math.max(0.0D, avgCpuMs - renderThreadCpuMs);
+		return String.format("avgCpuMs=%.3f, renderThreadCpuMs=%.3f, optiminiumCpuMs=%.3f, estimatedExternalCpuMs=%.3f, gpuWaitOrStallMs=%.3f, avgGpuMs=%.3f, cpuTiming=%s",
+			avgCpuMs,
+			renderThreadCpuMs,
+			optiminiumCpuMs,
+			externalCpuMs,
+			gpuWaitOrStallMs,
+			averageNanosOrZero(gpuFrames) / 1_000_000.0D,
+			threadCpuFrames.isEmpty() ? "unavailable" : "thread"
+		);
+	}
+
 	private static String sceneLine(OptiminiumGpuOptimizer.SceneSnapshot scene) {
 		OptiminiumVisualSignificance.Snapshot bands = scene.significanceBands();
 		return "rawVisibleBlockEntities=" + scene.rawVisibleBlockEntities()
 			+ ", maxRawVisibleBlockEntities=" + scene.maxRawVisibleBlockEntities()
 			+ ", renderedBlockEntitiesAfterCulling=" + scene.renderedBlockEntitiesAfterCulling()
 			+ ", maxRenderedBlockEntitiesAfterCulling=" + scene.maxRenderedBlockEntitiesAfterCulling()
+			+ ", renderedBlockEntitiesThisRun=" + scene.renderedBlockEntitiesThisRun()
 			+ ", culledBlockEntitiesThisRun=" + scene.culledBlockEntitiesThisRun()
 			+ ", denseSceneFrames=" + scene.denseSceneFrames()
 			+ ", significanceBands=full:" + bands.full()
 			+ ",throttled:" + bands.throttled()
 			+ ",reused:" + bands.reused()
 			+ ",proxy:" + bands.proxy()
-			+ ",culled:" + bands.culled();
+			+ ",culled:" + bands.culled()
+			+ ",fullBecauseNearby:" + bands.fullBecauseNearby()
+			+ ",fullBecauseImportant:" + bands.fullBecauseImportant()
+			+ ",fullBecauseLookedAt:" + bands.fullBecauseLookedAt()
+			+ ",fullBecauseRecentlyInteracted:" + bands.fullBecauseRecentlyInteracted()
+			+ ",throttledBecauseDistance:" + bands.throttledBecauseDistance()
+			+ ",throttledBecauseFramePressure:" + bands.throttledBecauseFramePressure()
+			+ ",reusedBecauseStable:" + bands.reusedBecauseStable()
+			+ ",reusedBecauseCameraStable:" + bands.reusedBecauseCameraStable()
+			+ ",proxyBecauseFarRepeated:" + bands.proxyBecauseFarRepeated()
+			+ ",proxyBecauseLowScreenSize:" + bands.proxyBecauseLowScreenSize()
+			+ ",culledBecauseOffscreen:" + bands.culledBecauseOffscreen()
+			+ ",culledBecauseBudget:" + bands.culledBecauseBudget()
+			+ ",culledBecauseTiny:" + bands.culledBecauseTiny()
+			+ ",culledBecauseLowSignificance:" + bands.culledBecauseLowSignificance()
+			+ ",nearestSignificanceDistance:" + String.format("%.1f", bands.nearestDistance());
 	}
 
-	private static String renderProfileLine(OptiminiumRenderProfiler.Snapshot profile) {
-		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f",
+	private static String significanceLine(OptiminiumVisualSignificance.Snapshot bands, OptiminiumMetrics.Snapshot metrics, OptiminiumGpuOptimizer.SceneSnapshot scene) {
+		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, mostCommonSignificanceReason=%s",
+			bands.full(),
+			bands.throttled(),
+			bands.reused(),
+			bands.proxy(),
+			bands.culled(),
+			bands.significanceCpuMs(),
+			bands.worstSignificanceCpuMs(),
+			scene.culledBlockEntitiesThisRun(),
+			metrics.hiddenParticles(),
+			metrics.culledEntityRenders(),
+			bands.mostCommonReason()
+		);
+	}
+
+	private static String significanceSummary(OptiminiumVisualSignificance.Snapshot bands) {
+		return "fullQuality=" + bands.full() + " because nearby:" + bands.fullBecauseNearby() + "/important:" + bands.fullBecauseImportant() + "/lookedAt:" + bands.fullBecauseLookedAt() + "/recent:" + bands.fullBecauseRecentlyInteracted()
+			+ ", throttled=" + bands.throttled() + " because distance:" + bands.throttledBecauseDistance() + "/framePressure:" + bands.throttledBecauseFramePressure()
+			+ ", reused=" + bands.reused() + " because stable:" + bands.reusedBecauseStable() + "/cameraStable:" + bands.reusedBecauseCameraStable()
+			+ ", proxied=" + bands.proxy() + " because repeatedFar:" + bands.proxyBecauseFarRepeated() + "/lowScreenSize:" + bands.proxyBecauseLowScreenSize()
+			+ ", culled=" + bands.culled() + " because offscreen:" + bands.culledBecauseOffscreen() + "/budget:" + bands.culledBecauseBudget() + "/tiny:" + bands.culledBecauseTiny() + "/lowSignificance:" + bands.culledBecauseLowSignificance()
+			+ ", nearestDistance=" + String.format("%.1f", bands.nearestDistance());
+	}
+
+	private static String renderProfileLine(OptiminiumRenderProfiler.Snapshot profile, int frames) {
+		double divisor = Math.max(1, frames);
+		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, textureBindsPerFrame=%.2f, shaderBindsPerFrame=%.2f, renderLayerSwitchesPerFrame=%.2f, bufferUploadsPerFrame=%.2f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f",
 			profile.renderLayerSwitchCount(),
 			profile.textureBindCount(),
 			profile.shaderBindCount(),
 			profile.framebufferBindCount(),
 			profile.bufferUploadCount(),
 			profile.bufferUploadMs(),
+			profile.textureBindCount() / divisor,
+			profile.shaderBindCount() / divisor,
+			profile.renderLayerSwitchCount() / divisor,
+			profile.bufferUploadCount() / divisor,
 			profile.translucentRenderFrames(),
 			profile.particleRenderFrames(),
 			profile.terrainRenderFrames(),
@@ -337,7 +418,7 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static OptiminiumGpuOptimizer.SceneSnapshot emptyScene() {
-		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(0L, 0L, 0L, 0L, 0L));
+		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, "none", -1.0D));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {
@@ -369,6 +450,21 @@ public final class OptiminiumBenchmark {
 			max = Math.max(max, frame);
 		}
 		return max;
+	}
+
+	private static long readThreadCpuNanos() {
+		if (!THREADS.isCurrentThreadCpuTimeSupported()) {
+			return 0L;
+		}
+		if (!THREADS.isThreadCpuTimeEnabled()) {
+			try {
+				THREADS.setThreadCpuTimeEnabled(true);
+			} catch (UnsupportedOperationException | SecurityException exception) {
+				return 0L;
+			}
+		}
+		long nanos = THREADS.getCurrentThreadCpuTime();
+		return nanos < 0L ? 0L : nanos;
 	}
 
 	private static void message(String text) {
