@@ -17,6 +17,7 @@ public final class OptiminiumSettings {
 	private static volatile int gpuTargetFps = 60;
 	private static volatile int gpuMinRenderScalePercent = 60;
 	private static volatile int chunkUploadsPerFrame = 8;
+	private static volatile int entityAlwaysRenderDistanceBlocks = 50;
 	private static volatile boolean particleLimiter = true;
 	private static volatile int particleRenderDistanceBlocks = 64;
 	private static volatile int maxParticlesPerFrame = 96;
@@ -55,6 +56,61 @@ public final class OptiminiumSettings {
 
 	public static void setEnabled(boolean newEnabled) {
 		enabled = newEnabled;
+		save();
+	}
+
+	public static void applyPreset(Preset preset) {
+		enabled = true;
+		framePacing = true;
+		gpuTimerPacing = true;
+		asyncResourceStreaming = true;
+		shaderResourceCache = true;
+		blockEntityCulling = true;
+		occlusionRebuildPriority = true;
+		adaptiveSimulationDistance = true;
+		smartTickScheduler = true;
+		aiPathfindingOptimizer = true;
+		switch (preset) {
+			case HIGH_PERFORMANCE -> {
+				gpuTargetFps = 120;
+				gpuMinRenderScalePercent = 45;
+				chunkUploadsPerFrame = 4;
+				entityAlwaysRenderDistanceBlocks = 40;
+				particleLimiter = true;
+				particleRenderDistanceBlocks = 32;
+				maxParticlesPerFrame = 64;
+				blockEntityDistanceScalePercent = 75;
+				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.AGGRESSIVE;
+				adaptiveSimulationTargetMspt = 45;
+				adaptiveSimulationMinDistanceChunks = 3;
+			}
+			case MEDIUM -> {
+				gpuTargetFps = 75;
+				gpuMinRenderScalePercent = 60;
+				chunkUploadsPerFrame = 8;
+				entityAlwaysRenderDistanceBlocks = 50;
+				particleLimiter = true;
+				particleRenderDistanceBlocks = 64;
+				maxParticlesPerFrame = 128;
+				blockEntityDistanceScalePercent = 100;
+				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
+				adaptiveSimulationTargetMspt = 50;
+				adaptiveSimulationMinDistanceChunks = 4;
+			}
+			case QUALITY -> {
+				gpuTargetFps = 60;
+				gpuMinRenderScalePercent = 85;
+				chunkUploadsPerFrame = 16;
+				entityAlwaysRenderDistanceBlocks = 70;
+				particleLimiter = true;
+				particleRenderDistanceBlocks = 128;
+				maxParticlesPerFrame = 256;
+				blockEntityDistanceScalePercent = 160;
+				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.CONSERVATIVE;
+				adaptiveSimulationTargetMspt = 55;
+				adaptiveSimulationMinDistanceChunks = 6;
+			}
+		}
 		save();
 	}
 
@@ -185,16 +241,21 @@ public final class OptiminiumSettings {
 		return experimentalTemporalSignificance;
 	}
 
-	public static int getFogDistanceBlocks() {
-		return 192;
-	}
-
 	public static boolean isClientRenderCulling() {
 		return true;
 	}
 
 	public static int getEntityRenderDistanceScalePercent() {
 		return 100;
+	}
+
+	public static int getEntityAlwaysRenderDistanceBlocks() {
+		return entityAlwaysRenderDistanceBlocks;
+	}
+
+	public static void setEntityAlwaysRenderDistanceBlocks(int distanceBlocks) {
+		entityAlwaysRenderDistanceBlocks = clamp(distanceBlocks, 10, 200);
+		save();
 	}
 
 	public static boolean isBlockEntityCulling() {
@@ -397,6 +458,7 @@ public final class OptiminiumSettings {
 			gpuTargetFps = clamp(Integer.parseInt(properties.getProperty("gpuTargetFps", Integer.toString(gpuTargetFps))), 30, 240);
 			gpuMinRenderScalePercent = clamp(Integer.parseInt(properties.getProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent))), 35, 100);
 			chunkUploadsPerFrame = clamp(Integer.parseInt(properties.getProperty("chunkUploadsPerFrame", Integer.toString(chunkUploadsPerFrame))), 1, 64);
+			entityAlwaysRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks))), 10, 200);
 			particleLimiter = Boolean.parseBoolean(properties.getProperty("particleLimiter", Boolean.toString(particleLimiter)));
 			particleRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks))), 16, 160);
 			maxParticlesPerFrame = clamp(Integer.parseInt(properties.getProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame))), 16, 512);
@@ -427,6 +489,7 @@ public final class OptiminiumSettings {
 		properties.setProperty("gpuTargetFps", Integer.toString(gpuTargetFps));
 		properties.setProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent));
 		properties.setProperty("chunkUploadsPerFrame", Integer.toString(chunkUploadsPerFrame));
+		properties.setProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks));
 		properties.setProperty("particleLimiter", Boolean.toString(particleLimiter));
 		properties.setProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks));
 		properties.setProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame));
@@ -471,5 +534,11 @@ public final class OptiminiumSettings {
 				return BALANCED;
 			}
 		}
+	}
+
+	public enum Preset {
+		HIGH_PERFORMANCE,
+		MEDIUM,
+		QUALITY
 	}
 }

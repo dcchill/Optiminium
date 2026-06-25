@@ -4,8 +4,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleType;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
@@ -185,12 +187,16 @@ public final class OptiminiumGpuOptimizer {
 				OptiminiumVisualSignificance.recordEntity(entity, false);
 				return false;
 			}
+			double distanceSqr = distanceToCameraSqr(entity.getX(), entity.getY(), entity.getZ());
+			double alwaysRenderDistance = OptiminiumSettings.getEntityAlwaysRenderDistanceBlocks();
+			if (distanceSqr <= alwaysRenderDistance * alwaysRenderDistance) {
+				OptiminiumVisualSignificance.recordEntity(entity, false);
+				return false;
+			}
 			if (OptiminiumVisualSignificance.shouldProtectEntity(entity)) {
 				OptiminiumVisualSignificance.recordEntity(entity, false);
 				return false;
 			}
-
-			double distanceSqr = distanceToCameraSqr(entity.getX(), entity.getY(), entity.getZ());
 			boolean skip = false;
 			if (entity instanceof ItemEntity) {
 				skip = distanceSqr > itemEntityRenderDistanceSqr;
@@ -198,9 +204,16 @@ public final class OptiminiumGpuOptimizer {
 				skip = distanceSqr > experienceOrbRenderDistanceSqr;
 			} else if (entity instanceof HangingEntity) {
 				skip = distanceSqr > hangingEntityRenderDistanceSqr;
+			} else {
+				skip = OptiminiumVisualSignificance.shouldCullDynamicEntity(entity, distanceSqr);
 			}
 			if (skip) {
+				OptiminiumVisualSignificance.recordEntity(entity, true);
+				if (OptiminiumVisualSignificance.shouldRenderEntityDuringFade(entity)) {
+					return false;
+				}
 				recordCulledEntityRender();
+				return true;
 			}
 			OptiminiumVisualSignificance.recordEntity(entity, skip);
 			return skip;
@@ -251,35 +264,39 @@ public final class OptiminiumGpuOptimizer {
 		return Math.max(1, Math.round(viewDistance * blockEntityDistanceScale));
 	}
 
-	public static boolean shouldSkipBlockEntityRender(BlockEntity blockEntity, int viewDistance) {
+	/**
+	 * Unified block entity render decision.
+	 * Checks Visual Significance classification, distance/defer culling, and the delegate.
+	 * Called from the DistanceCullingRenderer rendering path.
+	 */
+	public static boolean shouldRenderBlockEntity(BlockEntity blockEntity, int viewDistance) {
 		ensureFrameState();
 		long profileStart = profileStart();
 		try {
 			if (!blockEntityCulling || !hasCamera) {
+				return true;
+			}
+			// Visual Significance can CULL low-importance block entities
+			// while still keeping them in VS memory for classification tracking.
+			if (OptiminiumVisualSignificance.isEnabled() && !OptiminiumVisualSignificance.shouldRenderBySignificance(blockEntity)) {
+				recordCulledBlockEntityRender();
 				return false;
 			}
-			// When Visual Significance is enabled, use its classification to skip CULLED block entities
-			if (OptiminiumVisualSignificance.isEnabled()) {
-				if (!OptiminiumVisualSignificance.shouldRenderBySignificance(blockEntity)) {
-					recordCulledBlockEntityRender();
-					return true;
-				}
-				return false;
-			}
+			// Protected (nearby/important/looked-at) entities bypass distance budget culling
 			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
-				return false;
+				return true;
 			}
 			int scaledViewDistance = scaledBlockEntityViewDistance(viewDistance);
 			double distanceSqr = distanceToCameraSqr(blockEntity.getBlockPos().getX() + 0.5D, blockEntity.getBlockPos().getY() + 0.5D, blockEntity.getBlockPos().getZ() + 0.5D);
 			if (distanceSqr > scaledViewDistance * scaledViewDistance) {
 				recordCulledBlockEntityRender();
-				return true;
+				return false;
 			}
 			if (shouldDeferBlockEntityRender(blockEntity, distanceSqr)) {
 				recordCulledBlockEntityRender();
-				return true;
+				return false;
 			}
-			return false;
+			return true;
 		} finally {
 			recordProfileNanos(PROFILE_BLOCK_ENTITY_CULLING, profileStart);
 		}
@@ -591,11 +608,15 @@ public final class OptiminiumGpuOptimizer {
 
 	private static boolean isPriorityBlockEntity(BlockEntity blockEntity) {
 		BlockEntityType<?> type = blockEntity.getType();
+		BlockState state = blockEntity.getBlockState();
 		return type == BlockEntityType.BEACON
 			|| type == BlockEntityType.CONDUIT
 			|| type == BlockEntityType.END_PORTAL
 			|| type == BlockEntityType.END_GATEWAY
-			|| type == BlockEntityType.PISTON;
+			|| type == BlockEntityType.PISTON
+			|| state.getLightEmission() > 0
+			|| state.isRandomlyTicking()
+			|| state.getRenderShape() != RenderShape.MODEL;
 	}
 
 	private static void updateDenseSceneState(boolean enabled) {

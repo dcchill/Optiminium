@@ -206,6 +206,7 @@ public final class OptiminiumOptimizer {
 			}))
 			.then(Commands.literal("reset").executes(context -> {
 				OptiminiumMetrics.reset();
+				resetClientStats();
 				context.getSource().sendSuccess(() -> Component.literal("Optiminium stats reset."), false);
 				return 1;
 			}))
@@ -372,6 +373,17 @@ public final class OptiminiumOptimizer {
 			return (String)optimizer.getMethod("diagnosticLine").invoke(null);
 		} catch (ReflectiveOperationException exception) {
 			return ", gpuStats=unavailable";
+		}
+	}
+
+	private static void resetClientStats() {
+		if (FMLEnvironment.dist != Dist.CLIENT) {
+			return;
+		}
+		try {
+			Class<?> optimizer = Class.forName("net.optiminium.client.OptiminiumGpuOptimizer");
+			optimizer.getMethod("resetAdaptiveStats").invoke(null);
+		} catch (ReflectiveOperationException ignored) {
 		}
 	}
 

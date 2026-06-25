@@ -1,5 +1,6 @@
 package net.optiminium.mixin;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
@@ -7,6 +8,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.optiminium.client.OptiminiumBlockEntityCulling;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.optiminium.client.OptiminiumGpuOptimizer;
+import net.optiminium.client.OptiminiumVisualSignificance;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -16,12 +18,30 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class BlockEntityRenderDispatcherMixin {
 	@Inject(
 		method = "setupAndRender",
-		at = @At("HEAD")
+		at = @At("HEAD"),
+		cancellable = true
 	)
 	private static <T extends BlockEntity> void optiminium$countRenderedBlockEntity(BlockEntityRenderer<T> renderer, T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
 			CallbackInfo callback) {
 		if (!OptiminiumBlockEntityCulling.isDistanceCullingRenderer(renderer)) {
+			if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, renderer.getViewDistance())) {
+				callback.cancel();
+				return;
+			}
+			float alpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
+			if (alpha < 1.0F) {
+				RenderSystem.enableBlend();
+				RenderSystem.defaultBlendFunc();
+				RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, alpha);
+			}
 			OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
 		}
+	}
+
+	@Inject(method = "setupAndRender", at = @At("RETURN"))
+	private static <T extends BlockEntity> void optiminium$resetFade(BlockEntityRenderer<T> renderer, T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
+			CallbackInfo callback) {
+		RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+		RenderSystem.disableBlend();
 	}
 }

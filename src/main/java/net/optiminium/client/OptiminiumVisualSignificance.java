@@ -7,8 +7,10 @@ import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
@@ -20,11 +22,14 @@ import net.minecraft.world.entity.animal.Sheep;
 import net.minecraft.world.entity.decoration.HangingEntity;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -72,10 +77,16 @@ public final class OptiminiumVisualSignificance {
 	private static final int PREDICTION_WINDOW_FRAMES = 10;
 	private static final int ATTENTION_LOOK_BOOST_FRAMES = 4;
 	private static final int STABILITY_REQUIRED_FRAMES = 15;
+	private static final int FADE_TRANSITION_FRAMES = 10;
+
+	// ---- Block entity anti-pop constants ----
+	private static final int BLOCK_ENTITY_RECENTLY_VISIBLE_GRACE_FRAMES = 45;
+	private static final int BLOCK_ENTITY_CULL_HOLD_FRAMES = 12;
+	private static final double BLOCK_ENTITY_VISIBLE_DISTANCE_SQR = 64.0D * 64.0D;
 
 	// ---- Entity anti-pop constants ----
-	private static final int RECENTLY_VISIBLE_GRACE_FRAMES = 20;
-	private static final int ENTITY_HYSTERESIS_HOLD_FRAMES = 8;
+	private static final int RECENTLY_VISIBLE_GRACE_FRAMES = 45;
+	private static final int ENTITY_HYSTERESIS_HOLD_FRAMES = 12;
 	private static final int ENTITY_CULL_OSCILLATION_WINDOW = 30;
 	private static final double ENTITY_MOVING_TOWARD_BOOST = 0.25D;
 	private static final double ENTITY_MID_DISTANCE_PROTECTION = 0.15D;
@@ -161,6 +172,11 @@ public final class OptiminiumVisualSignificance {
 	private static long culledBecausePredictedOffscreen;
 	private static long culledBecauseLowConfidencePromotable;
 	private static long culledBecauseFastCamera;
+	private static long blockEntityCullPreventedByVisibility;
+	private static long blockEntityCullPreventedByRecentlyVisible;
+	private static long blockEntityCullPreventedByLookedAt;
+	private static long blockEntityDowngradedToReusedInsteadOfCulled;
+	private static long blockEntityVisibleCullEvents;
 
 	// ---- Entity anti-pop counters ----
 	private static long entityCullPreventedByHysteresis;
@@ -171,6 +187,12 @@ public final class OptiminiumVisualSignificance {
 	private static long entityPromotedBecauseImportant;
 	private static long entityBandTransitions;
 	private static long entityCullOscillationEvents;
+	private static long dynamicModdedBlockEntityCosted;
+	private static long dynamicModdedLivingEntityCosted;
+	private static long dynamicModdedNonLivingEntityCosted;
+	private static long dynamicModdedEntityCulled;
+	private static String firstDynamicModNamespace = "none";
+	private static String lastDynamicModNamespace = "none";
 
 	// ---- Continuous score counters ----
 	private static long promotionsPreventedByHysteresis;
@@ -265,8 +287,29 @@ public final class OptiminiumVisualSignificance {
 
 	public static boolean shouldRenderBySignificance(BlockEntity blockEntity) {
 		if (!isEnabled()) return true;
-		byte classification = beClassifications.get(blockEntity.getBlockPos().asLong());
-		return classification != CULLED;
+		long key = blockEntity.getBlockPos().asLong();
+		ObjectMemory mem = objectMemory.get(key);
+		if (mem == null || mem.lastSeenFrame != frameIndex) return true;
+		byte classification = beClassifications.get(key);
+		return classification != CULLED || isFadingOut(mem.lastChangedFrame);
+	}
+
+	public static float blockEntityFadeAlpha(BlockEntity blockEntity) {
+		if (!isEnabled()) return 1.0F;
+		ObjectMemory mem = objectMemory.get(blockEntity.getBlockPos().asLong());
+		return fadeAlpha(mem == null ? UNKNOWN : mem.lastClassification, mem == null ? -1L : mem.lastChangedFrame);
+	}
+
+	public static float entityFadeAlpha(Entity entity) {
+		if (!isEnabled()) return 1.0F;
+		EntityMemory mem = entityMemory.get(entity.getId());
+		return fadeAlpha(mem == null ? UNKNOWN : mem.lastClassification, mem == null ? -1L : mem.lastChangedFrame);
+	}
+
+	public static boolean shouldRenderEntityDuringFade(Entity entity) {
+		if (!isEnabled()) return false;
+		EntityMemory mem = entityMemory.get(entity.getId());
+		return mem != null && mem.lastClassification == CULLED && isFadingOut(mem.lastChangedFrame);
 	}
 
 	public static boolean shouldProtectBlockEntity(BlockEntity blockEntity) {
@@ -310,6 +353,10 @@ public final class OptiminiumVisualSignificance {
 		EntityCategory category = classifyEntity(entity);
 		EntityMemory mem = entityMemory.get(entity.getId());
 
+		if (mem == null) {
+			entityCullPreventedByHysteresis++;
+			return false;
+		}
 		if (category == EntityCategory.CRITICAL || category == EntityCategory.HOSTILE
 				|| category == EntityCategory.VILLAGER || category == EntityCategory.NEUTRAL) {
 			entityPromotedBecauseImportant++;
@@ -337,16 +384,32 @@ public final class OptiminiumVisualSignificance {
 			return false;
 		}
 		return distanceSqr > ENTITY_CULL_DISTANCE_SQR
-			&& (!inFront || mem != null && mem.lastClassification == CULLED
-				&& mem.lowSignificanceFrames >= ENTITY_HYSTERESIS_HOLD_FRAMES);
+			&& mem.lastClassification == CULLED
+			&& mem.lowSignificanceFrames >= ENTITY_HYSTERESIS_HOLD_FRAMES;
 	}
 
 	public static void recordLivingEntityRendered(LivingEntity entity) {
 		if (!isEnabled()) return;
 		EntityMemory mem = entityMemory.get(entity.getId());
+		if (mem == null) {
+			recordEntity(entity, false);
+			mem = entityMemory.get(entity.getId());
+		}
 		if (mem != null) {
 			mem.lastVisibleFrame = frameIndex;
 		}
+	}
+
+	public static boolean shouldCullDynamicEntity(Entity entity, double distanceSqr) {
+		if (!isEnabled() || !isModdedEntity(entity) || isImportantEntity(entity) || entity.isVehicle()) return false;
+		if (entity instanceof LivingEntity || entity instanceof Projectile || entity instanceof FallingBlockEntity
+				|| entity instanceof HangingEntity || entity instanceof ItemEntity
+				|| entity instanceof net.minecraft.world.entity.ExperienceOrb) return false;
+		if (entity.getBbWidth() * entity.getBbHeight() > 0.75F) return false;
+		double trackingDistance = Math.max(48.0D, entity.getType().clientTrackingRange() * 0.75D);
+		boolean culled = distanceSqr > trackingDistance * trackingDistance;
+		if (culled) dynamicModdedEntityCulled++;
+		return culled;
 	}
 
 	public static void recordBlockEntity(BlockEntity blockEntity, Vec3 cameraPosition) {
@@ -424,6 +487,8 @@ public final class OptiminiumVisualSignificance {
 
 		// Derive band from continuous score using hysteresis thresholds
 		byte classification = classifyByContinuousScore(mem);
+		classification = protectVisibleBlockEntityClassification(classification, mem,
+			distanceSqr, inFront, lookedAt, important, recent, pressured);
 
 		// Accumulate continuous score metrics
 		accumulatedContinuousScores += mem.continuousScore;
@@ -434,6 +499,9 @@ public final class OptiminiumVisualSignificance {
 		updateConfidence(mem, classification);
 		mem.lastClassification = classification;
 		mem.lastScore = score;
+		if (classification != CULLED) {
+			mem.lastVisibleFrame = frameIndex;
+		}
 
 		incrementCounter(classification, distanceSqr, inFront, important,
 			recent, repeatCount, pressured, score, renderCost, mem, false);
@@ -487,11 +555,12 @@ public final class OptiminiumVisualSignificance {
 		// Classify using continuous score + entity protections
 		byte classification = classifyEntityByContinuousScore(mem, distanceSqr, inFront,
 			lookedAt, important, category);
+		byte previousClassification = mem.lastClassification;
 
 		// Update entity confidence
 		updateEntityConfidence(mem, classification);
 
-		if (mem.lastClassification != UNKNOWN && mem.lastClassification != classification) {
+		if (previousClassification != UNKNOWN && previousClassification != classification) {
 			entityBandTransitions++;
 			trackEntityOscillation(entityId, classification);
 		}
@@ -503,9 +572,9 @@ public final class OptiminiumVisualSignificance {
 			mem.lastVisibleFrame = frameIndex;
 		}
 
-		if (debugEntityId == entityId || (debugEntityId < 0 && entity instanceof Sheep && distanceSqr > 40*40 && distanceSqr < 100*100)) {
+		if (debugEntityId == entityId || (debugEntityId < 0 && shouldSampleDebugEntity(entity, distanceSqr))) {
 			debugEntityId = entityId;
-			debugLogEntity(entity, distanceSqr, score, mem.lastClassification, classification, mem);
+			debugLogEntity(entity, distanceSqr, score, previousClassification, classification, mem);
 		}
 
 		boolean entityWasRendered = mem.lastClassification != CULLED;
@@ -568,6 +637,68 @@ public final class OptiminiumVisualSignificance {
 		}
 
 		return desired;
+	}
+
+	private static byte protectVisibleBlockEntityClassification(byte classification, ObjectMemory mem,
+			double distanceSqr, boolean inFront, boolean lookedAt, boolean important,
+			boolean recent, boolean pressured) {
+		if (lookedAt) {
+			if (classification == CULLED) blockEntityCullPreventedByLookedAt++;
+			mem.lowSignificanceFrames = 0;
+			return FULL;
+		}
+		if (important || recent || distanceSqr <= NEAR_DISTANCE_SQR) {
+			mem.lowSignificanceFrames = 0;
+			return FULL;
+		}
+
+		boolean visible = inFront && hasMinimumBlockEntityScreenPresence(distanceSqr);
+		if (visible && distanceSqr <= BLOCK_ENTITY_VISIBLE_DISTANCE_SQR && classification > THROTTLED) {
+			if (classification == CULLED) blockEntityCullPreventedByVisibility++;
+			mem.lowSignificanceFrames = 0;
+			return THROTTLED;
+		}
+
+		if (classification != CULLED) {
+			mem.lowSignificanceFrames = 0;
+			return classification;
+		}
+
+		mem.lowSignificanceFrames++;
+		boolean recentlyVisible = frameIndex - mem.lastVisibleFrame <= BLOCK_ENTITY_RECENTLY_VISIBLE_GRACE_FRAMES;
+		if (recentlyVisible) {
+			blockEntityCullPreventedByRecentlyVisible++;
+			return REUSED;
+		}
+		if (visible) {
+			blockEntityVisibleCullEvents++;
+			boolean extremePressure = currentBudget == RenderBudget.HEAVY_PRESSURE || currentBudget == RenderBudget.EMERGENCY;
+			if (!pressured || !extremePressure || distanceSqr <= REUSED_DISTANCE_SQR || mem.lowSignificanceFrames < BLOCK_ENTITY_CULL_HOLD_FRAMES) {
+				blockEntityCullPreventedByVisibility++;
+				blockEntityDowngradedToReusedInsteadOfCulled++;
+				return REUSED;
+			}
+		} else if (mem.lowSignificanceFrames < BLOCK_ENTITY_CULL_HOLD_FRAMES) {
+			demotionsPreventedByHysteresis++;
+			return PROXY;
+		}
+
+		return classification;
+	}
+
+	private static boolean hasMinimumBlockEntityScreenPresence(double distanceSqr) {
+		return distanceSqr <= LOW_SCREEN_SIZE_DISTANCE_SQR;
+	}
+
+	private static boolean isFadingOut(long lastChangedFrame) {
+		return frameIndex - lastChangedFrame <= FADE_TRANSITION_FRAMES;
+	}
+
+	private static float fadeAlpha(byte classification, long lastChangedFrame) {
+		long frames = frameIndex - lastChangedFrame;
+		if (lastChangedFrame < 0L || frames < 0L || frames > FADE_TRANSITION_FRAMES) return 1.0F;
+		float progress = frames / (float) FADE_TRANSITION_FRAMES;
+		return classification == CULLED ? 1.0F - progress : Math.max(0.15F, progress);
 	}
 
 	/**
@@ -640,6 +771,14 @@ public final class OptiminiumVisualSignificance {
 		}
 
 		if (desired == CULLED && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+			if (frameIndex - mem.lastVisibleFrame <= RECENTLY_VISIBLE_GRACE_FRAMES) {
+				entityCullPreventedByRecentlyVisible++;
+				return PROXY;
+			}
+			if (previous <= THROTTLED) {
+				entityCullPreventedByHysteresis++;
+				return REUSED;
+			}
 			if (mem.lowSignificanceFrames < ENTITY_HYSTERESIS_HOLD_FRAMES) {
 				entityCullPreventedByHysteresis++;
 				return PROXY;
@@ -758,8 +897,10 @@ public final class OptiminiumVisualSignificance {
 		if (entity instanceof Villager) return EntityCategory.VILLAGER;
 		if (entity instanceof NeutralMob) return EntityCategory.NEUTRAL;
 		if (entity instanceof Animal) return EntityCategory.PASSIVE;
-		if (entity instanceof Mob) return EntityCategory.HOSTILE;
 		if (entity instanceof AmbientCreature) return EntityCategory.AMBIENT;
+		if (entity instanceof Enemy) return EntityCategory.HOSTILE;
+		if (entity instanceof Mob mob && (mob.isAggressive() || mob.getTarget() != null)) return EntityCategory.HOSTILE;
+		if (entity instanceof LivingEntity) return EntityCategory.PASSIVE;
 		if (entity instanceof ItemEntity || entity instanceof net.minecraft.world.entity.ExperienceOrb) return EntityCategory.ITEM;
 		return EntityCategory.OTHER;
 	}
@@ -926,6 +1067,8 @@ public final class OptiminiumVisualSignificance {
 		float predictionDot;
 		boolean recentlyPromoted;
 		boolean recentlyDemoted;
+		long lastVisibleFrame = NEVER_INTERACTED_FRAME;
+		int lowSignificanceFrames;
 	}
 
 	private static void advanceObjectMemories() {
@@ -1212,15 +1355,23 @@ public final class OptiminiumVisualSignificance {
 
 	private static boolean isImportant(BlockEntity be) {
 		BlockEntityType<?> t = be.getType();
+		BlockState state = be.getBlockState();
 		return t == BlockEntityType.BEACON || t == BlockEntityType.CONDUIT || t == BlockEntityType.END_PORTAL
 			|| t == BlockEntityType.END_GATEWAY || t == BlockEntityType.MOB_SPAWNER
-			|| t == BlockEntityType.TRIAL_SPAWNER || t == BlockEntityType.VAULT;
+			|| t == BlockEntityType.TRIAL_SPAWNER || t == BlockEntityType.VAULT
+			|| state.getLightEmission() > 0
+			|| state.isRandomlyTicking()
+			|| state.getRenderShape() != RenderShape.MODEL;
 	}
 
 	private static boolean isImportantEntity(Entity e) {
 		return e instanceof Player || e instanceof Projectile
 			|| e instanceof FallingBlockEntity || e.hasGlowingTag() || e.hasCustomName()
-			|| e.isPassenger() || !e.getPassengers().isEmpty() || e.displayFireAnimation();
+			|| e.isPassenger() || !e.getPassengers().isEmpty() || e.displayFireAnimation()
+			|| e instanceof TamableAnimal tamable && tamable.isTame()
+			|| e instanceof Villager
+			|| e instanceof Mob mob && (mob.isAggressive() || mob.getTarget() != null || mob.isLeashed() || mob.isNoAi())
+			|| isLargeLivingEntity(e);
 	}
 
 	private static boolean isImportantParticle(ParticleOptions opts) {
@@ -1236,6 +1387,7 @@ public final class OptiminiumVisualSignificance {
 		if (t == BlockEntityType.SHULKER_BOX) return 0.75D;
 		if (t == BlockEntityType.CHEST || t == BlockEntityType.TRAPPED_CHEST) return 0.70D;
 		if (t == BlockEntityType.ENDER_CHEST || t == BlockEntityType.BELL) return 0.65D;
+		if (t == BlockEntityType.BARREL || t == BlockEntityType.CHISELED_BOOKSHELF) return 0.55D;
 		if (t == BlockEntityType.CAMPFIRE || t == BlockEntityType.ENCHANTING_TABLE) return 0.60D;
 		if (t == BlockEntityType.MOB_SPAWNER || t == BlockEntityType.TRIAL_SPAWNER || t == BlockEntityType.VAULT) return 0.55D;
 		if (t == BlockEntityType.BANNER) return 0.50D;
@@ -1243,12 +1395,13 @@ public final class OptiminiumVisualSignificance {
 		if (t == BlockEntityType.SIGN || t == BlockEntityType.SKULL || t == BlockEntityType.PISTON || t == BlockEntityType.BED) return 0.40D;
 		if (t == BlockEntityType.LECTERN || t == BlockEntityType.DECORATED_POT) return 0.35D;
 		if (t == BlockEntityType.BRUSHABLE_BLOCK || t == BlockEntityType.END_PORTAL || t == BlockEntityType.END_GATEWAY) return 0.30D;
+		if (isModdedBlockEntity(be)) return dynamicBlockEntityCost(be);
 		return 0.50D;
 	}
 
 	private static double entityRenderCost(Entity e) {
 		if (e instanceof Player) return 0.90D;
-		if (e instanceof LivingEntity) return 0.75D;
+		if (e instanceof LivingEntity) return isModdedEntity(e) ? dynamicLivingEntityCost(e) : 0.75D;
 		if (e instanceof Projectile) return 0.25D;
 		if (e instanceof FallingBlockEntity) return 0.30D;
 		if (e.hasGlowingTag()) return 0.50D;
@@ -1256,7 +1409,63 @@ public final class OptiminiumVisualSignificance {
 		if (e.isPassenger()) return 0.50D;
 		if (!e.getPassengers().isEmpty()) return 0.55D;
 		if (e.displayFireAnimation()) return 0.35D;
+		if (isModdedEntity(e)) return dynamicNonLivingEntityCost(e);
 		return 0.30D;
+	}
+
+	private static boolean isModdedBlockEntity(BlockEntity be) {
+		return isModdedKey(BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
+	}
+
+	private static boolean isModdedEntity(Entity entity) {
+		return isModdedKey(BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()));
+	}
+
+	private static boolean isModdedKey(ResourceLocation key) {
+		return key != null && !"minecraft".equals(key.getNamespace());
+	}
+
+	private static void recordDynamicModNamespace(ResourceLocation key) {
+		if (!isModdedKey(key)) return;
+		if ("none".equals(firstDynamicModNamespace)) firstDynamicModNamespace = key.getNamespace();
+		lastDynamicModNamespace = key.getNamespace();
+	}
+
+	private static double dynamicBlockEntityCost(BlockEntity be) {
+		dynamicModdedBlockEntityCosted++;
+		recordDynamicModNamespace(BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
+		BlockState state = be.getBlockState();
+		double cost = 0.55D;
+		if (state.getLightEmission() > 0) cost += 0.10D;
+		if (state.isRandomlyTicking()) cost += 0.10D;
+		if (state.getRenderShape() != RenderShape.MODEL) cost += 0.10D;
+		return Math.min(0.85D, cost);
+	}
+
+	private static boolean isLargeLivingEntity(Entity entity) {
+		return entity instanceof LivingEntity && entity.getBbWidth() * entity.getBbHeight() >= 3.0F;
+	}
+
+	private static double dynamicLivingEntityCost(Entity entity) {
+		dynamicModdedLivingEntityCosted++;
+		recordDynamicModNamespace(BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()));
+		double cost = 0.65D + Math.min(0.20D, entity.getBbWidth() * entity.getBbHeight() * 0.04D);
+		if (entity.hasCustomName() || entity.hasGlowingTag()) cost += 0.10D;
+		if (entity.isPassenger() || !entity.getPassengers().isEmpty()) cost += 0.10D;
+		return Math.min(0.90D, cost);
+	}
+
+	private static double dynamicNonLivingEntityCost(Entity entity) {
+		dynamicModdedNonLivingEntityCosted++;
+		recordDynamicModNamespace(BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()));
+		double cost = 0.25D + Math.min(0.30D, entity.getBbWidth() * entity.getBbHeight() * 0.06D);
+		if (entity.isVehicle()) cost += 0.15D;
+		return Math.min(0.70D, cost);
+	}
+
+	private static boolean shouldSampleDebugEntity(Entity entity, double distanceSqr) {
+		return distanceSqr > 40.0D * 40.0D && distanceSqr < 100.0D * 100.0D
+			&& (entity instanceof Sheep || isModdedEntity(entity));
 	}
 
 	private static double particleRenderCost(ParticleOptions opts) {
@@ -1389,10 +1598,16 @@ public final class OptiminiumVisualSignificance {
 			culledBecauseOffscreen, culledBecauseBudget, culledBecauseTiny,
 			culledBecauseLowSignificance, culledBecauseHighCostLowImportance,
 			culledBecausePredictedOffscreen, culledBecauseLowConfidencePromotable, culledBecauseFastCamera,
+			blockEntityCullPreventedByVisibility, blockEntityCullPreventedByRecentlyVisible,
+			blockEntityCullPreventedByLookedAt, blockEntityDowngradedToReusedInsteadOfCulled,
+			blockEntityVisibleCullEvents,
 			entityCullPreventedByHysteresis, entityCullPreventedByRecentlyVisible,
 			entityCullPreventedByMiddleDistance, entityCullPreventedByMovingToward,
 			entityPromotedBecauseLiving, entityPromotedBecauseImportant,
 			entityBandTransitions, entityCullOscillationEvents,
+			dynamicModdedBlockEntityCosted, dynamicModdedLivingEntityCosted,
+			dynamicModdedNonLivingEntityCosted, dynamicModdedEntityCulled,
+			firstDynamicModNamespace, lastDynamicModNamespace,
 			averageSignificanceMs(), worstSignificanceNanos / 1_000_000.0D,
 			mostCommonReason(),
 			nearestDistanceSqr == Double.POSITIVE_INFINITY ? -1.0D : Math.sqrt(nearestDistanceSqr),
@@ -1416,10 +1631,16 @@ public final class OptiminiumVisualSignificance {
 		culledBecauseOffscreen = 0L; culledBecauseBudget = 0L; culledBecauseTiny = 0L;
 		culledBecauseLowSignificance = 0L; culledBecauseHighCostLowImportance = 0L;
 		culledBecausePredictedOffscreen = 0L; culledBecauseLowConfidencePromotable = 0L; culledBecauseFastCamera = 0L;
+		blockEntityCullPreventedByVisibility = 0L; blockEntityCullPreventedByRecentlyVisible = 0L;
+		blockEntityCullPreventedByLookedAt = 0L; blockEntityDowngradedToReusedInsteadOfCulled = 0L;
+		blockEntityVisibleCullEvents = 0L;
 		entityCullPreventedByHysteresis = 0L; entityCullPreventedByRecentlyVisible = 0L;
 		entityCullPreventedByMiddleDistance = 0L; entityCullPreventedByMovingToward = 0L;
 		entityPromotedBecauseLiving = 0L; entityPromotedBecauseImportant = 0L;
 		entityBandTransitions = 0L; entityCullOscillationEvents = 0L;
+		dynamicModdedBlockEntityCosted = 0L; dynamicModdedLivingEntityCosted = 0L;
+		dynamicModdedNonLivingEntityCosted = 0L; dynamicModdedEntityCulled = 0L;
+		firstDynamicModNamespace = "none"; lastDynamicModNamespace = "none";
 		promotionsPreventedByHysteresis = 0L; demotionsPreventedByHysteresis = 0L;
 		promotionsPreventedByConfidence = 0L; demotionsPreventedByConfidence = 0L;
 		singleBandTransitionsEnforced = 0L;
@@ -1465,6 +1686,11 @@ public final class OptiminiumVisualSignificance {
 		if (culledBecausePredictedOffscreen > count) { reason = "culledBecausePredictedOffscreen"; count = culledBecausePredictedOffscreen; }
 		if (culledBecauseLowConfidencePromotable > count) { reason = "culledBecauseLowConfidencePromotable"; count = culledBecauseLowConfidencePromotable; }
 		if (culledBecauseFastCamera > count) { reason = "culledBecauseFastCamera"; count = culledBecauseFastCamera; }
+		if (blockEntityCullPreventedByVisibility > count) { reason = "blockEntityCullPreventedByVisibility"; count = blockEntityCullPreventedByVisibility; }
+		if (blockEntityCullPreventedByRecentlyVisible > count) { reason = "blockEntityCullPreventedByRecentlyVisible"; count = blockEntityCullPreventedByRecentlyVisible; }
+		if (blockEntityCullPreventedByLookedAt > count) { reason = "blockEntityCullPreventedByLookedAt"; count = blockEntityCullPreventedByLookedAt; }
+		if (blockEntityDowngradedToReusedInsteadOfCulled > count) { reason = "blockEntityDowngradedToReusedInsteadOfCulled"; count = blockEntityDowngradedToReusedInsteadOfCulled; }
+		if (blockEntityVisibleCullEvents > count) { reason = "blockEntityVisibleCullEvents"; count = blockEntityVisibleCullEvents; }
 		if (entityCullPreventedByHysteresis > count) { reason = "entityCullPreventedByHysteresis"; count = entityCullPreventedByHysteresis; }
 		if (entityCullPreventedByRecentlyVisible > count) { reason = "entityCullPreventedByRecentlyVisible"; count = entityCullPreventedByRecentlyVisible; }
 		if (entityCullPreventedByMiddleDistance > count) { reason = "entityCullPreventedByMiddleDistance"; count = entityCullPreventedByMiddleDistance; }
@@ -1473,6 +1699,10 @@ public final class OptiminiumVisualSignificance {
 		if (entityPromotedBecauseImportant > count) { reason = "entityPromotedBecauseImportant"; count = entityPromotedBecauseImportant; }
 		if (entityBandTransitions > count) { reason = "entityBandTransitions"; count = entityBandTransitions; }
 		if (entityCullOscillationEvents > count) { reason = "entityCullOscillationEvents"; count = entityCullOscillationEvents; }
+		if (dynamicModdedBlockEntityCosted > count) { reason = "dynamicModdedBlockEntityCosted"; count = dynamicModdedBlockEntityCosted; }
+		if (dynamicModdedLivingEntityCosted > count) { reason = "dynamicModdedLivingEntityCosted"; count = dynamicModdedLivingEntityCosted; }
+		if (dynamicModdedNonLivingEntityCosted > count) { reason = "dynamicModdedNonLivingEntityCosted"; count = dynamicModdedNonLivingEntityCosted; }
+		if (dynamicModdedEntityCulled > count) { reason = "dynamicModdedEntityCulled"; count = dynamicModdedEntityCulled; }
 		return reason;
 	}
 
@@ -1492,10 +1722,16 @@ public final class OptiminiumVisualSignificance {
 		long culledBecauseLowSignificance, long culledBecauseHighCostLowImportance,
 		long culledBecausePredictedOffscreen, long culledBecauseLowConfidencePromotable,
 		long culledBecauseFastCamera,
+		long blockEntityCullPreventedByVisibility, long blockEntityCullPreventedByRecentlyVisible,
+		long blockEntityCullPreventedByLookedAt, long blockEntityDowngradedToReusedInsteadOfCulled,
+		long blockEntityVisibleCullEvents,
 		long entityCullPreventedByHysteresis, long entityCullPreventedByRecentlyVisible,
 		long entityCullPreventedByMiddleDistance, long entityCullPreventedByMovingToward,
 		long entityPromotedBecauseLiving, long entityPromotedBecauseImportant,
 		long entityBandTransitions, long entityCullOscillationEvents,
+		long dynamicModdedBlockEntityCosted, long dynamicModdedLivingEntityCosted,
+		long dynamicModdedNonLivingEntityCosted, long dynamicModdedEntityCulled,
+		String firstDynamicModNamespace, String lastDynamicModNamespace,
 		double significanceCpuMs, double worstSignificanceCpuMs,
 		String mostCommonReason, double nearestDistance,
 		double cameraVelocity, double cameraRotationSpeed,
@@ -1532,6 +1768,11 @@ public final class OptiminiumVisualSignificance {
 				+ ",culledBecausePredictedOffscreen:" + culledBecausePredictedOffscreen
 				+ ",culledBecauseLowConfidencePromotable:" + culledBecauseLowConfidencePromotable
 				+ ",culledBecauseFastCamera:" + culledBecauseFastCamera
+				+ ",blockEntityCullPreventedByVisibility:" + blockEntityCullPreventedByVisibility
+				+ ",blockEntityCullPreventedByRecentlyVisible:" + blockEntityCullPreventedByRecentlyVisible
+				+ ",blockEntityCullPreventedByLookedAt:" + blockEntityCullPreventedByLookedAt
+				+ ",blockEntityDowngradedToReusedInsteadOfCulled:" + blockEntityDowngradedToReusedInsteadOfCulled
+				+ ",blockEntityVisibleCullEvents:" + blockEntityVisibleCullEvents
 				+ ",entityCullPreventedByHysteresis:" + entityCullPreventedByHysteresis
 				+ ",entityCullPreventedByRecentlyVisible:" + entityCullPreventedByRecentlyVisible
 				+ ",entityCullPreventedByMiddleDistance:" + entityCullPreventedByMiddleDistance
@@ -1540,6 +1781,12 @@ public final class OptiminiumVisualSignificance {
 				+ ",entityPromotedBecauseImportant:" + entityPromotedBecauseImportant
 				+ ",entityBandTransitions:" + entityBandTransitions
 				+ ",entityCullOscillationEvents:" + entityCullOscillationEvents
+				+ ",dynamicModdedBlockEntityCosted:" + dynamicModdedBlockEntityCosted
+				+ ",dynamicModdedLivingEntityCosted:" + dynamicModdedLivingEntityCosted
+				+ ",dynamicModdedNonLivingEntityCosted:" + dynamicModdedNonLivingEntityCosted
+				+ ",dynamicModdedEntityCulled:" + dynamicModdedEntityCulled
+				+ ",firstDynamicModNamespace:" + firstDynamicModNamespace
+				+ ",lastDynamicModNamespace:" + lastDynamicModNamespace
 				+ ",significanceCpuMs:" + String.format("%.4f", significanceCpuMs)
 				+ ",worstSignificanceCpuMs:" + String.format("%.4f", worstSignificanceCpuMs)
 				+ ",mostCommonReason:" + mostCommonReason

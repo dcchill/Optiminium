@@ -16,6 +16,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static final int BUTTON_WIDTH = 220;
 	private static final int BUTTON_HEIGHT = 20;
 	private final Screen lastScreen;
+	private boolean advanced;
 
 	public OptiminiumSettingsScreen(Screen lastScreen) {
 		super(TITLE);
@@ -24,6 +25,44 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	@Override
 	protected void init() {
+		if (advanced) {
+			initAdvanced();
+		} else {
+			initSimple();
+		}
+	}
+
+	private void initSimple() {
+		int x = (this.width - BUTTON_WIDTH) / 2;
+		int y = 54;
+		this.addRenderableWidget(Button.builder(enabledLabel(), button -> button.setMessage(Component.literal("Optiminium: " + (OptiminiumSettings.toggleEnabled() ? "ON" : "OFF"))))
+			.bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("High Performance"), button -> applyPreset(OptiminiumSettings.Preset.HIGH_PERFORMANCE))
+			.bounds(x, y + 34, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Medium"), button -> applyPreset(OptiminiumSettings.Preset.MEDIUM))
+			.bounds(x, y + 60, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Quality"), button -> applyPreset(OptiminiumSettings.Preset.QUALITY))
+			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 120, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
+		this.addRenderableWidget(Button.builder(Component.literal("Advanced Settings"), button -> {
+				this.advanced = true;
+				refreshWidgets();
+			})
+			.bounds(x, y + 154, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
+			.bounds(x, y + 180, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
+			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
+			.build());
+	}
+
+	private void initAdvanced() {
 		boolean twoColumns = this.width >= BUTTON_WIDTH * 2 + 24;
 		int leftX = twoColumns ? this.width / 2 - BUTTON_WIDTH - 6 : (this.width - BUTTON_WIDTH) / 2;
 		int rightX = twoColumns ? this.width / 2 + 6 : leftX;
@@ -57,6 +96,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(new SettingsSlider(x, y + 208, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 234, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 260, OptiminiumSettings::getChunkUploadsPerFrame, OptiminiumSettings::setChunkUploadsPerFrame, 1, 64, "Chunk Uploads/Frame"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 286, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -88,6 +128,12 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 352, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
+				this.advanced = false;
+				refreshWidgets();
+			})
+			.bounds((this.width - 200) / 2, this.height - 56, 200, BUTTON_HEIGHT)
+			.build());
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
 			.build());
@@ -98,6 +144,16 @@ public final class OptiminiumSettingsScreen extends Screen {
 		super.render(graphics, mouseX, mouseY, partialTick);
 		graphics.drawCenteredString(this.font, TITLE, this.width / 2, 16, 0xFFFFFF);
 		graphics.drawCenteredString(this.font, "GPU Timer: " + OptiminiumGpuTimer.status(), this.width / 2, 28, 0xA0A0A0);
+	}
+
+	private void applyPreset(OptiminiumSettings.Preset preset) {
+		OptiminiumSettings.applyPreset(preset);
+		refreshWidgets();
+	}
+
+	private void refreshWidgets() {
+		this.clearWidgets();
+		init();
 	}
 
 	@Override

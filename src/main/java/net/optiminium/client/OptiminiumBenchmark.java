@@ -263,11 +263,16 @@ public final class OptiminiumBenchmark {
 			+ ",culledBecauseTiny:" + bands.culledBecauseTiny()
 			+ ",culledBecauseLowSignificance:" + bands.culledBecauseLowSignificance()
 			+ ",culledBecauseHighCostLowImportance:" + bands.culledBecauseHighCostLowImportance()
+			+ ",blockEntityCullPreventedByVisibility:" + bands.blockEntityCullPreventedByVisibility()
+			+ ",blockEntityCullPreventedByRecentlyVisible:" + bands.blockEntityCullPreventedByRecentlyVisible()
+			+ ",blockEntityCullPreventedByLookedAt:" + bands.blockEntityCullPreventedByLookedAt()
+			+ ",blockEntityDowngradedToReusedInsteadOfCulled:" + bands.blockEntityDowngradedToReusedInsteadOfCulled()
+			+ ",blockEntityVisibleCullEvents:" + bands.blockEntityVisibleCullEvents()
 			+ ",nearestSignificanceDistance:" + String.format("%.1f", bands.nearestDistance());
 	}
 
 	private static String significanceLine(OptiminiumVisualSignificance.Snapshot bands, OptiminiumMetrics.Snapshot metrics, OptiminiumGpuOptimizer.SceneSnapshot scene) {
-		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, mostCommonSignificanceReason=%s",
+		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
 			bands.full(),
 			bands.throttled(),
 			bands.reused(),
@@ -278,6 +283,17 @@ public final class OptiminiumBenchmark {
 			scene.culledBlockEntitiesThisRun(),
 			metrics.hiddenParticles(),
 			metrics.culledEntityRenders(),
+			bands.blockEntityCullPreventedByVisibility(),
+			bands.blockEntityCullPreventedByRecentlyVisible(),
+			bands.blockEntityCullPreventedByLookedAt(),
+			bands.blockEntityDowngradedToReusedInsteadOfCulled(),
+			bands.blockEntityVisibleCullEvents(),
+			bands.dynamicModdedBlockEntityCosted(),
+			bands.dynamicModdedLivingEntityCosted(),
+			bands.dynamicModdedNonLivingEntityCosted(),
+			bands.dynamicModdedEntityCulled(),
+			bands.firstDynamicModNamespace(),
+			bands.lastDynamicModNamespace(),
 			bands.mostCommonReason()
 		);
 	}
@@ -288,6 +304,7 @@ public final class OptiminiumBenchmark {
 			+ ", reused=" + bands.reused() + " because stable:" + bands.reusedBecauseStable() + "/cameraStable:" + bands.reusedBecauseCameraStable()
 			+ ", proxied=" + bands.proxy() + " because repeatedFar:" + bands.proxyBecauseFarRepeated() + "/lowScreenSize:" + bands.proxyBecauseLowScreenSize()
 			+ ", culled=" + bands.culled() + " because offscreen:" + bands.culledBecauseOffscreen() + "/budget:" + bands.culledBecauseBudget() + "/tiny:" + bands.culledBecauseTiny() + "/lowSignificance:" + bands.culledBecauseLowSignificance() + "/highCostLowImportance:" + bands.culledBecauseHighCostLowImportance()
+			+ ", blockEntityAntiPop=visibility:" + bands.blockEntityCullPreventedByVisibility() + "/recent:" + bands.blockEntityCullPreventedByRecentlyVisible() + "/lookedAt:" + bands.blockEntityCullPreventedByLookedAt() + "/reusedInsteadOfCulled:" + bands.blockEntityDowngradedToReusedInsteadOfCulled() + "/visibleCullEvents:" + bands.blockEntityVisibleCullEvents()
 			+ ", nearestDistance=" + String.format("%.1f", bands.nearestDistance());
 	}
 
@@ -427,7 +444,9 @@ public final class OptiminiumBenchmark {
 			0L, 0L, 0L,
 			0L, 0L, 0L,
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L,
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, "none", "none",
 			0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0, 0,
 			0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D));
 	}

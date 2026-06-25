@@ -23,7 +23,6 @@ import net.optiminium.optimization.OptiminiumSettings;
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumFpsOptimizer {
 	private static final int CELL_SIZE_SHIFT = 4;
-	private static final double ALWAYS_RENDER_DISTANCE_SQR = 10.0 * 10.0;
 	private static final double NAME_TAG_DISTANCE_SQR = 32.0 * 32.0;
 	private static final Long2IntOpenHashMap renderedCrowdByCell = new Long2IntOpenHashMap();
 	private static boolean crowdCulling;
@@ -65,7 +64,8 @@ public final class OptiminiumFpsOptimizer {
 		}
 
 		double distanceSqr = player.distanceToSqr(entity);
-		if (distanceSqr <= ALWAYS_RENDER_DISTANCE_SQR) {
+		int alwaysRenderDistance = OptiminiumSettings.getEntityAlwaysRenderDistanceBlocks();
+		if (distanceSqr <= alwaysRenderDistance * alwaysRenderDistance) {
 			OptiminiumVisualSignificance.recordLivingEntityRendered(entity);
 			return;
 		}
@@ -81,17 +81,23 @@ public final class OptiminiumFpsOptimizer {
 
 		int budget = renderBudgetForDistance(distanceSqr);
 		if (budget <= 0) {
+			OptiminiumVisualSignificance.recordEntity(entity, true);
+			if (OptiminiumVisualSignificance.shouldRenderEntityDuringFade(entity)) {
+				return;
+			}
 			event.setCanceled(true);
 			OptiminiumGpuOptimizer.recordCulledEntityRender();
-			OptiminiumVisualSignificance.recordEntity(entity, true);
 			return;
 		}
 		long cellKey = crowdCellKey(entity, distanceSqr);
 		int renderedInCell = renderedCrowdByCell.get(cellKey);
 		if (renderedInCell >= budget) {
+			OptiminiumVisualSignificance.recordEntity(entity, true);
+			if (OptiminiumVisualSignificance.shouldRenderEntityDuringFade(entity)) {
+				return;
+			}
 			event.setCanceled(true);
 			OptiminiumGpuOptimizer.recordCulledEntityRender();
-			OptiminiumVisualSignificance.recordEntity(entity, true);
 			return;
 		}
 		renderedCrowdByCell.put(cellKey, renderedInCell + 1);

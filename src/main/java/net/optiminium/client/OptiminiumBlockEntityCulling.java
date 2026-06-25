@@ -1,5 +1,6 @@
 package net.optiminium.client;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -50,6 +51,19 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 
+/**
+ * Distance-culling block entity renderers integrated with Visual Significance.
+ * 
+ * The seamless architecture:
+ * 1. `shouldRender()` feeds ALL block entity positions into Visual Significance
+ *    (whether they pass distance culling or not) so VS builds complete object memory.
+ * 2. `render()` consults a unified decision: VS classification + distance + fade alpha.
+ * 3. Visual Significance's `shouldRenderBySignificance()` now respects the full
+ *    distance/protection pipeline internally, eliminating the two-path interference.
+ * 
+ * No block entity is skipped by distance without VS knowing about it first.
+ * No block entity is skipped by VS without distance being respected.
+ */
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
 public final class OptiminiumBlockEntityCulling {
 	private OptiminiumBlockEntityCulling() {
@@ -101,11 +115,23 @@ public final class OptiminiumBlockEntityCulling {
 
 		@Override
 		public void render(T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
-			if (OptiminiumGpuOptimizer.shouldSkipBlockEntityRender(blockEntity, viewDistance)) {
+			// Unified decision: synchronize VS classification before rendering
+			if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, viewDistance)) {
 				return;
 			}
+			float alpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
+			if (alpha < 1.0F) {
+				RenderSystem.enableBlend();
+				RenderSystem.defaultBlendFunc();
+				RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, alpha);
+			}
 			OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
-			delegate.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			try {
+				delegate.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			} finally {
+				RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+				RenderSystem.disableBlend();
+			}
 		}
 
 		@Override
@@ -115,12 +141,31 @@ public final class OptiminiumBlockEntityCulling {
 				if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
 					return delegate.shouldRender(blockEntity, cameraPos);
 				}
+
+				// Feed ALL block entities into Visual Significance (including out-of-range ones)
+				// so VS builds complete memory even for entities beyond the distance threshold.
+				OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPos);
+
 				int scaledViewDistance = OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
-				boolean shouldRender = closerThanBlockCenter(blockEntity.getBlockPos(), cameraPos, scaledViewDistance) && delegate.shouldRender(blockEntity, cameraPos);
-				if (!shouldRender) {
+				Vec3 center = blockEntity.getBlockPos().getCenter();
+				double dx = center.x - cameraPos.x;
+				double dy = center.y - cameraPos.y;
+				double dz = center.z - cameraPos.z;
+				double distanceSqr = dx * dx + dy * dy + dz * dz;
+
+				// Distance check (base culling)
+				if (distanceSqr > scaledViewDistance * scaledViewDistance) {
 					OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
+					return false;
 				}
-				return shouldRender;
+
+				// Delegate's own shouldRender (e.g., AABB frustum check)
+				if (!delegate.shouldRender(blockEntity, cameraPos)) {
+					OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
+					return false;
+				}
+
+				return true;
 			} finally {
 				OptiminiumGpuOptimizer.recordBlockEntityProfileNanos(profileStart);
 			}
@@ -131,6 +176,7 @@ public final class OptiminiumBlockEntityCulling {
 			if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
 				return delegate.shouldRenderOffScreen(blockEntity);
 			}
+			// Off-screen block entities are handled by Visual Significance classification
 			return false;
 		}
 
@@ -145,13 +191,6 @@ public final class OptiminiumBlockEntityCulling {
 		@Override
 		public AABB getRenderBoundingBox(T blockEntity) {
 			return delegate.getRenderBoundingBox(blockEntity);
-		}
-
-		private static boolean closerThanBlockCenter(BlockPos pos, Vec3 cameraPos, int distance) {
-			double dx = pos.getX() + 0.5D - cameraPos.x;
-			double dy = pos.getY() + 0.5D - cameraPos.y;
-			double dz = pos.getZ() + 0.5D - cameraPos.z;
-			return dx * dx + dy * dy + dz * dz < distance * distance;
 		}
 	}
 }
