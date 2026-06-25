@@ -253,6 +253,7 @@ public final class OptiminiumBenchmark {
 			+ ",fullBecauseRecentlyInteracted:" + bands.fullBecauseRecentlyInteracted()
 			+ ",throttledBecauseDistance:" + bands.throttledBecauseDistance()
 			+ ",throttledBecauseFramePressure:" + bands.throttledBecauseFramePressure()
+			+ ",throttledBecauseHighCost:" + bands.throttledBecauseHighCost()
 			+ ",reusedBecauseStable:" + bands.reusedBecauseStable()
 			+ ",reusedBecauseCameraStable:" + bands.reusedBecauseCameraStable()
 			+ ",proxyBecauseFarRepeated:" + bands.proxyBecauseFarRepeated()
@@ -261,6 +262,7 @@ public final class OptiminiumBenchmark {
 			+ ",culledBecauseBudget:" + bands.culledBecauseBudget()
 			+ ",culledBecauseTiny:" + bands.culledBecauseTiny()
 			+ ",culledBecauseLowSignificance:" + bands.culledBecauseLowSignificance()
+			+ ",culledBecauseHighCostLowImportance:" + bands.culledBecauseHighCostLowImportance()
 			+ ",nearestSignificanceDistance:" + String.format("%.1f", bands.nearestDistance());
 	}
 
@@ -282,10 +284,10 @@ public final class OptiminiumBenchmark {
 
 	private static String significanceSummary(OptiminiumVisualSignificance.Snapshot bands) {
 		return "fullQuality=" + bands.full() + " because nearby:" + bands.fullBecauseNearby() + "/important:" + bands.fullBecauseImportant() + "/lookedAt:" + bands.fullBecauseLookedAt() + "/recent:" + bands.fullBecauseRecentlyInteracted()
-			+ ", throttled=" + bands.throttled() + " because distance:" + bands.throttledBecauseDistance() + "/framePressure:" + bands.throttledBecauseFramePressure()
+			+ ", throttled=" + bands.throttled() + " because distance:" + bands.throttledBecauseDistance() + "/framePressure:" + bands.throttledBecauseFramePressure() + "/highCost:" + bands.throttledBecauseHighCost()
 			+ ", reused=" + bands.reused() + " because stable:" + bands.reusedBecauseStable() + "/cameraStable:" + bands.reusedBecauseCameraStable()
 			+ ", proxied=" + bands.proxy() + " because repeatedFar:" + bands.proxyBecauseFarRepeated() + "/lowScreenSize:" + bands.proxyBecauseLowScreenSize()
-			+ ", culled=" + bands.culled() + " because offscreen:" + bands.culledBecauseOffscreen() + "/budget:" + bands.culledBecauseBudget() + "/tiny:" + bands.culledBecauseTiny() + "/lowSignificance:" + bands.culledBecauseLowSignificance()
+			+ ", culled=" + bands.culled() + " because offscreen:" + bands.culledBecauseOffscreen() + "/budget:" + bands.culledBecauseBudget() + "/tiny:" + bands.culledBecauseTiny() + "/lowSignificance:" + bands.culledBecauseLowSignificance() + "/highCostLowImportance:" + bands.culledBecauseHighCostLowImportance()
 			+ ", nearestDistance=" + String.format("%.1f", bands.nearestDistance());
 	}
 
@@ -418,7 +420,7 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static OptiminiumGpuOptimizer.SceneSnapshot emptyScene() {
-		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, "none", -1.0D));
+		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {

@@ -258,6 +258,14 @@ public final class OptiminiumGpuOptimizer {
 			if (!blockEntityCulling || !hasCamera) {
 				return false;
 			}
+			// When Visual Significance is enabled, use its classification to skip CULLED block entities
+			if (OptiminiumVisualSignificance.isEnabled()) {
+				if (!OptiminiumVisualSignificance.shouldRenderBySignificance(blockEntity)) {
+					recordCulledBlockEntityRender();
+					return true;
+				}
+				return false;
+			}
 			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
 				return false;
 			}
