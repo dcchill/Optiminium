@@ -66,10 +66,16 @@ public final class OptiminiumFpsOptimizer {
 
 		double distanceSqr = player.distanceToSqr(entity);
 		if (distanceSqr <= ALWAYS_RENDER_DISTANCE_SQR) {
+			OptiminiumVisualSignificance.recordLivingEntityRendered(entity);
 			return;
 		}
 
 		if (!isCullableCrowdEntity(mob)) {
+			OptiminiumVisualSignificance.recordLivingEntityRendered(entity);
+			return;
+		}
+		if (!OptiminiumVisualSignificance.allowsLivingEntityCull(entity, distanceSqr)) {
+			OptiminiumVisualSignificance.recordLivingEntityRendered(entity);
 			return;
 		}
 
@@ -77,6 +83,7 @@ public final class OptiminiumFpsOptimizer {
 		if (budget <= 0) {
 			event.setCanceled(true);
 			OptiminiumGpuOptimizer.recordCulledEntityRender();
+			OptiminiumVisualSignificance.recordEntity(entity, true);
 			return;
 		}
 		long cellKey = crowdCellKey(entity, distanceSqr);
@@ -84,9 +91,11 @@ public final class OptiminiumFpsOptimizer {
 		if (renderedInCell >= budget) {
 			event.setCanceled(true);
 			OptiminiumGpuOptimizer.recordCulledEntityRender();
+			OptiminiumVisualSignificance.recordEntity(entity, true);
 			return;
 		}
 		renderedCrowdByCell.put(cellKey, renderedInCell + 1);
+		OptiminiumVisualSignificance.recordLivingEntityRendered(entity);
 	}
 
 	@SubscribeEvent

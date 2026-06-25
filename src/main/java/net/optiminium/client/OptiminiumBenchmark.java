@@ -420,7 +420,16 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static OptiminiumGpuOptimizer.SceneSnapshot emptyScene() {
-		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0));
+		return new OptiminiumGpuOptimizer.SceneSnapshot(0, 0, 0, 0, 0L, 0L, 0L, new OptiminiumVisualSignificance.Snapshot(
+			0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L,
+			0L, 0L, 0L,
+			0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+			0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0, 0,
+			0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {

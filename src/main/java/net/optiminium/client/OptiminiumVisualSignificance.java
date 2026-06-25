@@ -1,5 +1,6 @@
 package net.optiminium.client;
 
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
@@ -10,7 +11,16 @@ import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.TamableAnimal;
+import net.minecraft.world.entity.ambient.AmbientCreature;
+import net.minecraft.world.entity.animal.Animal;
+import net.minecraft.world.entity.animal.Sheep;
+import net.minecraft.world.entity.decoration.HangingEntity;
 import net.minecraft.world.entity.item.FallingBlockEntity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -18,27 +28,21 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.optiminium.OptiminiumMod;
 import net.optiminium.optimization.OptiminiumSettings;
 
 /**
- * Second-generation Visual Importance Engine.
+ * Second-generation Visual Importance Engine with entity anti-pop protection.
  * 
- * Instead of evaluating objects independently every frame, this engine
- * understands context over time. Objects have memory: historical importance,
- * confidence, predicted future importance, attention accumulation, and
- * transition cooldowns. Decisions prefer stability over oscillation.
- * 
- * Key concepts from AAA engines (Unreal Significance Manager, Frostbite,
- * Source 2) applied here:
- * 
- * - Hysteresis: objects resist changing bands too quickly
- * - Confidence: how sure we are about an object's classification
- * - Prediction: camera velocity projects where objects will be
- * - Attention accumulation: looked-at objects build up importance
- * - Importance decay: unobserved objects lose importance gradually
- * - Visual momentum: fast movement defers distant detail
- * - Transition cooldowns: band changes have minimum intervals
- * - Adaptive thresholds: thresholds tighten under frame pressure
+ * Key improvements over first-gen:
+ * - Continuous significance score (EWMA-smoothed, not per-frame threshold)
+ * - Separate promotion/demotion thresholds with hysteresis
+ * - Visibility decay for smooth fade-out
+ * - Entity-specific ObjectMemory with hysteresis, confidence, prediction
+ * - Recently-visible grace period (entities stay visible for ~20 frames after last render)
+ * - Entity category rules (hostile > passive > items)
+ * - Anti-pop counters and debug logging
+ * - Player-movement-aware significance (moving toward = higher importance)
  * 
  * Overhead target: < 0.04 ms/frame (incremental, cached, no full scans)
  */
@@ -52,6 +56,12 @@ public final class OptiminiumVisualSignificance {
 	private static final double TINY_DISTANCE_SQR = 192.0D * 192.0D;
 	private static final double LOOKED_AT_DOT = 0.985D;
 
+	// ---- Entity-specific distance thresholds ----
+	private static final double ENTITY_NEAR_DISTANCE_SQR = 32.0D * 32.0D;
+	private static final double ENTITY_MID_DISTANCE_SQR = 80.0D * 80.0D;
+	private static final double ENTITY_FAR_DISTANCE_SQR = 128.0D * 128.0D;
+	private static final double ENTITY_CULL_DISTANCE_SQR = 192.0D * 192.0D;
+
 	// ---- Temporal constants ----
 	private static final long RECENT_FRAMES = 80L;
 	private static final long NEVER_INTERACTED_FRAME = -RECENT_FRAMES - 1L;
@@ -62,6 +72,13 @@ public final class OptiminiumVisualSignificance {
 	private static final int PREDICTION_WINDOW_FRAMES = 10;
 	private static final int ATTENTION_LOOK_BOOST_FRAMES = 4;
 	private static final int STABILITY_REQUIRED_FRAMES = 15;
+
+	// ---- Entity anti-pop constants ----
+	private static final int RECENTLY_VISIBLE_GRACE_FRAMES = 20;
+	private static final int ENTITY_HYSTERESIS_HOLD_FRAMES = 8;
+	private static final int ENTITY_CULL_OSCILLATION_WINDOW = 30;
+	private static final double ENTITY_MOVING_TOWARD_BOOST = 0.25D;
+	private static final double ENTITY_MID_DISTANCE_PROTECTION = 0.15D;
 
 	// ---- Score weights ----
 	private static final double IMPORTANCE_WEIGHT = 0.55D;
@@ -79,11 +96,34 @@ public final class OptiminiumVisualSignificance {
 	private static final byte PROXY = 3;
 	private static final byte CULLED = 4;
 
+	// ---- Hysteresis thresholds for continuous score ----
+	// Balanced 5-band progression with ~0.18-0.20 hysteresis gaps.
+	// Objects flow FULL → THROTTLED → REUSED → PROXY → CULLED evenly.
+	private static final double[] PROMOTE_THRESHOLDS = {
+		1.0D,  // FULL: cannot promote above
+		0.80D, // THROTTLED -> FULL (score > 0.80)
+		0.60D, // REUSED -> THROTTLED (score > 0.60)
+		0.40D, // PROXY -> REUSED (score > 0.40)
+		0.25D  // CULLED -> PROXY (score > 0.25)
+	};
+
+	private static final double[] DEMOTE_THRESHOLDS = {
+		0.60D, // FULL -> THROTTLED (score < 0.60)
+		0.42D, // THROTTLED -> REUSED (score < 0.42)
+		0.28D, // REUSED -> PROXY (score < 0.28)
+		0.15D, // PROXY -> CULLED (score < 0.15)
+		0.0D   // CULLED: cannot demote below
+	};
+
 	// ---- Per-key data ----
 	private static final Long2IntOpenHashMap seenCounts = new Long2IntOpenHashMap();
 	private static final Long2LongOpenHashMap recentlyInteracted = new Long2LongOpenHashMap();
 	private static final Long2ByteOpenHashMap beClassifications = new Long2ByteOpenHashMap();
 	private static final Long2ObjectOpenHashMap<ObjectMemory> objectMemory = new Long2ObjectOpenHashMap<>();
+
+	// ---- Entity-specific data ----
+	private static final Int2ObjectOpenHashMap<EntityMemory> entityMemory = new Int2ObjectOpenHashMap<>();
+	private static final Int2ObjectOpenHashMap<EntityOscillationTracker> entityOscillation = new Int2ObjectOpenHashMap<>();
 
 	// ---- Per-frame counters ----
 	private static int fullThisFrame;
@@ -122,6 +162,26 @@ public final class OptiminiumVisualSignificance {
 	private static long culledBecauseLowConfidencePromotable;
 	private static long culledBecauseFastCamera;
 
+	// ---- Entity anti-pop counters ----
+	private static long entityCullPreventedByHysteresis;
+	private static long entityCullPreventedByRecentlyVisible;
+	private static long entityCullPreventedByMiddleDistance;
+	private static long entityCullPreventedByMovingToward;
+	private static long entityPromotedBecauseLiving;
+	private static long entityPromotedBecauseImportant;
+	private static long entityBandTransitions;
+	private static long entityCullOscillationEvents;
+
+	// ---- Continuous score counters ----
+	private static long promotionsPreventedByHysteresis;
+	private static long demotionsPreventedByHysteresis;
+	private static long promotionsPreventedByConfidence;
+	private static long demotionsPreventedByConfidence;
+	private static long singleBandTransitionsEnforced;
+	private static double accumulatedContinuousScores;
+	private static double accumulatedConfidence;
+	private static long accumulatedScoreCount;
+
 	// ---- CPU timing ----
 	private static long significanceNanos;
 	private static long worstSignificanceNanos;
@@ -149,8 +209,26 @@ public final class OptiminiumVisualSignificance {
 
 	// ---- Cleanup state ----
 	private static int objectMemoryCount;
+	private static int entityMemoryCount;
 	private static final int MAX_OBJECT_MEMORY = 4096;
+	private static final int MAX_ENTITY_MEMORY = 1024;
 	private static int cleanupCounter;
+
+	// ---- Render budget for Adaptive Quality ----
+	public enum RenderBudget {
+		NORMAL,
+		MEDIUM_PRESSURE,
+		HEAVY_PRESSURE,
+		EMERGENCY
+	}
+
+	private static RenderBudget currentBudget = RenderBudget.NORMAL;
+	private static int budgetPressureFrames;
+	private static double budgetCulledFraction; // fraction of objects culled this frame
+
+	// ---- Debug logging ----
+	private static int debugEntityId = -1;
+	private static int debugLogCounter;
 
 	static {
 		recentlyInteracted.defaultReturnValue(NEVER_INTERACTED_FRAME);
@@ -171,7 +249,9 @@ public final class OptiminiumVisualSignificance {
 		resetFrameCounters();
 		updateCameraMotion();
 		advanceObjectMemories();
+		decayVisibility();
 		cleanupStaleMemory();
+		cleanupStaleEntityMemory();
 	}
 
 	public static boolean isEnabled() {
@@ -214,9 +294,59 @@ public final class OptiminiumVisualSignificance {
 		double dy = entity.getY() - cameraPosition.y;
 		double dz = entity.getZ() - cameraPosition.z;
 		double distanceSqr = dx * dx + dy * dy + dz * dz;
-		return distanceSqr <= NEAR_DISTANCE_SQR
+		return distanceSqr <= ENTITY_NEAR_DISTANCE_SQR
 			|| isImportantEntity(entity)
 			|| isLookedAtDirection(dx, dy, dz, distanceSqr);
+	}
+
+	public static boolean allowsLivingEntityCull(LivingEntity entity, double distanceSqr) {
+		if (!isEnabled()) return true;
+		Vec3 cameraPosition = cameraPosition();
+		if (cameraPosition == null) return false;
+		double dx = entity.getX() - cameraPosition.x;
+		double dy = entity.getY() - cameraPosition.y;
+		double dz = entity.getZ() - cameraPosition.z;
+		boolean inFront = isInFront(dx, dy, dz, distanceSqr);
+		EntityCategory category = classifyEntity(entity);
+		EntityMemory mem = entityMemory.get(entity.getId());
+
+		if (category == EntityCategory.CRITICAL || category == EntityCategory.HOSTILE
+				|| category == EntityCategory.VILLAGER || category == EntityCategory.NEUTRAL) {
+			entityPromotedBecauseImportant++;
+			return false;
+		}
+		if (distanceSqr <= ENTITY_NEAR_DISTANCE_SQR) {
+			entityPromotedBecauseLiving++;
+			return false;
+		}
+		if (inFront && distanceSqr <= ENTITY_MID_DISTANCE_SQR) {
+			entityCullPreventedByMiddleDistance++;
+			return false;
+		}
+		if (isMovingToward(dx, dz, Math.sqrt(distanceSqr))) {
+			entityCullPreventedByMovingToward++;
+			return false;
+		}
+		if (mem != null && frameIndex - mem.lastVisibleFrame <= RECENTLY_VISIBLE_GRACE_FRAMES) {
+			entityCullPreventedByRecentlyVisible++;
+			return false;
+		}
+		if (mem != null && mem.lastClassification != CULLED
+				&& mem.lowSignificanceFrames < ENTITY_HYSTERESIS_HOLD_FRAMES) {
+			entityCullPreventedByHysteresis++;
+			return false;
+		}
+		return distanceSqr > ENTITY_CULL_DISTANCE_SQR
+			&& (!inFront || mem != null && mem.lastClassification == CULLED
+				&& mem.lowSignificanceFrames >= ENTITY_HYSTERESIS_HOLD_FRAMES);
+	}
+
+	public static void recordLivingEntityRendered(LivingEntity entity) {
+		if (!isEnabled()) return;
+		EntityMemory mem = entityMemory.get(entity.getId());
+		if (mem != null) {
+			mem.lastVisibleFrame = frameIndex;
+		}
 	}
 
 	public static void recordBlockEntity(BlockEntity blockEntity, Vec3 cameraPosition) {
@@ -233,8 +363,7 @@ public final class OptiminiumVisualSignificance {
 		if (!isEnabled()) return;
 		long startNanos = System.nanoTime();
 		try {
-			boolean important = isImportantEntity(entity);
-			recordPoint(entity.getX(), entity.getY(), entity.getZ(), important, culled, entityRenderCost(entity));
+			recordEntityProfiled(entity, culled);
 		} finally {
 			recordTiming(startNanos);
 		}
@@ -271,7 +400,6 @@ public final class OptiminiumVisualSignificance {
 		boolean recent = frameIndex - recentlyInteracted.get(key) <= RECENT_FRAMES;
 		double renderCost = blockEntityRenderCost(blockEntity);
 
-		// Get or create object memory
 		ObjectMemory mem = objectMemory.get(key);
 		if (mem == null) {
 			mem = new ObjectMemory();
@@ -279,31 +407,323 @@ public final class OptiminiumVisualSignificance {
 		}
 		mem.lastSeenFrame = frameIndex;
 
-		// Compute current score
+		// Compute raw score from all factors
 		double score = computeScore(distanceSqr, inFront, lookedAt, important,
 			recent, repeatCount, pressured, renderCost);
 
-		// Update attention score (temporal accumulation)
+		// Reset visibility decay since this object was just seen
+		mem.visibilityDecay = 1.0D;
+
+		// Update historical signals
 		updateAttention(mem, lookedAt, inFront, distanceSqr);
-
-		// Update predicted importance (camera motion projection)
 		updatePrediction(mem, dx, dy, dz, distanceSqr, inFront);
-
-		// Update historical importance (EWMA)
 		mem.historicalImportance = mem.historicalImportance * 0.85D + score * 0.15D;
 
-		// Determine discrete classification with hysteresis
-		byte classification = classifyWithHysteresis(mem, distanceSqr, inFront,
-			lookedAt, important, recent, repeatCount, pressured, score, renderCost);
+		// Blend into continuous score (EWMA: 70% old / 30% new for responsiveness)
+		mem.continuousScore = mem.continuousScore * 0.70D + score * 0.30D;
 
-		// Store classification
+		// Derive band from continuous score using hysteresis thresholds
+		byte classification = classifyByContinuousScore(mem);
+
+		// Accumulate continuous score metrics
+		accumulatedContinuousScores += mem.continuousScore;
+		accumulatedConfidence += mem.confidence;
+		accumulatedScoreCount++;
+
 		beClassifications.put(key, classification);
+		updateConfidence(mem, classification);
 		mem.lastClassification = classification;
 		mem.lastScore = score;
 
-		// Record reason counter
 		incrementCounter(classification, distanceSqr, inFront, important,
-			recent, repeatCount, pressured, score, renderCost, mem);
+			recent, repeatCount, pressured, score, renderCost, mem, false);
+	}
+
+	private static void recordEntityProfiled(Entity entity, boolean culled) {
+		int entityId = entity.getId();
+		Vec3 cameraPosition = cameraPosition();
+		if (cameraPosition == null) return;
+
+		double x = entity.getX();
+		double y = entity.getY();
+		double z = entity.getZ();
+		double dx = x - cameraPosition.x;
+		double dy = y - cameraPosition.y;
+		double dz = z - cameraPosition.z;
+		double distanceSqr = dx * dx + dy * dy + dz * dz;
+		nearestDistanceSqr = Math.min(nearestDistanceSqr, distanceSqr);
+
+		boolean inFront = isInFront(dx, dy, dz, distanceSqr);
+		boolean lookedAt = isLookedAtDirection(dx, dy, dz, distanceSqr);
+		boolean important = isImportantEntity(entity);
+		boolean pressured = OptiminiumGpuOptimizer.hasVisualSignificancePressure();
+		double renderCost = entityRenderCost(entity);
+
+		EntityMemory mem = entityMemory.get(entityId);
+		if (mem == null) {
+			mem = new EntityMemory();
+			entityMemory.put(entityId, mem);
+		}
+		mem.lastSeenFrame = frameIndex;
+		mem.lastDistanceSqr = distanceSqr;
+		mem.lastInFront = inFront;
+
+		EntityCategory category = classifyEntity(entity);
+		mem.category = category;
+
+		double score = computeEntityScore(distanceSqr, inFront, lookedAt, important,
+			pressured, renderCost, category, entity, dx, dy, dz);
+
+		// Reset visibility decay since entity was just seen
+		mem.visibilityDecay = 1.0D;
+
+		updateEntityAttention(mem, lookedAt, inFront, distanceSqr, category);
+		updateEntityPrediction(mem, dx, dy, dz, distanceSqr, inFront);
+		mem.historicalImportance = mem.historicalImportance * 0.85D + score * 0.15D;
+
+		// Blend into continuous score (70% old / 30% new)
+		mem.continuousScore = mem.continuousScore * 0.70D + score * 0.30D;
+
+		// Classify using continuous score + entity protections
+		byte classification = classifyEntityByContinuousScore(mem, distanceSqr, inFront,
+			lookedAt, important, category);
+
+		// Update entity confidence
+		updateEntityConfidence(mem, classification);
+
+		if (mem.lastClassification != UNKNOWN && mem.lastClassification != classification) {
+			entityBandTransitions++;
+			trackEntityOscillation(entityId, classification);
+		}
+
+		mem.lastClassification = classification;
+		mem.lastScore = score;
+		mem.lastCulled = (classification == CULLED);
+		if (!culled && classification != CULLED && !(entity instanceof LivingEntity)) {
+			mem.lastVisibleFrame = frameIndex;
+		}
+
+		if (debugEntityId == entityId || (debugEntityId < 0 && entity instanceof Sheep && distanceSqr > 40*40 && distanceSqr < 100*100)) {
+			debugEntityId = entityId;
+			debugLogEntity(entity, distanceSqr, score, mem.lastClassification, classification, mem);
+		}
+
+		boolean entityWasRendered = mem.lastClassification != CULLED;
+		incrementEntityCounter(classification, distanceSqr, inFront, important,
+			pressured, score, renderCost, category, mem, entityWasRendered);
+	}
+
+	// ============================================================
+	//  Continuous significance score and hysteresis
+	// ============================================================
+
+	/**
+	 * Classify an object based on its continuous score with hysteresis.
+	 * Uses separate promotion/demotion thresholds and enforces single-band transitions.
+	 */
+	private static byte classifyByContinuousScore(ObjectMemory mem) {
+		double score = mem.continuousScore;
+		byte previous = mem.lastClassification;
+
+		if (previous == UNKNOWN) {
+			return scoreToBand(score);
+		}
+
+		byte desired;
+		if (score > PROMOTE_THRESHOLDS[previous]) {
+			desired = (byte)(previous - 1);
+		} else if (score < DEMOTE_THRESHOLDS[previous]) {
+			desired = (byte)(previous + 1);
+		} else {
+			return previous;
+		}
+
+		if (desired < FULL) desired = FULL;
+		if (desired > CULLED) desired = CULLED;
+
+		// Confidence check: low confidence prevents transitions
+		if (mem.confidence > 0.0D) {
+			if (desired < previous && mem.confidence < 0.3D) {
+				promotionsPreventedByConfidence++;
+				return previous;
+			}
+			if (desired > previous && mem.confidence < 0.2D) {
+				demotionsPreventedByConfidence++;
+				return previous;
+			}
+		}
+
+		// Single-band transitions only
+		if (Math.abs(desired - previous) > 1) {
+			singleBandTransitionsEnforced++;
+			desired = desired < previous ? (byte)(previous - 1) : (byte)(previous + 1);
+		}
+
+		if (desired != previous) {
+			if (desired < previous) {
+				promotionsPreventedByHysteresis++;
+			} else {
+				demotionsPreventedByHysteresis++;
+			}
+		}
+
+		return desired;
+	}
+
+	/**
+	 * Entity-specific classification using continuous score with entity protections.
+	 * Includes a visible-distance guarantee: entities within VISIBLE_DISTANCE_SQR
+	 * are never demoted below THROTTLED, preventing popping for clearly visible mobs.
+	 */
+	private static final double ENTITY_VISIBLE_DISTANCE_SQR = 64.0D * 64.0D;
+
+	private static byte classifyEntityByContinuousScore(EntityMemory mem, double distanceSqr, boolean inFront,
+			boolean lookedAt, boolean important, EntityCategory category) {
+		// Hard protections (unchanged)
+		if (category == EntityCategory.CRITICAL) return FULL;
+		if (distanceSqr <= ENTITY_NEAR_DISTANCE_SQR) return FULL;
+		if (lookedAt || important) return FULL;
+
+		// Visible-distance guarantee: entities within ~64 blocks are at least THROTTLED
+		// This prevents visible entities from popping to PROXY/CULLED
+		boolean isClearlyVisible = distanceSqr <= ENTITY_VISIBLE_DISTANCE_SQR;
+		if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+			// Only demote to THROTTLED minimum, never lower
+			if (mem.lastClassification <= THROTTLED) return mem.lastClassification;
+		}
+
+		double effectiveScore = mem.continuousScore * (0.5D + 0.5D * mem.visibilityDecay);
+		double categoryProtection = entityCategoryProtection(category);
+		effectiveScore = Math.max(effectiveScore, categoryProtection * 0.30D);
+		if (category != EntityCategory.ITEM && category != EntityCategory.OTHER && effectiveScore < DEMOTE_THRESHOLDS[PROXY]) {
+			mem.lowSignificanceFrames++;
+		} else {
+			mem.lowSignificanceFrames = 0;
+		}
+
+		// Distance-based floor: clearly visible entities get a minimum effective score
+		if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+			effectiveScore = Math.max(effectiveScore, 0.45D); // minimum THROTTLED territory
+		}
+
+		byte previous = mem.lastClassification;
+
+		if (previous == UNKNOWN || previous == CULLED) {
+			byte raw = scoreToBand(effectiveScore);
+			if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+				return THROTTLED; // visible entities start at THROTTLED
+			}
+			if (raw == CULLED && category != EntityCategory.ITEM && category != EntityCategory.OTHER
+					&& effectiveScore > 0.15D) {
+				return PROXY;
+			}
+			return raw;
+		}
+
+		byte desired;
+		if (effectiveScore > PROMOTE_THRESHOLDS[previous]) {
+			desired = (byte)(previous - 1);
+		} else if (effectiveScore < DEMOTE_THRESHOLDS[previous]) {
+			desired = (byte)(previous + 1);
+		} else {
+			return previous;
+		}
+
+		if (desired < FULL) desired = FULL;
+		if (desired > CULLED) desired = CULLED;
+
+		// Visible-distance guarantee: never demote below THROTTLED for visible entities
+		if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+			if (desired > THROTTLED) {
+				desired = THROTTLED;
+			}
+		}
+
+		if (desired == CULLED && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
+			if (mem.lowSignificanceFrames < ENTITY_HYSTERESIS_HOLD_FRAMES) {
+				entityCullPreventedByHysteresis++;
+				return PROXY;
+			}
+			if (effectiveScore > 0.12D) return PROXY;
+		}
+
+		if (Math.abs(desired - previous) > 1) {
+			singleBandTransitionsEnforced++;
+			desired = desired < previous ? (byte)(previous - 1) : (byte)(previous + 1);
+		}
+
+		return desired;
+	}
+
+	private static byte scoreToBand(double score) {
+		if (score > 0.70D) return FULL;
+		if (score > 0.50D) return THROTTLED;
+		if (score > 0.30D) return REUSED;
+		if (score > 0.15D) return PROXY;
+		return CULLED;
+	}
+
+	/**
+	 * Update entity confidence.
+	 */
+	private static void updateEntityConfidence(EntityMemory mem, byte newClassification) {
+		if (newClassification == mem.predictedClassification) {
+			mem.predictionCorrectFrames = Math.min(CONFIDENCE_BUILD_FRAMES, mem.predictionCorrectFrames + 1);
+		} else {
+			mem.predictionCorrectFrames = Math.max(0, mem.predictionCorrectFrames - 2);
+		}
+		if (newClassification == mem.lastClassification) {
+			mem.stableBandFrames++;
+		} else {
+			mem.stableBandFrames = 0;
+		}
+		mem.confidence = Math.max(0.05D, Math.min(1.0D,
+			0.5D + Math.min(0.3D, mem.predictionCorrectFrames / (double) CONFIDENCE_BUILD_FRAMES)
+			+ Math.min(0.25D, mem.stableBandFrames / (double) STABILITY_REQUIRED_FRAMES)
+			+ mem.attentionScore * 0.15D
+			- (cameraFastMoving ? 0.15D : 0.0D)));
+		if (newClassification != mem.lastClassification) {
+			mem.lastChangedFrame = frameIndex;
+		}
+	}
+
+	/**
+	 * Decay visibility for all tracked memories that weren't seen this frame.
+	 */
+	private static void decayVisibility() {
+		var objIterator = objectMemory.long2ObjectEntrySet().fastIterator();
+		while (objIterator.hasNext()) {
+			var entry = objIterator.next();
+			ObjectMemory mem = entry.getValue();
+			if (mem.lastSeenFrame < frameIndex) {
+				mem.visibilityDecay *= 0.96D;
+				mem.continuousScore *= 0.98D;
+			}
+		}
+		var entIterator = entityMemory.int2ObjectEntrySet().fastIterator();
+		while (entIterator.hasNext()) {
+			var entry = entIterator.next();
+			EntityMemory mem = entry.getValue();
+			if (mem.lastSeenFrame < frameIndex) {
+				mem.visibilityDecay *= 0.96D;
+				mem.continuousScore *= 0.98D;
+			}
+		}
+	}
+
+	private static byte classifySimple(double distanceSqr, boolean inFront, boolean lookedAt,
+			boolean important, boolean recent, int repeatCount, boolean pressured,
+			double score, double renderCost) {
+		if (distanceSqr <= NEAR_DISTANCE_SQR || important || lookedAt) return FULL;
+		if (!inFront || distanceSqr > TINY_DISTANCE_SQR) return CULLED;
+		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && score < LOW_IMPORTANCE_THRESHOLD) return CULLED;
+		if (pressured && score < 0.30D) return CULLED;
+		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
+		if (pressured && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
+		if (distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
+		if (distanceSqr >= LOW_SCREEN_SIZE_DISTANCE_SQR) return PROXY;
+		if (distanceSqr <= PROXY_DISTANCE_SQR && repeatCount >= 4) return PROXY;
+		return CULLED;
 	}
 
 	private static void recordPoint(double x, double y, double z, boolean important, boolean culled, double renderCost) {
@@ -319,34 +739,196 @@ public final class OptiminiumVisualSignificance {
 		boolean pressured = OptiminiumGpuOptimizer.hasVisualSignificancePressure();
 		double score = computeScore(distanceSqr, inFront, lookedAt, important, false, 1, pressured, renderCost);
 		byte classification = classifySimple(distanceSqr, inFront, lookedAt, important, false, 1, pressured, score, renderCost);
-		incrementCounter(classification, distanceSqr, inFront, important, false, 1, pressured, score, renderCost, null);
+		incrementCounter(classification, distanceSqr, inFront, important, false, 1, pressured, score, renderCost, null, false);
 	}
 
 	// ============================================================
-	//  Temporal object memory
+	//  Entity classification and anti-pop
+	// ============================================================
+
+	private enum EntityCategory {
+		CRITICAL, HOSTILE, VILLAGER, PASSIVE, NEUTRAL, AMBIENT, ITEM, OTHER
+	}
+
+	private static EntityCategory classifyEntity(Entity entity) {
+		if (entity instanceof Player) return EntityCategory.CRITICAL;
+		if (entity instanceof TamableAnimal tamable && tamable.isTame()) return EntityCategory.CRITICAL;
+		if (entity.hasCustomName()) return EntityCategory.CRITICAL;
+		if (entity.isPassenger() || !entity.getPassengers().isEmpty()) return EntityCategory.CRITICAL;
+		if (entity instanceof Villager) return EntityCategory.VILLAGER;
+		if (entity instanceof NeutralMob) return EntityCategory.NEUTRAL;
+		if (entity instanceof Animal) return EntityCategory.PASSIVE;
+		if (entity instanceof Mob) return EntityCategory.HOSTILE;
+		if (entity instanceof AmbientCreature) return EntityCategory.AMBIENT;
+		if (entity instanceof ItemEntity || entity instanceof net.minecraft.world.entity.ExperienceOrb) return EntityCategory.ITEM;
+		return EntityCategory.OTHER;
+	}
+
+	private static double entityCategoryProtection(EntityCategory category) {
+		return switch (category) {
+			case CRITICAL -> 1.0D;
+			case HOSTILE -> 0.85D;
+			case VILLAGER -> 0.90D;
+			case PASSIVE -> 0.75D;
+			case NEUTRAL -> 0.80D;
+			case AMBIENT -> 0.50D;
+			case ITEM -> 0.20D;
+			case OTHER -> 0.30D;
+		};
+	}
+
+	private static double computeEntityScore(double distanceSqr, boolean inFront, boolean lookedAt,
+			boolean important, boolean pressured, double renderCost, EntityCategory category,
+			Entity entity, double dx, double dy, double dz) {
+		double dist = Math.sqrt(distanceSqr);
+		double importanceScore = 1.0D - Math.min(1.0D, dist / 256.0D);
+		importanceScore = Math.max(importanceScore, entityCategoryProtection(category) * 0.5D);
+		if (!inFront) importanceScore -= 0.35D;
+		if (lookedAt) importanceScore += 0.55D;
+		if (important) importanceScore += 0.40D;
+		if (cameraVelocityAbs > 0.05D && inFront) {
+			double dot = movingTowardDot(dx, dz, dist);
+			if (dot > 0.5D) {
+				importanceScore += ENTITY_MOVING_TOWARD_BOOST * dot;
+			}
+		}
+		if (category != EntityCategory.ITEM && category != EntityCategory.OTHER
+				&& distanceSqr > THROTTLED_DISTANCE_SQR && distanceSqr <= ENTITY_MID_DISTANCE_SQR) {
+			importanceScore += ENTITY_MID_DISTANCE_PROTECTION;
+		}
+		if (pressured) importanceScore -= 0.10D;
+		importanceScore = Math.max(0.0D, Math.min(1.0D, importanceScore));
+		return Math.max(0.0D, Math.min(1.0D, importanceScore * IMPORTANCE_WEIGHT + (1.0D - renderCost) * COST_WEIGHT));
+	}
+
+	// ============================================================
+	//  Entity memory
+	// ============================================================
+
+	private static final class EntityMemory {
+		byte lastClassification = UNKNOWN;
+		double lastScore;
+		double continuousScore;
+		double visibilityDecay;
+		double historicalImportance;
+		double confidence;
+		double attentionScore;
+		double predictedImportance;
+		byte predictedClassification;
+		long lastSeenFrame = 1;
+		long lastChangedFrame = -1;
+		int stableBandFrames;
+		int predictionCorrectFrames;
+		int offscreenFrames;
+		boolean lastCulled;
+		double lastDistanceSqr;
+		boolean lastInFront;
+		EntityCategory category = EntityCategory.OTHER;
+		long lastVisibleFrame = NEVER_INTERACTED_FRAME;
+		int lowSignificanceFrames;
+	}
+
+	private static final class EntityOscillationTracker {
+		int oscillationCount;
+		long firstOscillationFrame;
+		long lastOscillationFrame;
+		byte bandA = UNKNOWN;
+		byte bandB = UNKNOWN;
+	}
+
+	private static void trackEntityOscillation(int entityId, byte newBand) {
+		EntityOscillationTracker tracker = entityOscillation.get(entityId);
+		if (tracker == null) {
+			tracker = new EntityOscillationTracker();
+			tracker.firstOscillationFrame = frameIndex;
+			tracker.bandA = newBand;
+			entityOscillation.put(entityId, tracker);
+			return;
+		}
+		if (tracker.bandA != UNKNOWN && tracker.bandB != UNKNOWN && newBand == tracker.bandA) {
+			tracker.oscillationCount++;
+			tracker.lastOscillationFrame = frameIndex;
+			if (tracker.oscillationCount >= 3) entityCullOscillationEvents++;
+			tracker.bandA = newBand;
+			tracker.bandB = UNKNOWN;
+		} else if (tracker.bandA != UNKNOWN && tracker.bandB == UNKNOWN && newBand != tracker.bandA) {
+			tracker.bandB = newBand;
+		} else {
+			tracker.bandA = newBand;
+			tracker.bandB = UNKNOWN;
+		}
+	}
+
+	private static void updateEntityAttention(EntityMemory mem, boolean lookedAt, boolean inFront,
+			double distanceSqr, EntityCategory category) {
+		if (lookedAt) mem.attentionScore = Math.min(1.0D, mem.attentionScore + 0.15D);
+		else {
+			double decayRate = 0.006D + Math.sqrt(distanceSqr) * 0.00008D;
+			if (category != EntityCategory.ITEM && category != EntityCategory.OTHER) decayRate *= 0.5D;
+			mem.attentionScore = Math.max(0.0D, mem.attentionScore - decayRate);
+		}
+		if (inFront && distanceSqr < ENTITY_MID_DISTANCE_SQR && !lookedAt)
+			mem.attentionScore = Math.min(1.0D, mem.attentionScore + 0.02D);
+	}
+
+	private static void updateEntityPrediction(EntityMemory mem, double dx, double dy, double dz,
+			double distanceSqr, boolean inFront) {
+		if (distanceSqr <= 0.0001D || !inFront) {
+			mem.predictedImportance = mem.historicalImportance;
+			mem.predictedClassification = mem.lastClassification;
+			return;
+		}
+		double predictedDx = dx - cameraVelocityX * PREDICTION_WINDOW_FRAMES * 0.05D;
+		double predictedDz = dz - cameraVelocityZ * PREDICTION_WINDOW_FRAMES * 0.05D;
+		double predictedDistSqr = predictedDx * predictedDx + dy * dy + predictedDz * predictedDz;
+		Vec3 cameraPos = cameraPosition();
+		boolean predictedInFront = true;
+		if (cameraPos != null) {
+			var look = Minecraft.getInstance().gameRenderer.getMainCamera().getLookVector();
+			double dot = (predictedDx * look.x + dy * look.y + predictedDz * look.z) / Math.sqrt(Math.max(predictedDistSqr, 0.0001D));
+			predictedInFront = dot > 0.0D;
+		}
+		if (!predictedInFront) {
+			mem.predictedImportance = mem.historicalImportance * 0.6D;
+			mem.predictedClassification = CULLED;
+		} else {
+			double predictedDist = Math.sqrt(predictedDistSqr);
+			double predictedScore = Math.max(0.0D, Math.min(1.0D,
+				(1.0D - Math.min(1.0D, predictedDist / 256.0D)) * 0.6D + mem.historicalImportance * 0.4D));
+			mem.predictedImportance = predictedScore;
+			if (predictedScore > 0.65D) mem.predictedClassification = FULL;
+			else if (predictedScore > 0.45D) mem.predictedClassification = THROTTLED;
+			else if (predictedScore > 0.25D) mem.predictedClassification = REUSED;
+			else if (predictedScore > 0.12D) mem.predictedClassification = PROXY;
+			else mem.predictedClassification = CULLED;
+		}
+	}
+
+	// ============================================================
+	//  Temporal object memory (for block entities)
 	// ============================================================
 
 	private static final class ObjectMemory {
 		byte lastClassification = UNKNOWN;
 		double lastScore;
+		double continuousScore;
+		double visibilityDecay;
 		double historicalImportance;
-		double confidence;              // 0.0 (uncertain) to 1.0 (certain)
-		double attentionScore;          // 0.0 (ignored) to 1.0 (high attention)
-		double predictedImportance;     // estimated importance next frame
-		byte predictedClassification;   // predicted band next frame
-		long lastChangedFrame = -1;     // last band transition frame
-		long lastSeenFrame = 1;         // first seen frame
-		int stableBandFrames;           // consecutive frames in current band
-		int lookedAtStreak;             // consecutive frames looked at
-		int predictionCorrectFrames;    // consecutive correct predictions
-		float predictionDot;            // cached dot product for prediction
-		boolean recentlyPromoted;       // was promoted in last TRANSITION_COOLDOWN frames
-		boolean recentlyDemoted;        // was demoted in last TRANSITION_COOLDOWN frames
+		double confidence;
+		double attentionScore;
+		double predictedImportance;
+		byte predictedClassification;
+		long lastChangedFrame = -1;
+		long lastSeenFrame = 1;
+		int stableBandFrames;
+		int lookedAtStreak;
+		int predictionCorrectFrames;
+		float predictionDot;
+		boolean recentlyPromoted;
+		boolean recentlyDemoted;
 	}
 
 	private static void advanceObjectMemories() {
-		// Advance per-frame state for all tracked objects
-		// This is called once per frame, not per object
 		stableFrameCounter++;
 	}
 
@@ -356,14 +938,10 @@ public final class OptiminiumVisualSignificance {
 			mem.attentionScore = Math.min(1.0D, mem.attentionScore + 0.12D);
 		} else {
 			mem.lookedAtStreak = 0;
-			// Attention decays proportional to distance and time
-			double decayRate = 0.008D + Math.sqrt(distanceSqr) * 0.0001D;
-			mem.attentionScore = Math.max(0.0D, mem.attentionScore - decayRate);
+			mem.attentionScore = Math.max(0.0D, mem.attentionScore - (0.008D + Math.sqrt(distanceSqr) * 0.0001D));
 		}
-		// Boost from being in front and near center
-		if (inFront && distanceSqr < THROTTLED_DISTANCE_SQR && !lookedAt) {
+		if (inFront && distanceSqr < THROTTLED_DISTANCE_SQR && !lookedAt)
 			mem.attentionScore = Math.min(1.0D, mem.attentionScore + 0.03D);
-		}
 	}
 
 	private static void updatePrediction(ObjectMemory mem, double dx, double dy, double dz, double distanceSqr, boolean inFront) {
@@ -372,14 +950,9 @@ public final class OptiminiumVisualSignificance {
 			mem.predictedClassification = mem.lastClassification;
 			return;
 		}
-
-		double dist = Math.sqrt(distanceSqr);
-		// Project where the object will be relative to the camera given velocity
 		double predictedDx = dx - cameraVelocityX * PREDICTION_WINDOW_FRAMES * 0.05D;
 		double predictedDz = dz - cameraVelocityZ * PREDICTION_WINDOW_FRAMES * 0.05D;
 		double predictedDistSqr = predictedDx * predictedDx + dy * dy + predictedDz * predictedDz;
-
-		// Will it be in front?
 		Vec3 cameraPos = cameraPosition();
 		boolean predictedInFront = true;
 		if (cameraPos != null) {
@@ -388,17 +961,14 @@ public final class OptiminiumVisualSignificance {
 			predictedInFront = dot > 0.0D;
 			mem.predictionDot = (float) dot;
 		}
-
 		if (!predictedInFront) {
-			// Likely to go off-screen soon
 			mem.predictedImportance = mem.historicalImportance * 0.5D;
 			mem.predictedClassification = CULLED;
 		} else {
 			double predictedDist = Math.sqrt(predictedDistSqr);
-			double predictedScore = 1.0D - Math.min(1.0D, predictedDist / 192.0D);
-			predictedScore = predictedScore * 0.6D + mem.historicalImportance * 0.4D;
-			mem.predictedImportance = Math.max(0.0D, Math.min(1.0D, predictedScore));
-			// Map predicted score to predicted band
+			double predictedScore = Math.max(0.0D, Math.min(1.0D,
+				(1.0D - Math.min(1.0D, predictedDist / 192.0D)) * 0.6D + mem.historicalImportance * 0.4D));
+			mem.predictedImportance = predictedScore;
 			if (predictedScore > 0.70D) mem.predictedClassification = FULL;
 			else if (predictedScore > 0.50D) mem.predictedClassification = THROTTLED;
 			else if (predictedScore > 0.30D) mem.predictedClassification = REUSED;
@@ -413,168 +983,21 @@ public final class OptiminiumVisualSignificance {
 		} else {
 			mem.predictionCorrectFrames = Math.max(0, mem.predictionCorrectFrames - 2);
 		}
-
-		// Confidence builds with:
-		// - Consistent classification matches prediction
-		// - Long stable run in same band
-		// - High look-at streak
-		boolean classificationStable = newClassification == mem.lastClassification;
-		if (classificationStable) {
+		if (newClassification == mem.lastClassification) {
 			mem.stableBandFrames++;
 		} else {
 			mem.stableBandFrames = 0;
 		}
-
-		double baseConfidence = 0.5D;
-		double correctBonus = Math.min(0.3D, mem.predictionCorrectFrames / (double) CONFIDENCE_BUILD_FRAMES);
-		double stableBonus = Math.min(0.25D, mem.stableBandFrames / (double) STABILITY_REQUIRED_FRAMES);
-		double attentionBonus = mem.attentionScore * 0.15D;
-		double penalty = cameraFastMoving ? 0.15D : 0.0D;
-
 		mem.confidence = Math.max(0.05D, Math.min(1.0D,
-			baseConfidence + correctBonus + stableBonus + attentionBonus - penalty));
-
-		// Track transition cooldown
+			0.5D + Math.min(0.3D, mem.predictionCorrectFrames / (double) CONFIDENCE_BUILD_FRAMES)
+			+ Math.min(0.25D, mem.stableBandFrames / (double) STABILITY_REQUIRED_FRAMES)
+			+ mem.attentionScore * 0.15D
+			- (cameraFastMoving ? 0.15D : 0.0D)));
 		if (newClassification != mem.lastClassification) {
 			mem.lastChangedFrame = frameIndex;
 			mem.recentlyPromoted = newClassification < mem.lastClassification;
 			mem.recentlyDemoted = newClassification > mem.lastClassification;
 		}
-	}
-
-	/**
-	 * Classifies with temporal hysteresis to prevent oscillation.
-	 */
-	private static byte classifyWithHysteresis(ObjectMemory mem, double distanceSqr, boolean inFront,
-			boolean lookedAt, boolean important, boolean recent, int repeatCount,
-			boolean pressured, double score, double renderCost) {
-
-		// First, compute the "raw" desired classification (no hysteresis)
-		byte rawClassification = computeRawClassification(distanceSqr, inFront, lookedAt,
-			important, recent, repeatCount, pressured, score, renderCost, mem);
-
-		// Update confidence based on prediction match
-		updateConfidence(mem, rawClassification);
-
-		// ---- Hysteresis rules ----
-		boolean onCooldown = (frameIndex - mem.lastChangedFrame) < TRANSITION_COOLDOWN_FRAMES;
-
-		// Rule 1: If on transition cooldown, prefer staying in current band
-		if (onCooldown && mem.lastClassification != UNKNOWN && rawClassification != mem.lastClassification) {
-			// The band must differ by more than 1 to override cooldown
-			if (Math.abs(rawClassification - mem.lastClassification) <= 1) {
-				return mem.lastClassification;
-			}
-			// But large jumps (FULL<->CULLED) can override cooldown
-		}
-
-		// Rule 2: If confidence is high and prediction matches current band, resist change
-		if (mem.confidence > 0.75D && mem.predictedClassification == mem.lastClassification
-				&& mem.lastClassification != UNKNOWN && rawClassification != mem.lastClassification) {
-			// Only allow change if the score difference is significant (>30% of range)
-			double scoreDiff = Math.abs(score - mem.lastScore);
-			if (scoreDiff < 0.15D) {
-				return mem.lastClassification;
-			}
-		}
-
-		// Rule 3: If recently promoted to FULL, hold FULL for hysteresis period
-		if (rawClassification != FULL && mem.lastClassification == FULL
-				&& mem.stableBandFrames < HYSTERESIS_HOLD_FRAMES && mem.confidence > 0.5D) {
-			return FULL;
-		}
-
-		// Rule 4: If recently demoted to CULLED, hold CULLED for hysteresis period
-		if (rawClassification != CULLED && mem.lastClassification == CULLED
-				&& mem.stableBandFrames < HYSTERESIS_HOLD_FRAMES && mem.confidence > 0.3D) {
-			return CULLED;
-		}
-
-		// Rule 5: Fast camera → resist upgrading distant objects
-		if (cameraFastMoving && rawClassification < mem.lastClassification && distanceSqr > THROTTLED_DISTANCE_SQR) {
-			return mem.lastClassification;
-		}
-
-		return rawClassification;
-	}
-
-	/**
-	 * Computes the raw "desired" classification without hysteresis.
-	 */
-	private static byte computeRawClassification(double distanceSqr, boolean inFront, boolean lookedAt,
-			boolean important, boolean recent, int repeatCount, boolean pressured,
-			double score, double renderCost, ObjectMemory mem) {
-
-		// ---- Immediate FULL triggers ----
-		if (distanceSqr <= NEAR_DISTANCE_SQR) return FULL;
-		if (important || lookedAt || recent) return FULL;
-
-		// ---- Predicted off-screen ----
-		if (mem != null && cameraVelocityAbs > 0.1D && !inFront && mem.predictedClassification == CULLED) {
-			return CULLED;
-		}
-
-		// ---- Fast camera: defer processing for distant objects ----
-		if (cameraFastMoving && distanceSqr > THROTTLED_DISTANCE_SQR && mem != null
-				&& mem.confidence < 0.5D) {
-			return CULLED;
-		}
-
-		// ---- Offscreen ----
-		if (!inFront) return CULLED;
-		if (distanceSqr > TINY_DISTANCE_SQR) return CULLED;
-
-		// ---- Cost-based culling ----
-		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && score < LOW_IMPORTANCE_THRESHOLD) return CULLED;
-		if (pressured && score < 0.30D) return CULLED;
-		if (pressured && score < 0.40D && mem != null && mem.confidence < 0.3D) return CULLED;
-
-		// ---- Predicted low importance ----
-		if (mem != null && mem.predictedImportance < 0.20D && mem.confidence > 0.6D && !cameraFastMoving) {
-			return CULLED;
-		}
-
-		// ---- Throttled ----
-		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-		if (pressured && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-		if (distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-
-		// ---- Reused ----
-		if (distanceSqr <= REUSED_DISTANCE_SQR) {
-			if (mem != null && mem.confidence > 0.6D && mem.stableBandFrames > STABILITY_REQUIRED_FRAMES) {
-				return cameraStable ? REUSED : REUSED;
-			}
-			// Low confidence fallback
-			return THROTTLED;
-		}
-
-		// ---- Proxy ----
-		if (distanceSqr >= LOW_SCREEN_SIZE_DISTANCE_SQR) return PROXY;
-		if (distanceSqr <= PROXY_DISTANCE_SQR && repeatCount >= 4) return PROXY;
-
-		return CULLED;
-	}
-
-	/**
-	 * Simple classification without memory (for entities/particles).
-	 */
-	private static byte classifySimple(double distanceSqr, boolean inFront, boolean lookedAt,
-			boolean important, boolean recent, int repeatCount, boolean pressured,
-			double score, double renderCost) {
-		if (distanceSqr <= NEAR_DISTANCE_SQR) return FULL;
-		if (important || lookedAt) return FULL;
-		if (!inFront) return CULLED;
-		if (distanceSqr > TINY_DISTANCE_SQR) return CULLED;
-		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && score < LOW_IMPORTANCE_THRESHOLD) return CULLED;
-		if (pressured && score < 0.30D) return CULLED;
-		if (renderCost >= HIGH_RENDER_COST_THRESHOLD && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-		if (pressured && distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-		if (distanceSqr <= THROTTLED_DISTANCE_SQR) return THROTTLED;
-		if (cameraStable && distanceSqr <= REUSED_DISTANCE_SQR) return REUSED;
-		if (distanceSqr <= REUSED_DISTANCE_SQR) return REUSED;
-		if (distanceSqr >= LOW_SCREEN_SIZE_DISTANCE_SQR) return PROXY;
-		if (distanceSqr <= PROXY_DISTANCE_SQR && repeatCount >= 4) return PROXY;
-		return CULLED;
 	}
 
 	// ============================================================
@@ -583,73 +1006,70 @@ public final class OptiminiumVisualSignificance {
 
 	private static void incrementCounter(byte classification, double distanceSqr, boolean inFront,
 			boolean important, boolean recent, int repeatCount, boolean pressured,
-			double score, double renderCost, ObjectMemory mem) {
+			double score, double renderCost, ObjectMemory mem, boolean isEntity) {
 		switch (classification) {
 			case FULL -> {
 				fullThisFrame++;
-				if (distanceSqr <= NEAR_DISTANCE_SQR) {
-					fullBecauseNearby++;
-				} else if (important) {
-					fullBecauseImportant++;
-				} else if (recent) {
-					fullBecauseRecentlyInteracted++;
-				} else if (mem != null && mem.confidence > 0.8D && mem.stableBandFrames > HYSTERESIS_HOLD_FRAMES) {
-					fullBecauseHighConfidence++;
-				} else {
-					fullBecauseLookedAt++;
-				}
+				if (distanceSqr <= NEAR_DISTANCE_SQR) fullBecauseNearby++;
+				else if (important) fullBecauseImportant++;
+				else if (recent) fullBecauseRecentlyInteracted++;
+				else if (mem != null && mem.confidence > 0.8D && mem.stableBandFrames > HYSTERESIS_HOLD_FRAMES) fullBecauseHighConfidence++;
+				else fullBecauseLookedAt++;
 			}
 			case THROTTLED -> {
 				throttledThisFrame++;
-				if (renderCost >= HIGH_RENDER_COST_THRESHOLD) {
-					throttledBecauseHighCost++;
-				} else if (pressured) {
-					throttledBecauseFramePressure++;
-				} else if (mem != null && mem.predictedImportance < 0.4D) {
-					throttledBecausePredictedLow++;
-				} else {
-					throttledBecauseDistance++;
-				}
+				if (renderCost >= HIGH_RENDER_COST_THRESHOLD) throttledBecauseHighCost++;
+				else if (pressured) throttledBecauseFramePressure++;
+				else if (mem != null && mem.predictedImportance < 0.4D) throttledBecausePredictedLow++;
+				else throttledBecauseDistance++;
 			}
 			case REUSED -> {
 				reusedThisFrame++;
-				if (cameraStable) {
-					reusedBecauseCameraStable++;
-				} else if (mem != null && mem.confidence > 0.7D && mem.stableBandFrames > STABILITY_REQUIRED_FRAMES) {
-					reusedBecauseHysteresis++;
-				} else {
-					reusedBecauseStable++;
-				}
+				if (cameraStable) reusedBecauseCameraStable++;
+				else if (mem != null && mem.confidence > 0.7D && mem.stableBandFrames > STABILITY_REQUIRED_FRAMES) reusedBecauseHysteresis++;
+				else reusedBecauseStable++;
 			}
 			case PROXY -> {
 				proxyThisFrame++;
-				if (distanceSqr >= LOW_SCREEN_SIZE_DISTANCE_SQR) {
-					proxyBecauseLowScreenSize++;
-				} else if (mem != null && mem.confidence > 0.75D) {
-					proxyBecauseHighConfidence++;
-				} else {
-					proxyBecauseFarRepeated++;
-				}
+				if (distanceSqr >= LOW_SCREEN_SIZE_DISTANCE_SQR) proxyBecauseLowScreenSize++;
+				else if (mem != null && mem.confidence > 0.75D) proxyBecauseHighConfidence++;
+				else proxyBecauseFarRepeated++;
 			}
 			case CULLED -> {
 				culledThisFrame++;
-				if (!inFront) {
-					culledBecauseOffscreen++;
-				} else if (distanceSqr > TINY_DISTANCE_SQR) {
-					culledBecauseTiny++;
-				} else if (renderCost >= HIGH_RENDER_COST_THRESHOLD && score < LOW_IMPORTANCE_THRESHOLD) {
-					culledBecauseHighCostLowImportance++;
-				} else if (pressured && score < 0.30D) {
-					culledBecauseLowSignificance++;
-				} else if (cameraFastMoving && mem != null && mem.confidence < 0.5D) {
-					culledBecauseFastCamera++;
-				} else if (mem != null && mem.predictedClassification == CULLED && mem.confidence > 0.65D) {
-					culledBecausePredictedOffscreen++;
-				} else if (mem != null && mem.confidence < 0.2D && !cameraFastMoving) {
-					culledBecauseLowConfidencePromotable++;
-				} else {
-					culledBecauseBudget++;
-				}
+				if (!inFront) culledBecauseOffscreen++;
+				else if (distanceSqr > TINY_DISTANCE_SQR) culledBecauseTiny++;
+				else if (renderCost >= HIGH_RENDER_COST_THRESHOLD && score < LOW_IMPORTANCE_THRESHOLD) culledBecauseHighCostLowImportance++;
+				else if (pressured && score < 0.30D) culledBecauseLowSignificance++;
+				else if (cameraFastMoving && mem != null && mem.confidence < 0.5D) culledBecauseFastCamera++;
+				else if (mem != null && mem.predictedClassification == CULLED && mem.confidence > 0.65D) culledBecausePredictedOffscreen++;
+				else if (mem != null && mem.confidence < 0.2D && !cameraFastMoving) culledBecauseLowConfidencePromotable++;
+				else culledBecauseBudget++;
+			}
+		}
+	}
+
+	private static void incrementEntityCounter(byte classification, double distanceSqr, boolean inFront,
+			boolean important, boolean pressured, double score, double renderCost,
+			EntityCategory category, EntityMemory mem, boolean wasRendered) {
+		switch (classification) {
+			case FULL -> {
+				fullThisFrame++;
+				if (distanceSqr <= ENTITY_NEAR_DISTANCE_SQR) fullBecauseNearby++;
+				else if (important) { fullBecauseImportant++; entityPromotedBecauseImportant++; }
+				else if (category == EntityCategory.PASSIVE || category == EntityCategory.HOSTILE || category == EntityCategory.VILLAGER) {
+					entityPromotedBecauseLiving++; fullBecauseLookedAt++;
+				} else { fullBecauseLookedAt++; }
+			}
+			case THROTTLED -> { throttledThisFrame++; throttledBecauseDistance++; }
+			case REUSED -> { reusedThisFrame++; if (cameraStable) reusedBecauseCameraStable++; else reusedBecauseStable++; }
+			case PROXY -> { proxyThisFrame++; if (distanceSqr >= ENTITY_FAR_DISTANCE_SQR) proxyBecauseLowScreenSize++; else proxyBecauseFarRepeated++; }
+			case CULLED -> {
+				culledThisFrame++;
+				if (!inFront) culledBecauseOffscreen++;
+				else if (distanceSqr > ENTITY_CULL_DISTANCE_SQR) culledBecauseTiny++;
+				else if (pressured && score < 0.30D) culledBecauseLowSignificance++;
+				else culledBecauseBudget++;
 			}
 		}
 	}
@@ -661,44 +1081,27 @@ public final class OptiminiumVisualSignificance {
 	private static void updateCameraMotion() {
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.gameRenderer == null || minecraft.gameRenderer.getMainCamera() == null) {
-			cameraStable = false;
-			cameraFastMoving = false;
-			return;
+			cameraStable = false; cameraFastMoving = false; return;
 		}
 		Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
 		float yaw = minecraft.gameRenderer.getMainCamera().getXRot();
 		float pitch = minecraft.gameRenderer.getMainCamera().getYRot();
-
 		if (!Double.isNaN(lastCameraX)) {
-			// Position velocity
 			cameraVelocityX = camera.x - lastCameraX;
 			cameraVelocityZ = camera.z - lastCameraZ;
 			cameraVelocityAbs = Math.sqrt(cameraVelocityX * cameraVelocityX + cameraVelocityZ * cameraVelocityZ);
-
-			// Acceleration (rate of change of velocity)
 			cameraAcceleration = Math.abs(cameraVelocityAbs - lastCameraVelocityAbs);
-
-			// Rotation speed (combined yaw+pitch delta per frame)
-			float deltaYaw = yaw - lastCameraYaw;
-			float deltaPitch = pitch - lastCameraPitch;
-			cameraRotationSpeed = Math.sqrt(deltaYaw * deltaYaw + deltaPitch * deltaPitch);
-
-			// Stability: position change < 0.01 + rotation change < 0.5 degrees
+			float dy = yaw - lastCameraYaw;
+			float dp = pitch - lastCameraPitch;
+			cameraRotationSpeed = Math.sqrt(dy * dy + dp * dp);
 			cameraStable = Math.abs(camera.x - lastCameraX) < 0.01D
 				&& Math.abs(camera.y - lastCameraY) < 0.01D
 				&& Math.abs(camera.z - lastCameraZ) < 0.01D
 				&& cameraRotationSpeed < 0.5D;
-
-			// Fast moving: velocity > 0.5 blocks/frame (elytra, sprint) or fast rotation
 			cameraFastMoving = cameraVelocityAbs > 0.5D || cameraRotationSpeed > 10.0D;
 		}
-
-		lastCameraX = camera.x;
-		lastCameraY = camera.y;
-		lastCameraZ = camera.z;
-		lastCameraYaw = yaw;
-		lastCameraPitch = pitch;
-		lastCameraVelocityAbs = cameraVelocityAbs;
+		lastCameraX = camera.x; lastCameraY = camera.y; lastCameraZ = camera.z;
+		lastCameraYaw = yaw; lastCameraPitch = pitch; lastCameraVelocityAbs = cameraVelocityAbs;
 	}
 
 	// ============================================================
@@ -708,21 +1111,29 @@ public final class OptiminiumVisualSignificance {
 	private static void cleanupStaleMemory() {
 		if (objectMemory.isEmpty()) return;
 		cleanupCounter++;
-		// Only clean up every 60 frames to avoid per-frame iteration
 		if (cleanupCounter < 60) return;
 		cleanupCounter = 0;
-
-		// Remove objects not seen in 200+ frames
-		var iterator = objectMemory.long2ObjectEntrySet().fastIterator();
-		while (iterator.hasNext()) {
-			var entry = iterator.next();
-			if (frameIndex - entry.getValue().lastSeenFrame > 200) {
-				iterator.remove();
-				// Also clean up seen counts for this key
-				seenCounts.remove(entry.getLongKey());
+		var it = objectMemory.long2ObjectEntrySet().fastIterator();
+		while (it.hasNext()) {
+			var e = it.next();
+			if (frameIndex - e.getValue().lastSeenFrame > 200) {
+				it.remove(); seenCounts.remove(e.getLongKey());
 			}
 		}
 		objectMemoryCount = objectMemory.size();
+	}
+
+	private static void cleanupStaleEntityMemory() {
+		if (entityMemory.isEmpty()) return;
+		if (cleanupCounter % 2 != 0) return;
+		var it = entityMemory.int2ObjectEntrySet().fastIterator();
+		while (it.hasNext()) {
+			var e = it.next();
+			if (frameIndex - e.getValue().lastSeenFrame > 120) {
+				it.remove(); entityOscillation.remove(e.getIntKey());
+			}
+		}
+		entityMemoryCount = entityMemory.size();
 	}
 
 	// ============================================================
@@ -730,60 +1141,57 @@ public final class OptiminiumVisualSignificance {
 	// ============================================================
 
 	private static Vec3 cameraPosition() {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gameRenderer == null || minecraft.gameRenderer.getMainCamera() == null) return null;
-		return minecraft.gameRenderer.getMainCamera().getPosition();
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.gameRenderer == null || mc.gameRenderer.getMainCamera() == null) return null;
+		return mc.gameRenderer.getMainCamera().getPosition();
 	}
 
 	private static double computeScore(double distanceSqr, boolean inFront, boolean lookedAt,
 			boolean important, boolean recent, int repeatCount, boolean pressured, double renderCost) {
-		double importanceScore = 1.0D - Math.min(1.0D, Math.sqrt(distanceSqr) / 192.0D);
-		if (!inFront) importanceScore -= 0.45D;
-		if (lookedAt) importanceScore += 0.55D;
-		if (important) importanceScore += 0.45D;
-		if (recent) importanceScore += 0.50D;
-		if (repeatCount >= 4) importanceScore -= 0.10D;
-		if (pressured) importanceScore -= 0.10D;
-		importanceScore = Math.max(0.0D, Math.min(1.0D, importanceScore));
-
-		double costFactor = 1.0D - renderCost;
-		double combined = importanceScore * IMPORTANCE_WEIGHT + costFactor * COST_WEIGHT;
-		return Math.max(0.0D, Math.min(1.0D, combined));
+		double importanceScore = Math.max(0.0D, Math.min(1.0D,
+			1.0D - Math.min(1.0D, Math.sqrt(distanceSqr) / 192.0D)
+			- (inFront ? 0.0D : 0.45D)
+			+ (lookedAt ? 0.55D : 0.0D) + (important ? 0.45D : 0.0D)
+			+ (recent ? 0.50D : 0.0D) - (repeatCount >= 4 ? 0.10D : 0.0D)
+			- (pressured ? 0.10D : 0.0D)));
+		return Math.max(0.0D, Math.min(1.0D, importanceScore * IMPORTANCE_WEIGHT + (1.0D - renderCost) * COST_WEIGHT));
 	}
 
-	private static boolean isLookedAt(long blockEntityPos, double dx, double dy, double dz, double distanceSqr) {
-		if (distanceSqr <= 0.0001D) return true;
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.hitResult instanceof BlockHitResult hit
-				&& hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().asLong() == blockEntityPos) {
-			return true;
-		}
-		return lookDot(dx, dy, dz, distanceSqr) >= LOOKED_AT_DOT;
+	private static boolean isLookedAt(long key, double dx, double dy, double dz, double dsqr) {
+		if (dsqr <= 0.0001D) return true;
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().asLong() == key) return true;
+		return lookDot(dx, dy, dz, dsqr) >= LOOKED_AT_DOT;
 	}
 
-	private static boolean isInFront(double dx, double dy, double dz, double distanceSqr) {
-		if (distanceSqr <= 0.0001D) return true;
-		return lookDot(dx, dy, dz, distanceSqr) > 0.0D;
+	private static boolean isInFront(double dx, double dy, double dz, double dsqr) {
+		return dsqr <= 0.0001D || lookDot(dx, dy, dz, dsqr) > 0.0D;
 	}
 
-	private static boolean isLookedAtDirection(double dx, double dy, double dz, double distanceSqr) {
-		if (distanceSqr <= 0.0001D) return true;
-		return lookDot(dx, dy, dz, distanceSqr) >= LOOKED_AT_DOT;
+	private static boolean isLookedAtDirection(double dx, double dy, double dz, double dsqr) {
+		return dsqr <= 0.0001D || lookDot(dx, dy, dz, dsqr) >= LOOKED_AT_DOT;
 	}
 
-	private static double lookDot(double dx, double dy, double dz, double distanceSqr) {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gameRenderer == null || minecraft.gameRenderer.getMainCamera() == null) return 0.0D;
-		var look = minecraft.gameRenderer.getMainCamera().getLookVector();
-		return (dx * look.x + dy * look.y + dz * look.z) / Math.sqrt(distanceSqr);
+	private static boolean isMovingToward(double dx, double dz, double distance) {
+		return cameraVelocityAbs > 0.05D && movingTowardDot(dx, dz, distance) > 0.5D;
+	}
+
+	private static double movingTowardDot(double dx, double dz, double distance) {
+		return (dx * cameraVelocityX + dz * cameraVelocityZ) / Math.max(0.001D, distance * cameraVelocityAbs);
+	}
+
+	private static double lookDot(double dx, double dy, double dz, double dsqr) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.gameRenderer == null || mc.gameRenderer.getMainCamera() == null) return 0.0D;
+		var look = mc.gameRenderer.getMainCamera().getLookVector();
+		return (dx * look.x + dy * look.y + dz * look.z) / Math.sqrt(dsqr);
 	}
 
 	private static void recordInteractionTarget() {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.options == null || (!minecraft.options.keyUse.isDown() && !minecraft.options.keyAttack.isDown())) return;
-		if (minecraft.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.options == null || (!mc.options.keyUse.isDown() && !mc.options.keyAttack.isDown())) return;
+		if (mc.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK)
 			recentlyInteracted.put(hit.getBlockPos().asLong(), frameIndex);
-		}
 	}
 
 	private static boolean prototypeConfidenceProtection(long key) {
@@ -799,23 +1207,167 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	// ============================================================
+	//  Importance and render cost helpers
+	// ============================================================
+
+	private static boolean isImportant(BlockEntity be) {
+		BlockEntityType<?> t = be.getType();
+		return t == BlockEntityType.BEACON || t == BlockEntityType.CONDUIT || t == BlockEntityType.END_PORTAL
+			|| t == BlockEntityType.END_GATEWAY || t == BlockEntityType.MOB_SPAWNER
+			|| t == BlockEntityType.TRIAL_SPAWNER || t == BlockEntityType.VAULT;
+	}
+
+	private static boolean isImportantEntity(Entity e) {
+		return e instanceof Player || e instanceof Projectile
+			|| e instanceof FallingBlockEntity || e.hasGlowingTag() || e.hasCustomName()
+			|| e.isPassenger() || !e.getPassengers().isEmpty() || e.displayFireAnimation();
+	}
+
+	private static boolean isImportantParticle(ParticleOptions opts) {
+		return opts.getType() == ParticleTypes.EXPLOSION || opts.getType() == ParticleTypes.EXPLOSION_EMITTER
+			|| opts.getType() == ParticleTypes.FLASH || opts.getType() == ParticleTypes.DAMAGE_INDICATOR
+			|| opts.getType() == ParticleTypes.TOTEM_OF_UNDYING;
+	}
+
+	private static double blockEntityRenderCost(BlockEntity be) {
+		BlockEntityType<?> t = be.getType();
+		if (t == BlockEntityType.BEACON) return 0.85D;
+		if (t == BlockEntityType.CONDUIT) return 0.80D;
+		if (t == BlockEntityType.SHULKER_BOX) return 0.75D;
+		if (t == BlockEntityType.CHEST || t == BlockEntityType.TRAPPED_CHEST) return 0.70D;
+		if (t == BlockEntityType.ENDER_CHEST || t == BlockEntityType.BELL) return 0.65D;
+		if (t == BlockEntityType.CAMPFIRE || t == BlockEntityType.ENCHANTING_TABLE) return 0.60D;
+		if (t == BlockEntityType.MOB_SPAWNER || t == BlockEntityType.TRIAL_SPAWNER || t == BlockEntityType.VAULT) return 0.55D;
+		if (t == BlockEntityType.BANNER) return 0.50D;
+		if (t == BlockEntityType.HANGING_SIGN) return 0.45D;
+		if (t == BlockEntityType.SIGN || t == BlockEntityType.SKULL || t == BlockEntityType.PISTON || t == BlockEntityType.BED) return 0.40D;
+		if (t == BlockEntityType.LECTERN || t == BlockEntityType.DECORATED_POT) return 0.35D;
+		if (t == BlockEntityType.BRUSHABLE_BLOCK || t == BlockEntityType.END_PORTAL || t == BlockEntityType.END_GATEWAY) return 0.30D;
+		return 0.50D;
+	}
+
+	private static double entityRenderCost(Entity e) {
+		if (e instanceof Player) return 0.90D;
+		if (e instanceof LivingEntity) return 0.75D;
+		if (e instanceof Projectile) return 0.25D;
+		if (e instanceof FallingBlockEntity) return 0.30D;
+		if (e.hasGlowingTag()) return 0.50D;
+		if (e.hasCustomName()) return 0.40D;
+		if (e.isPassenger()) return 0.50D;
+		if (!e.getPassengers().isEmpty()) return 0.55D;
+		if (e.displayFireAnimation()) return 0.35D;
+		return 0.30D;
+	}
+
+	private static double particleRenderCost(ParticleOptions opts) {
+		var t = opts.getType();
+		if (t == ParticleTypes.EXPLOSION_EMITTER) return 0.90D;
+		if (t == ParticleTypes.EXPLOSION || t == ParticleTypes.FIREWORK) return 0.80D;
+		if (t == ParticleTypes.TOTEM_OF_UNDYING) return 0.70D;
+		if (t == ParticleTypes.ELDER_GUARDIAN) return 0.60D;
+		if (t == ParticleTypes.DAMAGE_INDICATOR) return 0.40D;
+		if (t == ParticleTypes.FLASH) return 0.30D;
+		if (t == ParticleTypes.SMOKE || t == ParticleTypes.WHITE_SMOKE || t == ParticleTypes.CLOUD) return 0.20D;
+		if (t == ParticleTypes.ASH || t == ParticleTypes.MYCELIUM || t == ParticleTypes.SPORE_BLOSSOM_AIR
+			|| t == ParticleTypes.CRIMSON_SPORE || t == ParticleTypes.WARPED_SPORE) return 0.15D;
+		if (t == ParticleTypes.RAIN || t == ParticleTypes.SNOWFLAKE || t == ParticleTypes.UNDERWATER) return 0.10D;
+		return 0.25D;
+	}
+
+	// ============================================================
+	//  Debug logging
+	// ============================================================
+
+	private static void debugLogEntity(Entity entity, double dsqr, double score,
+			byte prevBand, byte newBand, EntityMemory mem) {
+		if (++debugLogCounter % 10 != 0) return;
+		double dist = Math.sqrt(dsqr);
+		String reason = "normal";
+		if (newBand == CULLED && prevBand != CULLED) {
+			if (!mem.lastInFront) reason = "offscreen";
+			else if (dsqr > ENTITY_CULL_DISTANCE_SQR) reason = "too far";
+			else reason = "low significance";
+		} else if (newBand != CULLED && prevBand == CULLED) reason = "re-entered view";
+		OptiminiumMod.LOGGER.debug(
+			"Optiminium entity sig: type={}, id={}, dist={:.1f}, score={:.3f}, prev={}, new={}, reason={}, cat={}, inFront={}, vel={:.3f}",
+			entity.getType().getDescriptionId(), entity.getId(), dist, score,
+			bandName(prevBand), bandName(newBand), reason, mem.category.name(),
+			mem.lastInFront, cameraVelocityAbs);
+	}
+
+	private static String bandName(byte b) {
+		return switch (b) { case FULL -> "FULL"; case THROTTLED -> "THROTTLED";
+			case REUSED -> "REUSED"; case PROXY -> "PROXY";
+			case CULLED -> "CULLED"; default -> "UNKNOWN"; };
+	}
+
+	// ============================================================
 	//  Snapshot / Reset / Diagnostics
 	// ============================================================
 
+	public static RenderBudget renderBudget() {
+		return currentBudget;
+	}
+
+	private static void updateBudget() {
+		int totalThisFrame = fullThisFrame + throttledThisFrame + reusedThisFrame + proxyThisFrame + culledThisFrame;
+		budgetCulledFraction = totalThisFrame > 0 ? (double)culledThisFrame / totalThisFrame : 0.0D;
+
+		// Emergency: >40% culled or fast-moving camera with high cull rate
+		if (budgetCulledFraction > 0.40D || (cameraFastMoving && budgetCulledFraction > 0.25D)) {
+			if (currentBudget != RenderBudget.EMERGENCY) {
+				budgetPressureFrames = 0;
+			}
+			budgetPressureFrames++;
+			if (budgetPressureFrames >= 5) {
+				currentBudget = RenderBudget.EMERGENCY;
+				return;
+			}
+		}
+
+		// Heavy: >25% culled or sustained pressure
+		if (budgetCulledFraction > 0.25D || (budgetCulledFraction > 0.15D && cameraFastMoving)) {
+			if (currentBudget != RenderBudget.HEAVY_PRESSURE && currentBudget != RenderBudget.EMERGENCY) {
+				budgetPressureFrames = 0;
+			}
+			budgetPressureFrames++;
+			if (budgetPressureFrames >= 5) {
+				currentBudget = RenderBudget.HEAVY_PRESSURE;
+				return;
+			}
+		}
+
+		// Medium: >12% culled
+		if (budgetCulledFraction > 0.12D) {
+			if (currentBudget != RenderBudget.MEDIUM_PRESSURE && currentBudget != RenderBudget.HEAVY_PRESSURE
+					&& currentBudget != RenderBudget.EMERGENCY) {
+				budgetPressureFrames = 0;
+			}
+			budgetPressureFrames++;
+			if (budgetPressureFrames >= 5) {
+				currentBudget = RenderBudget.MEDIUM_PRESSURE;
+				return;
+			}
+		}
+
+		// Normal: recover if below threshold for enough frames
+		if (currentBudget != RenderBudget.NORMAL) {
+			budgetPressureFrames = Math.max(0, budgetPressureFrames - 1);
+			if (budgetPressureFrames <= 0 && budgetCulledFraction < 0.10D) {
+				currentBudget = RenderBudget.NORMAL;
+			}
+		}
+	}
+
 	private static void accumulateTotals() {
-		fullTotal += fullThisFrame;
-		throttledTotal += throttledThisFrame;
-		reusedTotal += reusedThisFrame;
-		proxyTotal += proxyThisFrame;
-		culledTotal += culledThisFrame;
+		updateBudget();
+		fullTotal += fullThisFrame; throttledTotal += throttledThisFrame;
+		reusedTotal += reusedThisFrame; proxyTotal += proxyThisFrame; culledTotal += culledThisFrame;
 	}
 
 	private static void resetFrameCounters() {
-		fullThisFrame = 0;
-		throttledThisFrame = 0;
-		reusedThisFrame = 0;
-		proxyThisFrame = 0;
-		culledThisFrame = 0;
+		fullThisFrame = 0; throttledThisFrame = 0; reusedThisFrame = 0;
+		proxyThisFrame = 0; culledThisFrame = 0;
 	}
 
 	public static String diagnosticLine() {
@@ -823,103 +1375,65 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	public static Snapshot snapshot() {
+		double avgScore = accumulatedScoreCount > 0 ? accumulatedContinuousScores / accumulatedScoreCount : 0.0D;
+		double avgConf = accumulatedScoreCount > 0 ? accumulatedConfidence / accumulatedScoreCount : 0.0D;
 		return new Snapshot(
-			fullTotal + fullThisFrame,
-			throttledTotal + throttledThisFrame,
-			reusedTotal + reusedThisFrame,
-			proxyTotal + proxyThisFrame,
-			culledTotal + culledThisFrame,
-			fullBecauseNearby,
-			fullBecauseImportant,
-			fullBecauseLookedAt,
-			fullBecauseRecentlyInteracted,
-			fullBecauseHighConfidence,
-			throttledBecauseDistance,
-			throttledBecauseFramePressure,
-			throttledBecauseHighCost,
-			throttledBecausePredictedLow,
-			reusedBecauseStable,
-			reusedBecauseCameraStable,
-			reusedBecauseHysteresis,
-			proxyBecauseFarRepeated,
-			proxyBecauseLowScreenSize,
-			proxyBecauseHighConfidence,
-			culledBecauseOffscreen,
-			culledBecauseBudget,
-			culledBecauseTiny,
-			culledBecauseLowSignificance,
-			culledBecauseHighCostLowImportance,
-			culledBecausePredictedOffscreen,
-			culledBecauseLowConfidencePromotable,
-			culledBecauseFastCamera,
-			averageSignificanceMs(),
-			worstSignificanceNanos / 1_000_000.0D,
+			fullTotal + fullThisFrame, throttledTotal + throttledThisFrame,
+			reusedTotal + reusedThisFrame, proxyTotal + proxyThisFrame, culledTotal + culledThisFrame,
+			fullBecauseNearby, fullBecauseImportant, fullBecauseLookedAt,
+			fullBecauseRecentlyInteracted, fullBecauseHighConfidence,
+			throttledBecauseDistance, throttledBecauseFramePressure,
+			throttledBecauseHighCost, throttledBecausePredictedLow,
+			reusedBecauseStable, reusedBecauseCameraStable, reusedBecauseHysteresis,
+			proxyBecauseFarRepeated, proxyBecauseLowScreenSize, proxyBecauseHighConfidence,
+			culledBecauseOffscreen, culledBecauseBudget, culledBecauseTiny,
+			culledBecauseLowSignificance, culledBecauseHighCostLowImportance,
+			culledBecausePredictedOffscreen, culledBecauseLowConfidencePromotable, culledBecauseFastCamera,
+			entityCullPreventedByHysteresis, entityCullPreventedByRecentlyVisible,
+			entityCullPreventedByMiddleDistance, entityCullPreventedByMovingToward,
+			entityPromotedBecauseLiving, entityPromotedBecauseImportant,
+			entityBandTransitions, entityCullOscillationEvents,
+			averageSignificanceMs(), worstSignificanceNanos / 1_000_000.0D,
 			mostCommonReason(),
 			nearestDistanceSqr == Double.POSITIVE_INFINITY ? -1.0D : Math.sqrt(nearestDistanceSqr),
-			cameraVelocityAbs,
-			cameraRotationSpeed,
-			cameraFastMoving,
-			cameraStable,
-			objectMemoryCount
+			cameraVelocityAbs, cameraRotationSpeed, cameraFastMoving, cameraStable,
+			objectMemoryCount, entityMemoryCount,
+			promotionsPreventedByHysteresis, demotionsPreventedByHysteresis,
+			promotionsPreventedByConfidence, demotionsPreventedByConfidence,
+			singleBandTransitionsEnforced, avgScore, avgConf
 		);
 	}
 
 	public static void reset() {
-		fullThisFrame = 0;
-		throttledThisFrame = 0;
-		reusedThisFrame = 0;
-		proxyThisFrame = 0;
-		culledThisFrame = 0;
-		fullTotal = 0L;
-		throttledTotal = 0L;
-		reusedTotal = 0L;
-		proxyTotal = 0L;
-		culledTotal = 0L;
-		fullBecauseNearby = 0L;
-		fullBecauseImportant = 0L;
-		fullBecauseLookedAt = 0L;
-		fullBecauseRecentlyInteracted = 0L;
-		fullBecauseHighConfidence = 0L;
-		throttledBecauseDistance = 0L;
-		throttledBecauseFramePressure = 0L;
-		throttledBecauseHighCost = 0L;
-		throttledBecausePredictedLow = 0L;
-		reusedBecauseStable = 0L;
-		reusedBecauseCameraStable = 0L;
-		reusedBecauseHysteresis = 0L;
-		proxyBecauseFarRepeated = 0L;
-		proxyBecauseLowScreenSize = 0L;
-		proxyBecauseHighConfidence = 0L;
-		culledBecauseOffscreen = 0L;
-		culledBecauseBudget = 0L;
-		culledBecauseTiny = 0L;
-		culledBecauseLowSignificance = 0L;
-		culledBecauseHighCostLowImportance = 0L;
-		culledBecausePredictedOffscreen = 0L;
-		culledBecauseLowConfidencePromotable = 0L;
-		culledBecauseFastCamera = 0L;
-		significanceNanos = 0L;
-		worstSignificanceNanos = 0L;
-		profiledObjects = 0L;
+		fullThisFrame = 0; throttledThisFrame = 0; reusedThisFrame = 0; proxyThisFrame = 0; culledThisFrame = 0;
+		fullTotal = 0L; throttledTotal = 0L; reusedTotal = 0L; proxyTotal = 0L; culledTotal = 0L;
+		fullBecauseNearby = 0L; fullBecauseImportant = 0L; fullBecauseLookedAt = 0L;
+		fullBecauseRecentlyInteracted = 0L; fullBecauseHighConfidence = 0L;
+		throttledBecauseDistance = 0L; throttledBecauseFramePressure = 0L;
+		throttledBecauseHighCost = 0L; throttledBecausePredictedLow = 0L;
+		reusedBecauseStable = 0L; reusedBecauseCameraStable = 0L; reusedBecauseHysteresis = 0L;
+		proxyBecauseFarRepeated = 0L; proxyBecauseLowScreenSize = 0L; proxyBecauseHighConfidence = 0L;
+		culledBecauseOffscreen = 0L; culledBecauseBudget = 0L; culledBecauseTiny = 0L;
+		culledBecauseLowSignificance = 0L; culledBecauseHighCostLowImportance = 0L;
+		culledBecausePredictedOffscreen = 0L; culledBecauseLowConfidencePromotable = 0L; culledBecauseFastCamera = 0L;
+		entityCullPreventedByHysteresis = 0L; entityCullPreventedByRecentlyVisible = 0L;
+		entityCullPreventedByMiddleDistance = 0L; entityCullPreventedByMovingToward = 0L;
+		entityPromotedBecauseLiving = 0L; entityPromotedBecauseImportant = 0L;
+		entityBandTransitions = 0L; entityCullOscillationEvents = 0L;
+		promotionsPreventedByHysteresis = 0L; demotionsPreventedByHysteresis = 0L;
+		promotionsPreventedByConfidence = 0L; demotionsPreventedByConfidence = 0L;
+		singleBandTransitionsEnforced = 0L;
+		accumulatedContinuousScores = 0.0D; accumulatedConfidence = 0.0D; accumulatedScoreCount = 0L;
+		significanceNanos = 0L; worstSignificanceNanos = 0L; profiledObjects = 0L;
 		nearestDistanceSqr = Double.POSITIVE_INFINITY;
-		seenCounts.clear();
-		recentlyInteracted.clear();
-		beClassifications.clear();
-		objectMemory.clear();
-		objectMemoryCount = 0;
-		cleanupCounter = 0;
-		cameraStable = false;
-		cameraFastMoving = false;
-		cameraVelocityAbs = 0.0D;
-		cameraRotationSpeed = 0.0D;
-		cameraAcceleration = 0.0D;
-		lastCameraVelocityAbs = 0.0D;
-		lastCameraX = Double.NaN;
-		lastCameraY = Double.NaN;
-		lastCameraZ = Double.NaN;
-		lastCameraYaw = 0.0f;
-		lastCameraPitch = 0.0f;
-		stableFrameCounter = 0;
+		seenCounts.clear(); recentlyInteracted.clear(); beClassifications.clear();
+		objectMemory.clear(); entityMemory.clear(); entityOscillation.clear();
+		objectMemoryCount = 0; entityMemoryCount = 0; cleanupCounter = 0;
+		cameraStable = false; cameraFastMoving = false; cameraVelocityAbs = 0.0D;
+		cameraRotationSpeed = 0.0D; cameraAcceleration = 0.0D; lastCameraVelocityAbs = 0.0D;
+		lastCameraX = Double.NaN; lastCameraY = Double.NaN; lastCameraZ = Double.NaN;
+		lastCameraYaw = 0.0f; lastCameraPitch = 0.0f; stableFrameCounter = 0;
+		debugEntityId = -1; debugLogCounter = 0;
 	}
 
 	private static double averageSignificanceMs() {
@@ -927,8 +1441,7 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	private static String mostCommonReason() {
-		String reason = "none";
-		long count = 0L;
+		String reason = "none"; long count = 0L;
 		if (fullBecauseNearby > count) { reason = "fullBecauseNearby"; count = fullBecauseNearby; }
 		if (fullBecauseImportant > count) { reason = "fullBecauseImportant"; count = fullBecauseImportant; }
 		if (fullBecauseLookedAt > count) { reason = "fullBecauseLookedAt"; count = fullBecauseLookedAt; }
@@ -952,106 +1465,15 @@ public final class OptiminiumVisualSignificance {
 		if (culledBecausePredictedOffscreen > count) { reason = "culledBecausePredictedOffscreen"; count = culledBecausePredictedOffscreen; }
 		if (culledBecauseLowConfidencePromotable > count) { reason = "culledBecauseLowConfidencePromotable"; count = culledBecauseLowConfidencePromotable; }
 		if (culledBecauseFastCamera > count) { reason = "culledBecauseFastCamera"; count = culledBecauseFastCamera; }
+		if (entityCullPreventedByHysteresis > count) { reason = "entityCullPreventedByHysteresis"; count = entityCullPreventedByHysteresis; }
+		if (entityCullPreventedByRecentlyVisible > count) { reason = "entityCullPreventedByRecentlyVisible"; count = entityCullPreventedByRecentlyVisible; }
+		if (entityCullPreventedByMiddleDistance > count) { reason = "entityCullPreventedByMiddleDistance"; count = entityCullPreventedByMiddleDistance; }
+		if (entityCullPreventedByMovingToward > count) { reason = "entityCullPreventedByMovingToward"; count = entityCullPreventedByMovingToward; }
+		if (entityPromotedBecauseLiving > count) { reason = "entityPromotedBecauseLiving"; count = entityPromotedBecauseLiving; }
+		if (entityPromotedBecauseImportant > count) { reason = "entityPromotedBecauseImportant"; count = entityPromotedBecauseImportant; }
+		if (entityBandTransitions > count) { reason = "entityBandTransitions"; count = entityBandTransitions; }
+		if (entityCullOscillationEvents > count) { reason = "entityCullOscillationEvents"; count = entityCullOscillationEvents; }
 		return reason;
-	}
-
-	// ---- Importance classification ----
-
-	private static boolean isImportant(BlockEntity blockEntity) {
-		BlockEntityType<?> type = blockEntity.getType();
-		return type == BlockEntityType.BEACON
-			|| type == BlockEntityType.CONDUIT
-			|| type == BlockEntityType.END_PORTAL
-			|| type == BlockEntityType.END_GATEWAY
-			|| type == BlockEntityType.MOB_SPAWNER
-			|| type == BlockEntityType.TRIAL_SPAWNER
-			|| type == BlockEntityType.VAULT;
-	}
-
-	private static boolean isImportantEntity(Entity entity) {
-		return entity instanceof Player
-			|| entity instanceof LivingEntity
-			|| entity instanceof Projectile
-			|| entity instanceof FallingBlockEntity
-			|| entity.hasGlowingTag()
-			|| entity.hasCustomName()
-			|| entity.isPassenger()
-			|| !entity.getPassengers().isEmpty()
-			|| entity.displayFireAnimation();
-	}
-
-	private static boolean isImportantParticle(ParticleOptions options) {
-		return options.getType() == ParticleTypes.EXPLOSION
-			|| options.getType() == ParticleTypes.EXPLOSION_EMITTER
-			|| options.getType() == ParticleTypes.FLASH
-			|| options.getType() == ParticleTypes.DAMAGE_INDICATOR
-			|| options.getType() == ParticleTypes.TOTEM_OF_UNDYING;
-	}
-
-	// ---- Render cost ----
-
-	private static double blockEntityRenderCost(BlockEntity blockEntity) {
-		BlockEntityType<?> type = blockEntity.getType();
-		if (type == BlockEntityType.BEACON) return 0.85D;
-		if (type == BlockEntityType.CONDUIT) return 0.80D;
-		if (type == BlockEntityType.SHULKER_BOX) return 0.75D;
-		if (type == BlockEntityType.CHEST) return 0.70D;
-		if (type == BlockEntityType.TRAPPED_CHEST) return 0.70D;
-		if (type == BlockEntityType.ENDER_CHEST) return 0.65D;
-		if (type == BlockEntityType.BELL) return 0.65D;
-		if (type == BlockEntityType.CAMPFIRE) return 0.60D;
-		if (type == BlockEntityType.ENCHANTING_TABLE) return 0.60D;
-		if (type == BlockEntityType.MOB_SPAWNER) return 0.55D;
-		if (type == BlockEntityType.TRIAL_SPAWNER) return 0.55D;
-		if (type == BlockEntityType.VAULT) return 0.55D;
-		if (type == BlockEntityType.BANNER) return 0.50D;
-		if (type == BlockEntityType.SIGN) return 0.40D;
-		if (type == BlockEntityType.HANGING_SIGN) return 0.45D;
-		if (type == BlockEntityType.SKULL) return 0.45D;
-		if (type == BlockEntityType.PISTON) return 0.40D;
-		if (type == BlockEntityType.BED) return 0.40D;
-		if (type == BlockEntityType.LECTERN) return 0.35D;
-		if (type == BlockEntityType.DECORATED_POT) return 0.35D;
-		if (type == BlockEntityType.BRUSHABLE_BLOCK) return 0.30D;
-		if (type == BlockEntityType.END_PORTAL) return 0.30D;
-		if (type == BlockEntityType.END_GATEWAY) return 0.30D;
-		return 0.50D;
-	}
-
-	private static double entityRenderCost(Entity entity) {
-		if (entity instanceof Player) return 0.90D;
-		if (entity instanceof LivingEntity) return 0.75D;
-		if (entity instanceof Projectile) return 0.25D;
-		if (entity instanceof FallingBlockEntity) return 0.30D;
-		if (entity.hasGlowingTag()) return 0.50D;
-		if (entity.hasCustomName()) return 0.40D;
-		if (entity.isPassenger()) return 0.50D;
-		if (!entity.getPassengers().isEmpty()) return 0.55D;
-		if (entity.displayFireAnimation()) return 0.35D;
-		return 0.30D;
-	}
-
-	private static double particleRenderCost(ParticleOptions options) {
-		var type = options.getType();
-		if (type == ParticleTypes.EXPLOSION_EMITTER) return 0.90D;
-		if (type == ParticleTypes.EXPLOSION) return 0.80D;
-		if (type == ParticleTypes.FLASH) return 0.30D;
-		if (type == ParticleTypes.DAMAGE_INDICATOR) return 0.40D;
-		if (type == ParticleTypes.TOTEM_OF_UNDYING) return 0.70D;
-		if (type == ParticleTypes.FIREWORK) return 0.85D;
-		if (type == ParticleTypes.ELDER_GUARDIAN) return 0.60D;
-		if (type == ParticleTypes.ASH) return 0.15D;
-		if (type == ParticleTypes.CLOUD) return 0.20D;
-		if (type == ParticleTypes.MYCELIUM) return 0.15D;
-		if (type == ParticleTypes.RAIN) return 0.10D;
-		if (type == ParticleTypes.SMOKE) return 0.20D;
-		if (type == ParticleTypes.WHITE_SMOKE) return 0.20D;
-		if (type == ParticleTypes.SNOWFLAKE) return 0.10D;
-		if (type == ParticleTypes.SPORE_BLOSSOM_AIR) return 0.15D;
-		if (type == ParticleTypes.CRIMSON_SPORE) return 0.15D;
-		if (type == ParticleTypes.WARPED_SPORE) return 0.15D;
-		if (type == ParticleTypes.UNDERWATER) return 0.10D;
-		return 0.25D;
 	}
 
 	// ============================================================
@@ -1059,50 +1481,34 @@ public final class OptiminiumVisualSignificance {
 	// ============================================================
 
 	public record Snapshot(
-		long full,
-		long throttled,
-		long reused,
-		long proxy,
-		long culled,
-		long fullBecauseNearby,
-		long fullBecauseImportant,
-		long fullBecauseLookedAt,
-		long fullBecauseRecentlyInteracted,
-		long fullBecauseHighConfidence,
-		long throttledBecauseDistance,
-		long throttledBecauseFramePressure,
-		long throttledBecauseHighCost,
-		long throttledBecausePredictedLow,
-		long reusedBecauseStable,
-		long reusedBecauseCameraStable,
-		long reusedBecauseHysteresis,
-		long proxyBecauseFarRepeated,
-		long proxyBecauseLowScreenSize,
-		long proxyBecauseHighConfidence,
-		long culledBecauseOffscreen,
-		long culledBecauseBudget,
-		long culledBecauseTiny,
-		long culledBecauseLowSignificance,
-		long culledBecauseHighCostLowImportance,
-		long culledBecausePredictedOffscreen,
-		long culledBecauseLowConfidencePromotable,
+		long full, long throttled, long reused, long proxy, long culled,
+		long fullBecauseNearby, long fullBecauseImportant, long fullBecauseLookedAt,
+		long fullBecauseRecentlyInteracted, long fullBecauseHighConfidence,
+		long throttledBecauseDistance, long throttledBecauseFramePressure,
+		long throttledBecauseHighCost, long throttledBecausePredictedLow,
+		long reusedBecauseStable, long reusedBecauseCameraStable, long reusedBecauseHysteresis,
+		long proxyBecauseFarRepeated, long proxyBecauseLowScreenSize, long proxyBecauseHighConfidence,
+		long culledBecauseOffscreen, long culledBecauseBudget, long culledBecauseTiny,
+		long culledBecauseLowSignificance, long culledBecauseHighCostLowImportance,
+		long culledBecausePredictedOffscreen, long culledBecauseLowConfidencePromotable,
 		long culledBecauseFastCamera,
-		double significanceCpuMs,
-		double worstSignificanceCpuMs,
-		String mostCommonReason,
-		double nearestDistance,
-		double cameraVelocity,
-		double cameraRotationSpeed,
-		boolean cameraFastMoving,
-		boolean cameraStable,
-		int trackedObjects
+		long entityCullPreventedByHysteresis, long entityCullPreventedByRecentlyVisible,
+		long entityCullPreventedByMiddleDistance, long entityCullPreventedByMovingToward,
+		long entityPromotedBecauseLiving, long entityPromotedBecauseImportant,
+		long entityBandTransitions, long entityCullOscillationEvents,
+		double significanceCpuMs, double worstSignificanceCpuMs,
+		String mostCommonReason, double nearestDistance,
+		double cameraVelocity, double cameraRotationSpeed,
+		boolean cameraFastMoving, boolean cameraStable,
+		int trackedObjects, int trackedEntities,
+		long promotionsPreventedByHysteresis, long demotionsPreventedByHysteresis,
+		long promotionsPreventedByConfidence, long demotionsPreventedByConfidence,
+		long singleBandTransitionsEnforced,
+		double averageSignificanceScore, double averageConfidence
 	) {
 		private String toLine() {
-			return "significanceBands=full:" + full
-				+ ",throttled:" + throttled
-				+ ",reused:" + reused
-				+ ",proxy:" + proxy
-				+ ",culled:" + culled
+			return "significanceBands=full:" + full + ",throttled:" + throttled
+				+ ",reused:" + reused + ",proxy:" + proxy + ",culled:" + culled
 				+ ",fullBecauseNearby:" + fullBecauseNearby
 				+ ",fullBecauseImportant:" + fullBecauseImportant
 				+ ",fullBecauseLookedAt:" + fullBecauseLookedAt
@@ -1126,15 +1532,29 @@ public final class OptiminiumVisualSignificance {
 				+ ",culledBecausePredictedOffscreen:" + culledBecausePredictedOffscreen
 				+ ",culledBecauseLowConfidencePromotable:" + culledBecauseLowConfidencePromotable
 				+ ",culledBecauseFastCamera:" + culledBecauseFastCamera
+				+ ",entityCullPreventedByHysteresis:" + entityCullPreventedByHysteresis
+				+ ",entityCullPreventedByRecentlyVisible:" + entityCullPreventedByRecentlyVisible
+				+ ",entityCullPreventedByMiddleDistance:" + entityCullPreventedByMiddleDistance
+				+ ",entityCullPreventedByMovingToward:" + entityCullPreventedByMovingToward
+				+ ",entityPromotedBecauseLiving:" + entityPromotedBecauseLiving
+				+ ",entityPromotedBecauseImportant:" + entityPromotedBecauseImportant
+				+ ",entityBandTransitions:" + entityBandTransitions
+				+ ",entityCullOscillationEvents:" + entityCullOscillationEvents
 				+ ",significanceCpuMs:" + String.format("%.4f", significanceCpuMs)
 				+ ",worstSignificanceCpuMs:" + String.format("%.4f", worstSignificanceCpuMs)
 				+ ",mostCommonReason:" + mostCommonReason
 				+ ",nearestDistance:" + String.format("%.1f", nearestDistance)
 				+ ",cameraVelocity:" + String.format("%.3f", cameraVelocity)
 				+ ",cameraRotationSpeed:" + String.format("%.1f", cameraRotationSpeed)
-				+ ",cameraFastMoving:" + cameraFastMoving
-				+ ",cameraStable:" + cameraStable
-				+ ",trackedObjects:" + trackedObjects;
+				+ ",cameraFastMoving:" + cameraFastMoving + ",cameraStable:" + cameraStable
+				+ ",trackedObjects:" + trackedObjects + ",trackedEntities:" + trackedEntities
+				+ ",promotionsPreventedByHysteresis:" + promotionsPreventedByHysteresis
+				+ ",demotionsPreventedByHysteresis:" + demotionsPreventedByHysteresis
+				+ ",promotionsPreventedByConfidence:" + promotionsPreventedByConfidence
+				+ ",demotionsPreventedByConfidence:" + demotionsPreventedByConfidence
+				+ ",singleBandTransitionsEnforced:" + singleBandTransitionsEnforced
+				+ ",avgSignificanceScore:" + String.format("%.4f", averageSignificanceScore)
+				+ ",avgConfidence:" + String.format("%.4f", averageConfidence);
 		}
 	}
 }

@@ -65,7 +65,7 @@ public final class OptiminiumResourceStreamer {
 					shaderCache.put(warmResource.location, bytes);
 				}
 				if (isPng(warmResource.location)) {
-					OptiminiumGpuUploadQueue.enqueue(() -> Minecraft.getInstance().getTextureManager().getTexture(warmResource.location));
+					OptiminiumGpuUploadQueue.enqueue(() -> Minecraft.getInstance().getTextureManager().getTexture(warmResource.location), warmResource.location, true);
 				}
 			} catch (IOException ignored) {
 			}

@@ -308,7 +308,7 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d",
+			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
 			latestCpuFrameNanos / 1_000_000.0D,
@@ -352,7 +352,12 @@ public final class OptiminiumGpuOptimizer {
 			experimentalUploadStallLimitedFrames,
 			OptiminiumVisualSignificance.diagnosticLine(),
 			lastAdaptiveReason,
-			OptiminiumGpuUploadQueue.pendingUploads()
+			OptiminiumGpuUploadQueue.pendingUploads(),
+			OptiminiumGpuUploadQueue.uploadsSkippedBecauseLowSignificance(),
+			OptiminiumGpuUploadQueue.uploadsDeduplicated(),
+			OptiminiumGpuUploadQueue.uploadsDeferredBySignificance(),
+			OptiminiumGpuUploadQueue.uploadsPromotedBecauseNear(),
+			OptiminiumGpuUploadQueue.redundantUploadSchedulingPrevented()
 		);
 	}
 
@@ -636,42 +641,52 @@ public final class OptiminiumGpuOptimizer {
 				logAdaptiveReason();
 				return;
 			}
-			double denseParticleScale = 1.0D;
-			double denseBlockEntityScale = 1.0D;
-			double denseBudgetScale = 1.0D;
-			if (denseSceneActive) {
-				switch (OptiminiumSettings.getDenseSceneAdaptiveMode()) {
-					case CONSERVATIVE -> {
-						denseParticleScale = 0.95D;
-						denseBlockEntityScale = 0.92D;
-						denseBudgetScale = 0.75D;
-					}
-					case BALANCED -> {
-						denseParticleScale = 0.84D;
-						denseBlockEntityScale = 0.74D;
-						denseBudgetScale = 0.40D;
-					}
-					case AGGRESSIVE -> {
-						denseParticleScale = 0.75D;
-						denseBlockEntityScale = 0.65D;
-						denseBudgetScale = 0.33D;
-					}
-					default -> {
-					}
+
+			// Visual Significance drives the render budget.
+			// Adaptive Quality simply reacts.
+			double budgetParticleScale = 1.0D;
+			double budgetBlockEntityScale = 1.0D;
+			double budgetAllScale = 1.0D;
+			String reason;
+			switch (OptiminiumVisualSignificance.renderBudget()) {
+				case NORMAL -> {
+					budgetParticleScale = 1.0D;
+					budgetBlockEntityScale = 1.0D;
+					budgetAllScale = 1.0D;
+					reason = "normal";
+				}
+				case MEDIUM_PRESSURE -> {
+					budgetParticleScale = 0.85D;
+					budgetBlockEntityScale = 0.80D;
+					budgetAllScale = 0.70D;
+					reason = "medium";
+				}
+				case HEAVY_PRESSURE -> {
+					budgetParticleScale = 0.72D;
+					budgetBlockEntityScale = 0.65D;
+					budgetAllScale = 0.55D;
+					reason = "heavy";
+				}
+				case EMERGENCY -> {
+					budgetParticleScale = 0.55D;
+					budgetBlockEntityScale = 0.45D;
+					budgetAllScale = 0.35D;
+					reason = "emergency";
+				}
+				default -> {
+					budgetParticleScale = 1.0D;
+					budgetBlockEntityScale = 1.0D;
+					budgetAllScale = 1.0D;
+					reason = "unknown";
 				}
 			}
-			particleWorkScale = Math.min(gpuWorkScale, denseParticleScale);
-			blockEntityWorkScale = Math.min(gpuWorkScale, denseBlockEntityScale);
-			rebuildWorkScale = Math.min(gpuWorkScale, denseBudgetScale);
-			uploadWorkScale = Math.min(gpuWorkScale, denseBudgetScale);
-			if (denseSceneActive && particleWorkScale < 1.0D && !countedDenseParticleBudgetFrame) {
-				denseParticleBudgetFrames++;
-				countedDenseParticleBudgetFrame = true;
-			}
-			if (denseSceneActive && blockEntityWorkScale < 1.0D && !countedDenseBlockEntityBudgetFrame) {
-				denseBlockEntityBudgetFrames++;
-				countedDenseBlockEntityBudgetFrame = true;
-			}
+			// Also apply gpuWorkScale (from raw frame time spikes) as an upper bound
+			particleWorkScale = Math.min(gpuWorkScale, budgetParticleScale);
+			blockEntityWorkScale = Math.min(gpuWorkScale, budgetBlockEntityScale);
+			rebuildWorkScale = Math.min(gpuWorkScale, budgetAllScale);
+			uploadWorkScale = Math.min(gpuWorkScale, budgetAllScale);
+			lastAdaptiveReason = reason;
+			logAdaptiveReason();
 			recordAdaptiveActivation();
 			minParticleScale = Math.min(minParticleScale, particleWorkScale);
 			minBlockEntityScale = Math.min(minBlockEntityScale, blockEntityWorkScale);
