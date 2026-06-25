@@ -448,7 +448,9 @@ public final class OptiminiumBenchmark {
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
 			0L, 0L, 0L, 0L, "none", "none",
 			0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0, 0,
-			0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D));
+			0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D,
+			0.0D, 0.0D, 0.0D, 0.0D, 0.0D, "none",
+			0L, 0L, 0L, 0L, 0L));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {
