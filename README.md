@@ -70,7 +70,7 @@ The important part is that Optiminium is not trying to make everything disappear
 For example, if a machine is far away and not changing much, Optiminium might reuse its last visual state instead of fully updating it every frame. The player still sees the machine, but Minecraft does less work. If the player walks closer or looks directly at it, Optiminium can promote it back to full quality.
 
 ## Benchmarks
-The most recent stable build benchmark gave these results on the Hermitcraft 9 world download as a test.
+The most recent stable build benchmark gave these results on the Hermitcraft 9 world download as a test.  This was tested on a i7 - 13700H with the Iris XE iGPU.
 
 | Metric | OFF | ON |Percent Change|
 |---|---:|---:|---|
