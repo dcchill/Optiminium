@@ -18,9 +18,11 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.optiminium.client.OptiminiumChunkUploadAdmission;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumRenderProfiler;
 import net.optiminium.client.OptiminiumVisualSignificance;
+import net.optiminium.client.OptiminiumSectionSignificance;
 import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumSettings;
 import org.joml.Matrix4f;
@@ -59,6 +61,20 @@ public abstract class LevelRendererMixin {
 	@Inject(method = "compileSections", at = @At("HEAD"), cancellable = true)
 	private void optiminium$compileSectionsPaced(Camera camera, CallbackInfo callback) {
 		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
+
+		// When Sodium is present, do NOT cancel compileSections.
+		// Sodium manages its own rebuild/upload pipeline and cancelling
+		// the vanilla call would prevent Sodium from scheduling work,
+		// causing GL stalls and rendering issues.
+		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			// Mark that Sodium owns upload scheduling for this frame.
+			// This prevents Optiminium's scaledChunkUploadBudget and
+			// upload admission from running (they operate on the vanilla
+			// upload queue which is empty under Sodium).
+			OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(true);
+			return;
+		}
+
 		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isChunkRebuildScheduling() || this.level == null || this.sectionRenderDispatcher == null) {
 			return;
 		}
@@ -110,12 +126,36 @@ public abstract class LevelRendererMixin {
 	@Inject(method = "renderLevel", at = @At("HEAD"))
 	private void optiminium$recordRawVisibleBlockEntitiesForFrame(DeltaTracker deltaTracker, boolean renderBlockOutline, Camera camera, GameRenderer gameRenderer, LightTexture lightTexture,
 			Matrix4f frustumMatrix, Matrix4f projectionMatrix, CallbackInfo callback) {
+		// Under Sodium: do NOT call upload admission here.
+		// Sodium manages its own chunk mesh upload pipeline. The Optiminium
+		// upload admission queue is never populated under Sodium because
+		// the vanilla SectionRenderDispatcher.toUpload is empty (Sodium uses
+		// its own internal upload queue). Calling processUploads() with
+		// zero pending entries just burns CPU for no benefit.
+		// Under Sodium: do NOT call upload admission here.
+		// Sodium manages its own chunk mesh upload pipeline. The Optiminium
+		// upload admission queue is never populated under Sodium because
+		// the vanilla SectionRenderDispatcher.toUpload is empty (Sodium uses
+		// its own internal upload queue). Calling processUploads() with
+		// zero pending entries just burns CPU for no benefit.
+		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			// Skip upload admission and vanilla block entity counting for Sodium.
+			// Sodium owns all terrain mesh upload scheduling.
+			OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(true);
+			return;
+		}
+		// Non-Sodium path: proceed with vanilla block entity tracking
+		// and upload admission scheduling.
+		OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(false);
 		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
 	}
 
 	@Unique
 	private void optiminium$recordRawVisibleBlockEntities(Vec3 cameraPosition) {
 		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			// With Sodium, visible sections are managed differently.
+			// Skip vanilla block entity counting for Sodium renderers.
+			// Sodium has its own visible section tracking.
 			return;
 		}
 		int count = 0;
@@ -142,17 +182,34 @@ public abstract class LevelRendererMixin {
 
 	@Unique
 	private void optiminium$uploadPendingChunks() {
-		Queue<Runnable> uploads = ((SectionRenderDispatcherAccessor)this.sectionRenderDispatcher).optiminium$getToUpload();
-		int budget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
-		for (int uploaded = 0; uploaded < budget; uploaded++) {
-			long profileStart = OptiminiumGpuOptimizer.profileStart();
-			Runnable upload = uploads.poll();
-			OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
-			if (upload == null) {
-				return;
-			}
-			upload.run();
+		// With Sodium, this queue is empty because Sodium doesn't use the
+		// vanilla SectionRenderDispatcher.toUpload path. Sodium manages its
+		// own upload queue internally.
+		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			return;
 		}
+
+		Queue<Runnable> uploads = ((SectionRenderDispatcherAccessor)this.sectionRenderDispatcher).optiminium$getToUpload();
+
+		while (!uploads.isEmpty()) {
+			Runnable upload = uploads.poll();
+			if (upload == null) break;
+
+			BlockPos sectionOrigin = null;
+			boolean isDirtyFromPlayer = false;
+			for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
+				if (!section.isDirty()) {
+					sectionOrigin = section.getOrigin();
+					isDirtyFromPlayer = section.isDirtyFromPlayer();
+					break;
+				}
+			}
+
+			OptiminiumChunkUploadAdmission.enqueue(upload, sectionOrigin, isDirtyFromPlayer);
+		}
+
+		int baseBudget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
+		OptiminiumChunkUploadAdmission.processUploads(baseBudget, 0L);
 	}
 
 	@Inject(method = "renderSnowAndRain", at = @At("HEAD"), cancellable = true)

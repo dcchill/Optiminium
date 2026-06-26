@@ -109,6 +109,22 @@ public final class OptiminiumGpuOptimizer {
 	private static long denseRebuildBudgetFrames;
 	private static long denseUploadBudgetFrames;
 	private static long experimentalUploadStallLimitedFrames;
+	private static long sectionSignificanceUpdatesDiag;
+	private static double avgSectionSignificanceDiag;
+	private static long sectionPriorityCriticalDiag;
+	private static long sectionPriorityHighDiag;
+	private static long sectionPriorityNormalDiag;
+	private static long sectionPriorityBackgroundDiag;
+	private static long sectionPriorityDeferredDiag;
+	private static long chunkUploadsDeferredBySigDiag;
+	private static long chunkUploadsPromotedNearDiag;
+	private static long chunkUploadsPromotedLookDiag;
+	private static long chunkUploadsPromotedVelocityDiag;
+	private static long chunkUploadsPromotedInteractionDiag;
+	private static long uploadBurstPreventedDiag;
+	private static long nearCameraDelayedDiag;
+	private static long playerInteractionDelayedDiag;
+	private static long visibleChunkPopInRiskDiag;
 	private static long adaptiveActivationAttempts;
 	private static long adaptiveActivationSuccesses;
 	private static long adaptiveBlockEntityFrames;
@@ -132,6 +148,26 @@ public final class OptiminiumGpuOptimizer {
 	public static void onFrameStart() {
 		finishProfileFrame();
 		flushMetrics();
+		if (OptiminiumSectionSignificance.isEnabled()) {
+			OptiminiumChunkUploadAdmission.onFrameStart();
+			// Capture diagnostic snapshot
+			sectionSignificanceUpdatesDiag = OptiminiumSectionSignificance.sectionSignificanceUpdates();
+			avgSectionSignificanceDiag = OptiminiumSectionSignificance.avgSectionSignificance();
+			sectionPriorityCriticalDiag = OptiminiumSectionSignificance.sectionPriorityCritical();
+			sectionPriorityHighDiag = OptiminiumSectionSignificance.sectionPriorityHigh();
+			sectionPriorityNormalDiag = OptiminiumSectionSignificance.sectionPriorityNormal();
+			sectionPriorityBackgroundDiag = OptiminiumSectionSignificance.sectionPriorityBackground();
+			sectionPriorityDeferredDiag = OptiminiumSectionSignificance.sectionPriorityDeferred();
+			chunkUploadsDeferredBySigDiag = OptiminiumSectionSignificance.chunkUploadsDeferredBySignificance();
+			chunkUploadsPromotedNearDiag = OptiminiumSectionSignificance.chunkUploadsPromotedByNearCamera();
+			chunkUploadsPromotedLookDiag = OptiminiumSectionSignificance.chunkUploadsPromotedByLookDirection();
+			chunkUploadsPromotedVelocityDiag = OptiminiumSectionSignificance.chunkUploadsPromotedByPlayerVelocity();
+			chunkUploadsPromotedInteractionDiag = OptiminiumSectionSignificance.chunkUploadsPromotedByRecentInteraction();
+			uploadBurstPreventedDiag = OptiminiumSectionSignificance.uploadBurstPreventedFrames();
+			nearCameraDelayedDiag = OptiminiumSectionSignificance.nearCameraUploadDelayedFrames();
+			playerInteractionDelayedDiag = OptiminiumSectionSignificance.playerInteractionUploadDelayedFrames();
+			visibleChunkPopInRiskDiag = OptiminiumSectionSignificance.visibleChunkPopInRiskFrames();
+		}
 		particlesThisFrame = 0;
 		lowPriorityParticlesThisFrame = 0;
 		distantBlockEntityRendersThisFrame = 0;
@@ -428,8 +464,64 @@ public final class OptiminiumGpuOptimizer {
 		return Math.max(1, (int)Math.floor(configuredBudget * rebuildWorkScale));
 	}
 
+	// ---- Upload scheduling guard state ----
+	// Tracks whether we are in a Sodium-owned path where Optiminium should
+	// NOT schedule or observe chunk mesh uploads.
+	private static boolean sodiumOwnsUploadScheduling;
+
+	/**
+	 * Mark current frame as Sodium-owned upload scheduling (called when
+	 * Sodium is detected and has its own mesh upload pipeline).
+	 */
+	public static void setSodiumOwnsUploadScheduling(boolean sodiumOwns) {
+		sodiumOwnsUploadScheduling = sodiumOwns;
+	}
+
+	public static boolean isSodiumOwnsUploadScheduling() {
+		return sodiumOwnsUploadScheduling;
+	}
+
+	// ---- Upload scheduling diagnostics ----
+	private static long optiminiumManagedUploadRequests;
+	private static long uniqueOptiminiumUploadRequests;
+	private static long duplicateOptiminiumUploadRequests;
+	private static long uploadRequestsIgnoredBecauseAlreadyPending;
+	private static long uploadRequestsIgnoredBecauseSectionUnchanged;
+	private static long uploadRequestsIgnoredBecauseSodiumOwnsIt;
+	private static long uploadRequestsFromChunkRebuild;
+	private static long uploadRequestsFromFadeOrOverlay;
+	private static long uploadRequestsPerFrame;
+	private static double duplicateUploadRate;
+
+	public static void recordUploadRequest(String source) {
+		optiminiumManagedUploadRequests++;
+		uniqueOptiminiumUploadRequests++;
+		uploadRequestsPerFrame++;
+		switch (source) {
+			case "chunkRebuild" -> uploadRequestsFromChunkRebuild++;
+			case "fadeOrOverlay" -> uploadRequestsFromFadeOrOverlay++;
+		}
+	}
+
+	public static void recordDuplicateUploadRequest(String reason) {
+		duplicateOptiminiumUploadRequests++;
+		duplicateUploadRate = (double) duplicateOptiminiumUploadRequests
+			/ Math.max(1, optiminiumManagedUploadRequests);
+		switch (reason) {
+			case "alreadyPending" -> uploadRequestsIgnoredBecauseAlreadyPending++;
+			case "sectionUnchanged" -> uploadRequestsIgnoredBecauseSectionUnchanged++;
+			case "sodiumOwnsIt" -> uploadRequestsIgnoredBecauseSodiumOwnsIt++;
+		}
+	}
+
 	public static int scaledChunkUploadBudget(int configuredBudget) {
 		ensureFrameState();
+		// When Sodium owns upload scheduling, skip the budget calculation
+		// entirely to avoid profiling overhead. Sodium manages its own
+		// upload pipeline — we should not interfere.
+		if (sodiumOwnsUploadScheduling) {
+			return 0;
+		}
 		long profileStart = profileStart();
 		try {
 			int budget = Math.max(1, (int)Math.floor(configuredBudget * uploadWorkScale));
@@ -534,6 +626,23 @@ public final class OptiminiumGpuOptimizer {
 		consecutiveDenseSceneFrames = 0;
 		denseSceneHoldFrames = 0;
 		lastAdaptiveReason = "reset";
+		OptiminiumSectionSignificance.resetMetrics();
+		sectionSignificanceUpdatesDiag = 0L;
+		avgSectionSignificanceDiag = 0.0D;
+		sectionPriorityCriticalDiag = 0L;
+		sectionPriorityHighDiag = 0L;
+		sectionPriorityNormalDiag = 0L;
+		sectionPriorityBackgroundDiag = 0L;
+		sectionPriorityDeferredDiag = 0L;
+		chunkUploadsDeferredBySigDiag = 0L;
+		chunkUploadsPromotedNearDiag = 0L;
+		chunkUploadsPromotedLookDiag = 0L;
+		chunkUploadsPromotedVelocityDiag = 0L;
+		chunkUploadsPromotedInteractionDiag = 0L;
+		uploadBurstPreventedDiag = 0L;
+		nearCameraDelayedDiag = 0L;
+		playerInteractionDelayedDiag = 0L;
+		visibleChunkPopInRiskDiag = 0L;
 	}
 
 	public static void flushPendingMetrics() {

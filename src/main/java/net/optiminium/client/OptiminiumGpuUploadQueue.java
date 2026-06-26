@@ -6,6 +6,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumSettings;
 
 import java.util.ArrayDeque;
@@ -139,6 +140,17 @@ public final class OptiminiumGpuUploadQueue {
 	@SubscribeEvent
 	public static void onFrame(RenderFrameEvent.Pre event) {
 		frameCounter++;
+		// When Sodium is present, skip Optiminium-managed texture upload queue.
+		// Sodium manages its own texture upload pipeline and this queue would
+		// duplicate work, causing extra texture binds, shader binds, and GL state churn.
+		if (OptiminiumSettings.isEnabled() && OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			// Clear any stale entries added by non-Sodium paths
+			if (!uploads.isEmpty()) {
+				uploads.clear();
+				enqueuedLocations.clear();
+			}
+			return;
+		}
 		int baseBudget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
 		if (baseBudget <= 0 || uploads.isEmpty()) {
 			return;

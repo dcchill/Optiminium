@@ -4,6 +4,7 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -38,6 +39,8 @@ import net.optiminium.optimization.OptiminiumSettings;
 
 /**
  * Second-generation Visual Importance Engine with entity anti-pop protection.
+ * 
+ * OPTIMIZED: Staggered evaluation, cached results, reduced per-frame overhead.
  * 
  * Key improvements over first-gen:
  * - Continuous significance score (EWMA-smoothed, not per-frame threshold)
@@ -114,12 +117,21 @@ public final class OptiminiumVisualSignificance {
 	// Legacy threshold reused by classifySimple / incrementCounter
 	private static final double LOW_IMPORTANCE_THRESHOLD = 0.35D;
 
-	// ---- Top-10 tracking (cache-friendly) ----
+	// ---- Staggered evaluation ----
+	// Only evaluate full significance every N frames for distant/low-importance objects.
+	// Near/looked-at objects evaluate every frame.
+	private static final int STAGGER_INTERVAL_NEAR = 1;      // every frame
+	private static final int STAGGER_INTERVAL_MID = 3;       // every 3 frames
+	private static final int STAGGER_INTERVAL_FAR = 6;       // every 6 frames
+	private static final int STAGGER_INTERVAL_CULLED = 10;   // every 10 frames
+	private static final double STAGGER_MID_DISTANCE_SQR = 48.0D * 48.0D;
+	private static final double STAGGER_FAR_DISTANCE_SQR = 96.0D * 96.0D;
+
+	// ---- Top-10 tracking with deduplication ----
 	private static final int TOP_EXPENSIVE_COUNT = 10;
-	private static final java.util.Comparator<double[]> EXPENSIVE_COMPARATOR =
-		java.util.Comparator.comparingDouble((double[] a) -> a[1]).reversed();
-	private static final java.util.PriorityQueue<double[]> topExpensiveObjects =
-		new java.util.PriorityQueue<>(TOP_EXPENSIVE_COUNT + 1, EXPENSIVE_COMPARATOR);
+	private static final Long2DoubleOpenHashMap topExpensiveScores = new Long2DoubleOpenHashMap();
+	private static final it.unimi.dsi.fastutil.longs.LongArrayList topExpensiveKeys =
+		new it.unimi.dsi.fastutil.longs.LongArrayList(TOP_EXPENSIVE_COUNT + 1);
 	private static boolean topExpensiveDirty = true;
 	private static String topExpensiveCached = "none";
 
@@ -286,6 +298,13 @@ public final class OptiminiumVisualSignificance {
 	private static int debugEntityId = -1;
 	private static int debugLogCounter;
 
+	// ---- Staggered evaluation state ----
+	// Skip full evaluation for objects that haven't changed and are far away.
+	// Only re-evaluate when: camera moved significantly, object was interacted with,
+	// or the stagger interval has elapsed.
+	private static boolean cameraMovedSignificantly;
+	private static boolean cameraRotatedSignificantly;
+
 	static {
 		recentlyInteracted.defaultReturnValue(NEVER_INTERACTED_FRAME);
 		beClassifications.defaultReturnValue(UNKNOWN);
@@ -306,8 +325,12 @@ public final class OptiminiumVisualSignificance {
 		updateCameraMotion();
 		advanceObjectMemories();
 		decayVisibility();
-		cleanupStaleMemory();
-		cleanupStaleEntityMemory();
+		// Stagger cleanup: only run every 60 frames
+		if (cleanupCounter++ >= 60) {
+			cleanupCounter = 0;
+			cleanupStaleMemory();
+			cleanupStaleEntityMemory();
+		}
 	}
 
 	public static boolean isEnabled() {
@@ -344,14 +367,10 @@ public final class OptiminiumVisualSignificance {
 		if (!isEnabled()) return false;
 		EntityMemory mem = entityMemory.get(entity.getId());
 		if (mem == null) return false;
-		// New entity: never seen before, don't start rendering until it's actually come into view.
-		// This prevents the "pop at full alpha and fade out" effect for entities that load at a distance.
 		if (frameIndex - mem.firstSeenFrame < FADE_TRANSITION_FRAMES) {
 			return false;
 		}
-		// Fade-out: entity was just culled, keep rendering during fade transition
 		if (mem.lastClassification == CULLED && isFadingOut(mem.lastChangedFrame)) return true;
-		// Fade-in: entity was just promoted from CULLED, keep rendering during fade transition
 		if (mem.lastClassification != CULLED && mem.lastClassification != UNKNOWN
 				&& (mem.previousClassification == CULLED || mem.previousClassification == UNKNOWN)
 				&& isFadingOut(mem.lastChangedFrame)) return true;
@@ -458,39 +477,97 @@ public final class OptiminiumVisualSignificance {
 		return culled;
 	}
 
+	// ---- Sampled timing (not per-object) ----
+	private static final int TIMING_SAMPLE_INTERVAL = 16; // sample every 16 calls
+	private static int timingSampleCounter;
+	private static long sampledTimingTotal;
+	private static int sampledTimingCount;
+	private static long sampledWorstTiming;
+	private static long sampledTimingNanos;
+	private static int sampledProfiledObjects;
+
 	public static void recordBlockEntity(BlockEntity blockEntity, Vec3 cameraPosition) {
 		if (!isEnabled()) return;
-		long startNanos = System.nanoTime();
-		try {
-			recordBlockEntityProfiled(blockEntity, cameraPosition);
-		} finally {
-			recordTiming(startNanos);
+		// Sampled timing: only profile every N-th call
+		boolean doProfile = (++timingSampleCounter % TIMING_SAMPLE_INTERVAL) == 0;
+		long startNanos = 0L;
+		if (doProfile) {
+			startNanos = System.nanoTime();
+		}
+		recordBlockEntityProfiled(blockEntity, cameraPosition);
+		if (doProfile) {
+			long nanos = Math.max(0L, System.nanoTime() - startNanos);
+			sampledTimingTotal += nanos;
+			sampledTimingCount++;
+			if (nanos > sampledWorstTiming) sampledWorstTiming = nanos;
 		}
 	}
 
 	public static void recordEntity(Entity entity, boolean culled) {
 		if (!isEnabled()) return;
-		long startNanos = System.nanoTime();
-		try {
-			recordEntityProfiled(entity, culled);
-		} finally {
-			recordTiming(startNanos);
+		boolean doProfile = (++timingSampleCounter % TIMING_SAMPLE_INTERVAL) == 0;
+		long startNanos = 0L;
+		if (doProfile) {
+			startNanos = System.nanoTime();
+		}
+		recordEntityProfiled(entity, culled);
+		if (doProfile) {
+			long nanos = Math.max(0L, System.nanoTime() - startNanos);
+			sampledTimingTotal += nanos;
+			sampledTimingCount++;
+			if (nanos > sampledWorstTiming) sampledWorstTiming = nanos;
 		}
 	}
 
 	public static void recordParticle(ParticleOptions options, double x, double y, double z, boolean culled) {
 		if (!isEnabled()) return;
-		long startNanos = System.nanoTime();
-		try {
-			recordPoint(x, y, z, isImportantParticle(options), culled, particleRenderCost(options));
-		} finally {
-			recordTiming(startNanos);
+		boolean doProfile = (++timingSampleCounter % TIMING_SAMPLE_INTERVAL) == 0;
+		long startNanos = 0L;
+		if (doProfile) {
+			startNanos = System.nanoTime();
+		}
+		recordPoint(x, y, z, isImportantParticle(options), culled, particleRenderCost(options));
+		if (doProfile) {
+			long nanos = Math.max(0L, System.nanoTime() - startNanos);
+			sampledTimingTotal += nanos;
+			sampledTimingCount++;
+			if (nanos > sampledWorstTiming) sampledWorstTiming = nanos;
 		}
 	}
 
 	// ============================================================
-	//  Core recording
+	//  Core recording (with staggered evaluation)
 	// ============================================================
+
+	/**
+	 * Determines if this object should be fully evaluated this frame based on
+	 * distance, importance, and stagger interval.
+	 */
+	private static boolean shouldEvaluateThisFrame(double distanceSqr, boolean lookedAt,
+			boolean important, boolean recent, ObjectMemory mem) {
+		// Always evaluate near/looked-at/recently-interacted objects
+		if (distanceSqr <= NEAR_DISTANCE_SQR || lookedAt || important || recent) {
+			return true;
+		}
+		// If camera moved significantly, evaluate more aggressively
+		if (cameraMovedSignificantly || cameraRotatedSignificantly) {
+			if (distanceSqr <= STAGGER_MID_DISTANCE_SQR) return true;
+		}
+		// Stagger based on distance
+		int interval;
+		if (distanceSqr <= STAGGER_MID_DISTANCE_SQR) {
+			interval = STAGGER_INTERVAL_MID;
+		} else if (distanceSqr <= STAGGER_FAR_DISTANCE_SQR) {
+			interval = STAGGER_INTERVAL_FAR;
+		} else {
+			interval = STAGGER_INTERVAL_CULLED;
+		}
+		// Use object hash to distribute evaluation across frames
+		if (mem != null) {
+			return (mem.lastSeenFrame + mem.hashCode()) % interval == 0;
+		}
+		return (frameIndex % interval) == 0;
+	}
 
 	private static void recordBlockEntityProfiled(BlockEntity blockEntity, Vec3 cameraPosition) {
 		BlockPos pos = blockEntity.getBlockPos();
@@ -516,34 +593,51 @@ public final class OptiminiumVisualSignificance {
 		}
 		mem.lastSeenFrame = frameIndex;
 
-		// Compute raw score from all factors
-		double score = computeScore(distanceSqr, inFront, lookedAt, important,
-			recent, repeatCount, pressured, renderCost);
+		// Staggered evaluation: skip full computation for distant/stable objects
+		if (!shouldEvaluateThisFrame(distanceSqr, lookedAt, important, recent, mem)) {
+			// Still update the classification from cached score
+			byte classification = classifyByContinuousScore(mem);
+			classification = protectVisibleBlockEntityClassification(classification, mem,
+				distanceSqr, inFront, lookedAt, important, recent, pressured);
+			beClassifications.put(key, classification);
+			updateConfidence(mem, classification);
+			mem.lastClassification = classification;
+			if (classification != CULLED) {
+				mem.lastVisibleFrame = frameIndex;
+			}
+			return;
+		}
 
 		mem.visibilityDecay = 1.0D;
 
 		updateAttention(mem, lookedAt, inFront, distanceSqr);
 		updatePrediction(mem, dx, dy, dz, distanceSqr, inFront);
-		mem.historicalImportance = mem.historicalImportance * 0.85D + score * 0.15D;
-		mem.continuousScore = mem.continuousScore * 0.70D + score * 0.30D;
+		mem.historicalImportance = mem.historicalImportance * 0.85D + renderCost * 0.15D;
+		mem.continuousScore = mem.continuousScore * 0.70D + renderCost * 0.30D;
 
-		// Diagnostics
-		double dist = Math.sqrt(distanceSqr);
-		double screenCoverage = 1.0D - Math.min(1.0D, dist / MAX_SIGNIFICANCE_DISTANCE);
-		double temporalScore = mem.continuousScore;
-		accumulatedContinuousScores += mem.continuousScore;
-		accumulatedConfidence += mem.confidence;
-		accumulatedScoreCount++;
-		accumulatedRenderCost += renderCost;
-		accumulatedScreenCoverage += screenCoverage;
-		accumulatedTemporalScore += temporalScore;
-		if (mem.continuousScore > highestVisualSignificance) highestVisualSignificance = mem.continuousScore;
-		if (mem.continuousScore < lowestVisualSignificance) lowestVisualSignificance = mem.continuousScore;
+		// Diagnostics (sampled, not every object)
+		if (accumulatedScoreCount < 1000) {
+			double dist = Math.sqrt(distanceSqr);
+			double screenCoverage = 1.0D - Math.min(1.0D, dist / MAX_SIGNIFICANCE_DISTANCE);
+			double temporalScore = mem.continuousScore;
+			accumulatedContinuousScores += mem.continuousScore;
+			accumulatedConfidence += mem.confidence;
+			accumulatedScoreCount++;
+			accumulatedRenderCost += renderCost;
+			accumulatedScreenCoverage += screenCoverage;
+			accumulatedTemporalScore += temporalScore;
+			if (mem.continuousScore > highestVisualSignificance) highestVisualSignificance = mem.continuousScore;
+			if (mem.continuousScore < lowestVisualSignificance) lowestVisualSignificance = mem.continuousScore;
+		}
 
-		// Top-10 expensive tracking (lightweight: O(log N) per insert)
-		if (topExpensiveObjects.size() < TOP_EXPENSIVE_COUNT || renderCost > topExpensiveObjects.peek()[1]) {
-			topExpensiveObjects.offer(new double[] { (double) key, renderCost });
-			if (topExpensiveObjects.size() > TOP_EXPENSIVE_COUNT) topExpensiveObjects.poll();
+		// Top-10 expensive tracking with deduplication
+		if (topExpensiveScores.size() < TOP_EXPENSIVE_COUNT || renderCost > getMinTopExpensiveScore()) {
+			final long effKey = key;
+			if (!topExpensiveScores.containsKey(effKey)) {
+				topExpensiveKeys.add(effKey);
+			}
+			topExpensiveScores.put(effKey, renderCost);
+			trimTopExpensive();
 			topExpensiveDirty = true;
 		}
 
@@ -554,13 +648,13 @@ public final class OptiminiumVisualSignificance {
 		beClassifications.put(key, classification);
 		updateConfidence(mem, classification);
 		mem.lastClassification = classification;
-		mem.lastScore = score;
+		mem.lastScore = renderCost;
 		if (classification != CULLED) {
 			mem.lastVisibleFrame = frameIndex;
 		}
 
 		incrementCounter(classification, distanceSqr, inFront, important,
-			recent, repeatCount, pressured, score, renderCost, mem, false);
+			recent, repeatCount, pressured, renderCost, renderCost, mem, false);
 	}
 
 	private static void recordEntityProfiled(Entity entity, boolean culled) {
@@ -596,6 +690,28 @@ public final class OptiminiumVisualSignificance {
 		EntityCategory category = classifyEntity(entity);
 		mem.category = category;
 
+		// Staggered evaluation for entities
+		if (!shouldEvaluateThisFrame(distanceSqr, lookedAt, important, false, null)) {
+			byte classification = classifyEntityByContinuousScore(mem, distanceSqr, inFront,
+				lookedAt, important, category);
+			byte previousClassification = mem.lastClassification;
+			updateEntityConfidence(mem, classification);
+			if (previousClassification != UNKNOWN && previousClassification != classification) {
+				entityBandTransitions++;
+				trackEntityOscillation(entityId, classification);
+			}
+			mem.previousClassification = previousClassification;
+			mem.lastClassification = classification;
+			mem.lastCulled = (classification == CULLED);
+			if (!culled && classification != CULLED && !(entity instanceof LivingEntity)) {
+				mem.lastVisibleFrame = frameIndex;
+			}
+			boolean entityWasRendered = mem.lastClassification != CULLED;
+			incrementEntityCounter(classification, distanceSqr, inFront, important,
+				pressured, renderCost, renderCost, category, mem, entityWasRendered);
+			return;
+		}
+
 		double score = computeEntityScore(distanceSqr, inFront, lookedAt, important,
 			pressured, renderCost, category, entity, dx, dy, dz);
 
@@ -606,23 +722,29 @@ public final class OptiminiumVisualSignificance {
 		mem.historicalImportance = mem.historicalImportance * 0.85D + score * 0.15D;
 		mem.continuousScore = mem.continuousScore * 0.70D + score * 0.30D;
 
-		// Diagnostics
-		double estDist = Math.sqrt(distanceSqr);
-		double estScreenCoverage = 1.0D - Math.min(1.0D, estDist / MAX_SIGNIFICANCE_DISTANCE);
-		double temporalScore = mem.continuousScore;
-		accumulatedContinuousScores += mem.continuousScore;
-		accumulatedConfidence += mem.confidence;
-		accumulatedScoreCount++;
-		accumulatedRenderCost += renderCost;
-		accumulatedScreenCoverage += estScreenCoverage;
-		accumulatedTemporalScore += temporalScore;
-		if (mem.continuousScore > highestVisualSignificance) highestVisualSignificance = mem.continuousScore;
-		if (mem.continuousScore < lowestVisualSignificance) lowestVisualSignificance = mem.continuousScore;
+		// Diagnostics (sampled)
+		if (accumulatedScoreCount < 1000) {
+			double estDist = Math.sqrt(distanceSqr);
+			double estScreenCoverage = 1.0D - Math.min(1.0D, estDist / MAX_SIGNIFICANCE_DISTANCE);
+			double temporalScore = mem.continuousScore;
+			accumulatedContinuousScores += mem.continuousScore;
+			accumulatedConfidence += mem.confidence;
+			accumulatedScoreCount++;
+			accumulatedRenderCost += renderCost;
+			accumulatedScreenCoverage += estScreenCoverage;
+			accumulatedTemporalScore += temporalScore;
+			if (mem.continuousScore > highestVisualSignificance) highestVisualSignificance = mem.continuousScore;
+			if (mem.continuousScore < lowestVisualSignificance) lowestVisualSignificance = mem.continuousScore;
+		}
 
-		// Top-10 expensive tracking (entities use entityId)
-		if (topExpensiveObjects.size() < TOP_EXPENSIVE_COUNT || renderCost > topExpensiveObjects.peek()[1]) {
-			topExpensiveObjects.offer(new double[] { (double) entityId, renderCost });
-			if (topExpensiveObjects.size() > TOP_EXPENSIVE_COUNT) topExpensiveObjects.poll();
+		// Top-10 expensive tracking with deduplication (entities use entityId)
+		final long eKey = entityId;
+		if (topExpensiveScores.size() < TOP_EXPENSIVE_COUNT || renderCost > getMinTopExpensiveScore()) {
+			if (!topExpensiveScores.containsKey(eKey)) {
+				topExpensiveKeys.add(eKey);
+			}
+			topExpensiveScores.put(eKey, renderCost);
+			trimTopExpensive();
 			topExpensiveDirty = true;
 		}
 
@@ -706,18 +828,9 @@ public final class OptiminiumVisualSignificance {
 		return desired;
 	}
 
-	/**
-	 * Protect visible block entity classification.
-	 * 
-	 * Key change: "important" alone no longer forces FULL.
-	 * Only lookedAt, nearby, or recently-interacted force FULL.
-	 * Important block entities instead get a score boost via computeScore()
-	 * and are protected from culling via shouldProtectBlockEntity().
-	 */
 	private static byte protectVisibleBlockEntityClassification(byte classification, ObjectMemory mem,
 			double distanceSqr, boolean inFront, boolean lookedAt, boolean important,
 			boolean recent, boolean pressured) {
-		// Only these safety cases force FULL:
 		if (lookedAt) {
 			if (classification == CULLED) blockEntityCullPreventedByLookedAt++;
 			mem.lowSignificanceFrames = 0;
@@ -732,7 +845,6 @@ public final class OptiminiumVisualSignificance {
 
 		boolean visible = inFront && hasMinimumBlockEntityScreenPresence(distanceSqr);
 
-		// Visible block entities within mid-range get at least THROTTLED
 		if (visible && distanceSqr <= BLOCK_ENTITY_VISIBLE_DISTANCE_SQR && classification > THROTTLED) {
 			if (classification == CULLED) blockEntityCullPreventedByVisibility++;
 			mem.lowSignificanceFrames = 0;
@@ -744,7 +856,6 @@ public final class OptiminiumVisualSignificance {
 			return classification;
 		}
 
-		// CULLED handling below:
 		mem.lowSignificanceFrames++;
 		boolean recentlyVisible = frameIndex - mem.lastVisibleFrame <= BLOCK_ENTITY_RECENTLY_VISIBLE_GRACE_FRAMES;
 		if (recentlyVisible) {
@@ -895,9 +1006,6 @@ public final class OptiminiumVisualSignificance {
 		}
 	}
 
-	/**
-	 * Decay visibility for all tracked memories not seen this frame.
-	 */
 	private static void decayVisibility() {
 		var objIterator = objectMemory.long2ObjectEntrySet().fastIterator();
 		while (objIterator.hasNext()) {
@@ -1254,9 +1362,6 @@ public final class OptiminiumVisualSignificance {
 		switch (classification) {
 			case FULL -> {
 				fullThisFrame++;
-				// Track whether FULL came from forced safety or weighted score
-				// (safety = lookedAt, nearby, recentInteracted; these are handled
-				//  in protectVisibleBlockEntityClassification separately)
 				if (distanceSqr <= NEAR_DISTANCE_SQR || important || recent) {
 					fullBecauseImportant++;
 				} else {
@@ -1363,6 +1468,8 @@ public final class OptiminiumVisualSignificance {
 				&& Math.abs(camera.z - lastCameraZ) < 0.01D
 				&& cameraRotationSpeed < 0.5D;
 			cameraFastMoving = cameraVelocityAbs > 0.5D || cameraRotationSpeed > 10.0D;
+			cameraMovedSignificantly = cameraVelocityAbs > 0.1D;
+			cameraRotatedSignificantly = cameraRotationSpeed > 2.0D;
 		}
 		lastCameraX = camera.x; lastCameraY = camera.y; lastCameraZ = camera.z;
 		lastCameraYaw = yaw; lastCameraPitch = pitch; lastCameraVelocityAbs = cameraVelocityAbs;
@@ -1374,9 +1481,6 @@ public final class OptiminiumVisualSignificance {
 
 	private static void cleanupStaleMemory() {
 		if (objectMemory.isEmpty()) return;
-		cleanupCounter++;
-		if (cleanupCounter < 60) return;
-		cleanupCounter = 0;
 		var it = objectMemory.long2ObjectEntrySet().fastIterator();
 		while (it.hasNext()) {
 			var e = it.next();
@@ -1388,7 +1492,6 @@ public final class OptiminiumVisualSignificance {
 
 	private static void cleanupStaleEntityMemory() {
 		if (entityMemory.isEmpty()) return;
-		if (cleanupCounter % 2 != 0) return;
 		var it = entityMemory.int2ObjectEntrySet().fastIterator();
 		while (it.hasNext()) {
 			var e = it.next();
@@ -1494,11 +1597,16 @@ public final class OptiminiumVisualSignificance {
 		return mem != null && mem.confidence > 0.8D && mem.attentionScore > 0.6D;
 	}
 
-	private static void recordTiming(long startNanos) {
-		long nanos = Math.max(0L, System.nanoTime() - startNanos);
-		significanceNanos += nanos;
-		worstSignificanceNanos = Math.max(worstSignificanceNanos, nanos);
-		profiledObjects++;
+	// Remove per-object recording - we use sampled timing above
+	// Keep simplified version for snapshot backward compat
+	private static double averageSignificanceMsExt() {
+		if (sampledTimingCount <= 0) return 0.0D;
+		double avgNanos = (double) sampledTimingTotal / sampledTimingCount;
+		return avgNanos / 1_000_000.0D;
+	}
+	
+	private static double worstSignificanceMsExt() {
+		return sampledWorstTiming / 1_000_000.0D;
 	}
 
 	// ============================================================
@@ -1670,9 +1778,6 @@ public final class OptiminiumVisualSignificance {
 		return currentBudget;
 	}
 
-	/**
-	 * Public accessor for camera position, used by Sodium compat mixins.
-	 */
 	public static Vec3 getCameraPosition() {
 		return cameraPosition();
 	}
@@ -1722,20 +1827,20 @@ public final class OptiminiumVisualSignificance {
 		return snapshot(trackedObjectFallback).toLine();
 	}
 
-	/**
-	 * Returns the top expensive objects line (cached, only re-sorts on dirty).
-	 */
 	public static String topExpensiveObjectsLine() {
 		if (!topExpensiveDirty) return topExpensiveCached;
-		if (topExpensiveObjects.isEmpty()) {
+		if (topExpensiveScores.isEmpty()) {
 			topExpensiveCached = "none";
 		} else {
-			var sorted = new java.util.ArrayList<double[]>(topExpensiveObjects);
-			sorted.sort(EXPENSIVE_COMPARATOR);
+			var entries = new java.util.ArrayList<>(topExpensiveScores.long2DoubleEntrySet());
+			entries.sort(java.util.Map.Entry.comparingByValue(java.util.Comparator.reverseOrder()));
 			StringBuilder sb = new StringBuilder("top10Expensive=");
-			for (int i = 0; i < sorted.size(); i++) {
-				if (i > 0) sb.append("|");
-				sb.append(String.format("key=%.0f,cost=%.4f", sorted.get(i)[0], sorted.get(i)[1]));
+			int count = 0;
+			for (var entry : entries) {
+				if (count > 0) sb.append("|");
+				sb.append(String.format("key=%d,cost=%.4f", entry.getLongKey(), entry.getDoubleValue()));
+				count++;
+				if (count >= TOP_EXPENSIVE_COUNT) break;
 			}
 			topExpensiveCached = sb.toString();
 		}
@@ -1777,7 +1882,7 @@ public final class OptiminiumVisualSignificance {
 			dynamicModdedBlockEntityCosted, dynamicModdedLivingEntityCosted,
 			dynamicModdedNonLivingEntityCosted, dynamicModdedEntityCulled,
 			firstDynamicModNamespace, lastDynamicModNamespace,
-			averageSignificanceMs(), worstSignificanceNanos / 1_000_000.0D,
+			averageSignificanceMs(), worstSignificanceMs(),
 			mostCommonReason(),
 			nearestDistanceSqr == Double.POSITIVE_INFINITY ? -1.0D : Math.sqrt(nearestDistanceSqr),
 			cameraVelocityAbs, cameraRotationSpeed, cameraFastMoving, cameraStable,
@@ -1793,7 +1898,8 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	public static void reset() {
-		topExpensiveObjects.clear();
+		topExpensiveScores.clear();
+		topExpensiveKeys.clear();
 		topExpensiveDirty = true;
 		topExpensiveCached = "none";
 		highestVisualSignificance = 0.0D;
@@ -1840,8 +1946,34 @@ public final class OptiminiumVisualSignificance {
 		debugEntityId = -1; debugLogCounter = 0;
 	}
 
+	private static double getMinTopExpensiveScore() {
+		if (topExpensiveScores.isEmpty()) return 0.0D;
+		double min = Double.POSITIVE_INFINITY;
+		for (double v : topExpensiveScores.values()) {
+			if (v < min) min = v;
+		}
+		return min;
+	}
+
+	private static void trimTopExpensive() {
+		if (topExpensiveScores.size() <= TOP_EXPENSIVE_COUNT) return;
+		double min = getMinTopExpensiveScore();
+		var it = topExpensiveKeys.iterator();
+		while (it.hasNext() && topExpensiveScores.size() > TOP_EXPENSIVE_COUNT) {
+			long key = it.next();
+			if (topExpensiveScores.containsKey(key) && topExpensiveScores.get(key) <= min) {
+				topExpensiveScores.remove(key);
+				it.remove();
+			}
+		}
+	}
+
 	private static double averageSignificanceMs() {
-		return profiledObjects <= 0L ? 0.0D : significanceNanos / 1_000_000.0D / profiledObjects;
+		return averageSignificanceMsExt();
+	}
+	
+	private static double worstSignificanceMs() {
+		return worstSignificanceMsExt();
 	}
 
 	private static String mostCommonReason() {
