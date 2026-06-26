@@ -59,11 +59,11 @@ The engine looks at things like distance, screen size, whether the player is loo
 
 It then rates the object into these categories.
 
-FULL → render normally 
-THROTTLED → update less often 
-REUSED → reuse the last visual state 
-PROXY → use a cheaper version later 
-CULLED → skip it when it is safe
+-   FULL → render normally 
+-   THROTTLED → update less often 
+-   REUSED → reuse the last visual state 
+-   PROXY → use a cheaper version later 
+-   CULLED → skip it when it is safe
 
 The important part is that Optiminium is not trying to make everything disappear. That would technically improve FPS, but it would feel awful. The goal is to make the scene cheaper while keeping it visually stable.
 
