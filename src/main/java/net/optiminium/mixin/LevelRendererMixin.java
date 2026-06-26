@@ -35,6 +35,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 
@@ -107,7 +109,7 @@ public abstract class LevelRendererMixin {
 		}
 
 		this.minecraft.getProfiler().popPush("upload");
-		optiminium$uploadPendingChunks();
+		optiminium$uploadPendingChunks(camera);
 		this.minecraft.getProfiler().popPush("optiminium_schedule_async_compile");
 
 		for (int scheduled = 0; scheduled < candidateCount; scheduled++) {
@@ -126,12 +128,6 @@ public abstract class LevelRendererMixin {
 	@Inject(method = "renderLevel", at = @At("HEAD"))
 	private void optiminium$recordRawVisibleBlockEntitiesForFrame(DeltaTracker deltaTracker, boolean renderBlockOutline, Camera camera, GameRenderer gameRenderer, LightTexture lightTexture,
 			Matrix4f frustumMatrix, Matrix4f projectionMatrix, CallbackInfo callback) {
-		// Under Sodium: do NOT call upload admission here.
-		// Sodium manages its own chunk mesh upload pipeline. The Optiminium
-		// upload admission queue is never populated under Sodium because
-		// the vanilla SectionRenderDispatcher.toUpload is empty (Sodium uses
-		// its own internal upload queue). Calling processUploads() with
-		// zero pending entries just burns CPU for no benefit.
 		// Under Sodium: do NOT call upload admission here.
 		// Sodium manages its own chunk mesh upload pipeline. The Optiminium
 		// upload admission queue is never populated under Sodium because
@@ -180,8 +176,16 @@ public abstract class LevelRendererMixin {
 		OptiminiumGpuOptimizer.recordRawVisibleBlockEntitiesBeforeCulling(count);
 	}
 
+	/**
+	 * Collects all non-dirty sections that have a pending upload task.
+	 * Pairs each upload with its correct section origin for proper deduplication.
+	 * 
+	 * Fixes the bug where ALL uploads were incorrectly tagged with the same
+	 * section origin (from the first non-dirty section found), which defeated
+	 * the enqueuedSections deduplication in OptiminiumChunkUploadAdmission.
+	 */
 	@Unique
-	private void optiminium$uploadPendingChunks() {
+	private void optiminium$uploadPendingChunks(Camera camera) {
 		// With Sodium, this queue is empty because Sodium doesn't use the
 		// vanilla SectionRenderDispatcher.toUpload path. Sodium manages its
 		// own upload queue internally.
@@ -190,19 +194,37 @@ public abstract class LevelRendererMixin {
 		}
 
 		Queue<Runnable> uploads = ((SectionRenderDispatcherAccessor)this.sectionRenderDispatcher).optiminium$getToUpload();
+		if (uploads.isEmpty()) {
+			return;
+		}
 
+		// Collect non-dirty sections in the SAME order they appear in visibleSections.
+		// Vanilla sets sections non-dirty immediately before queuing each upload,
+		// so the order of non-dirty sections matches the order of upload tasks.
+		List<SectionRenderDispatcher.RenderSection> uploadedSections = new ArrayList<>();
+		for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
+			if (!section.isDirty() && section.getCompiled() != null) {
+				uploadedSections.add(section);
+			}
+			if (uploadedSections.size() >= uploads.size()) {
+				break;
+			}
+		}
+
+		int sectionIndex = 0;
 		while (!uploads.isEmpty()) {
 			Runnable upload = uploads.poll();
 			if (upload == null) break;
 
 			BlockPos sectionOrigin = null;
 			boolean isDirtyFromPlayer = false;
-			for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
-				if (!section.isDirty()) {
-					sectionOrigin = section.getOrigin();
-					isDirtyFromPlayer = section.isDirtyFromPlayer();
-					break;
-				}
+
+			// Pair each upload with the next non-dirty section's origin
+			if (sectionIndex < uploadedSections.size()) {
+				SectionRenderDispatcher.RenderSection section = uploadedSections.get(sectionIndex);
+				sectionOrigin = section.getOrigin();
+				isDirtyFromPlayer = section.isDirtyFromPlayer();
+				sectionIndex++;
 			}
 
 			OptiminiumChunkUploadAdmission.enqueue(upload, sectionOrigin, isDirtyFromPlayer);
@@ -233,6 +255,27 @@ public abstract class LevelRendererMixin {
 			OptiminiumRenderProfiler.recordTranslucentRender();
 		} else if (renderType == RenderType.solid() || renderType == RenderType.cutoutMipped() || renderType == RenderType.cutout()) {
 			OptiminiumRenderProfiler.recordTerrainRender();
+		}
+
+		// Priority 4: Skip empty render layers to avoid unnecessary GL state transitions.
+		// The vanilla renderSectionLayer iterates visibleSections and draws compiled
+		// sections that have geometry for this layer. If no visible section has a
+		// compiled result, we can skip the entire GL state setup/teardown for this layer.
+		// This avoids redundant shader binds, texture binds, and buffer binds.
+		//
+		// Heuristic: if there are no visible sections with compiled data at all,
+		// no layer can have geometry. This is a cheap check (no per-section layer scan).
+		if (OptiminiumSettings.isEnabled() && OptiminiumSettings.isGpuOptimizer()) {
+			boolean hasAnyCompiled = false;
+			for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
+				if (section.getCompiled() != null) {
+					hasAnyCompiled = true;
+					break;
+				}
+			}
+			if (!hasAnyCompiled) {
+				callback.cancel();
+			}
 		}
 	}
 
@@ -282,13 +325,54 @@ public abstract class LevelRendererMixin {
 		double distance = Math.sqrt(Math.max(distanceSqr, 0.0001D));
 		Vector3f look = camera.getLookVector();
 		double facing = Math.max(0.0D, (dx * look.x + dy * look.y + dz * look.z) / distance);
+
+		// Base priority: distance and view cone (lower = more urgent)
 		double priority = distanceSqr - facing * 2048.0D;
+
+		// Player-interacted sections get highest priority
 		if (section.isDirtyFromPlayer()) {
 			priority -= 4096.0D;
 		}
+
+		// Occluded sections can be delayed
 		if (OptiminiumSettings.isOcclusionRebuildPriority() && optiminium$isOccluded(cameraPosition, centerX, centerY, centerZ)) {
 			priority += 8192.0D;
 		}
+
+		// ---- Priority 3: Section Significance scoring ----
+		// Use the existing significance system to further refine rebuild order.
+		// The priority is a lower-is-better value. We apply a significance bonus
+		// where HIGH/CRITICAL sections get a large boost, DEFERRED sections get a penalty.
+		if (OptiminiumSectionSignificance.isEnabled() && origin != null) {
+			net.optiminium.client.OptiminiumSectionSignificance.SectionResult sigResult =
+				OptiminiumSectionSignificance.evaluate(origin, camera, section.isDirtyFromPlayer());
+			double score = sigResult.score(); // 0.0 (insignificant) -> 1.0 (critical)
+			var band = sigResult.band();
+
+			// Map significance to a priority bonus:
+			// - CRITICAL (score > 0.70): large bonus (scheduled first)
+			// - HIGH (score > 0.50): moderate bonus
+			// - NORMAL (score > 0.30): small bonus
+			// - BACKGROUND (score > 0.15): slight bonus
+			// - DEFERRED (score <= 0.15): penalty (scheduled last)
+			//
+			// Values are chosen to be large enough to affect ordering vs distanceSqr
+			// but not so large as to override player-interaction logic.
+			double sigBonus = switch (band) {
+				case CRITICAL -> -16384.0D; // Highest priority
+				case HIGH    -> -8192.0D;
+				case NORMAL  -> -2048.0D;
+				case BACKGROUND -> 0.0D;
+				case DEFERRED -> 4096.0D; // Delayed
+			};
+
+			priority += sigBonus;
+
+			// Deterministic tiebreaker: use section origin hash within the same
+			// significance band to ensure consistent ordering across frames.
+			priority += (origin.hashCode() & 0xFF) * 0.001D;
+		}
+
 		return priority;
 	}
 

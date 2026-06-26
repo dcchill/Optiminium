@@ -8,8 +8,8 @@ import net.optiminium.client.OptiminiumSectionSignificance.SectionResult;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Chunk Upload Admission Control.
@@ -63,21 +63,37 @@ public final class OptiminiumChunkUploadAdmission {
 	private static final Deque<UploadEntry> deferredQueue = new ArrayDeque<>();
 
 	// ---- Deduplication ----
-	private static final Set<BlockPos> enqueuedSections = new HashSet<>();
+	// Maps section origin -> frame when it was enqueued.
+	// Allows eviction of stale entries that were queued but never actually
+	// uploaded (e.g., because the admission system deferred or dropped them).
+	private static final Map<BlockPos, Long> enqueuedSections = new HashMap<>();
 
 	// ---- Frame tracking ----
 	private static long frameCounter;
 	private static long lastFrameDeferredCount;
 
+	// ---- Dedup eviction ----
+	private static final int DEDUP_EVICT_INTERVAL = 60; // evict stale entries every 60 frames
+	private static final int DEDUP_MAX_STALE_FRAMES = 120; // entries older than this are evicted
+	private static long lastDedupEvictFrame;
+
 	// ---- Burst prevention ----
 	private static int consecutiveHighDeferralFrames;
-	private static int maxAdmittedThisFrame;
 	private static int admittedThisFrame;
 	private static int deferredThisFrame;
 	private static boolean burstPreventionActive;
 
 	// ---- Budget tracking ----
 	private static int baseUploadBudget;
+
+	// ---- Priority 5: Frame-time aware upload pacing ----
+	// Monitors the actual time spent uploading per frame and dynamically
+	// reduces the budget if uploads are consuming too much frame time.
+	private static long uploadElapsedThisFrame; // nanos spent on uploads this frame
+	private static int uploadCountThisFrame;    // upload tasks executed this frame
+	private static long maxUploadNanosPerFrame; // max nanos to spend on uploads per frame
+	private static int consecutiveBudgetCutFrames;
+	private static int uploadedThisRun;         // total uploads processed in this processUploads call
 
 	// ---- Constants ----
 	private static final int MAX_PENDING_UPLOADS = 512;
@@ -86,6 +102,13 @@ public final class OptiminiumChunkUploadAdmission {
 	private static final int BURST_SPREAD_FRAMES = 4; // spread across this many frames
 	private static final int MIN_URGENT_RESERVE = 1; // always reserve at least 1 slot for urgent
 	private static final int PROMOTION_INTERVAL_FRAMES = 10; // re-evaluate every N frames
+
+	// Priority 5: frame-time aware pacing constants
+	private static final long MAX_UPLOAD_NANOS_DEFAULT = 2_000_000L; // 2ms default max
+	private static final long MAX_UPLOAD_NANOS_STRICT = 500_000L;   // 0.5ms when under pressure
+	private static final long BUDGET_CUT_THRESHOLD_NANOS = 1_000_000L; // 1ms triggers cut
+	private static final int CONSECUTIVE_CUT_LIMIT = 3; // max consecutive cuts
+	private static final int BUDGET_RECOVERY_FRAMES = 10; // frames before budget recovery
 
 	private OptiminiumChunkUploadAdmission() {
 	}
@@ -101,6 +124,17 @@ public final class OptiminiumChunkUploadAdmission {
 		frameCounter++;
 		admittedThisFrame = 0;
 		deferredThisFrame = 0;
+		uploadElapsedThisFrame = 0L;
+		uploadCountThisFrame = 0;
+
+		// Priority 5: Recover upload budget if we've had enough quiet frames
+		if (consecutiveBudgetCutFrames > 0 && uploadElapsedThisFrame == 0) {
+			consecutiveBudgetCutFrames--;
+		}
+
+		// Adjust max upload nanos based on current pressure
+		maxUploadNanosPerFrame = OptiminiumGpuOptimizer.hasVisualSignificancePressure()
+			? MAX_UPLOAD_NANOS_STRICT : MAX_UPLOAD_NANOS_DEFAULT;
 
 		// Update Section Significance frame state
 		OptiminiumSectionSignificance.onFrameStart();
@@ -133,8 +167,15 @@ public final class OptiminiumChunkUploadAdmission {
 	 */
 	public static void enqueue(Runnable upload, BlockPos sectionOrigin, boolean isDirtyFromPlayer) {
 		if (sectionOrigin != null) {
-			if (enqueuedSections.contains(sectionOrigin)) {
-				return; // Deduplicate: same section already queued
+			// Evict stale dedup entries periodically to prevent leaks
+			if (frameCounter - lastDedupEvictFrame >= DEDUP_EVICT_INTERVAL) {
+				lastDedupEvictFrame = frameCounter;
+				evictStaleDedupEntries();
+			}
+			if (enqueuedSections.containsKey(sectionOrigin)) {
+				// Deduplicate: same section already queued (or pending admission)
+				OptiminiumGpuOptimizer.recordDuplicateUploadRequest("alreadyPending");
+				return;
 			}
 		}
 
@@ -161,7 +202,7 @@ public final class OptiminiumChunkUploadAdmission {
 		enqueueByBand(entry);
 
 		if (sectionOrigin != null) {
-			enqueuedSections.add(sectionOrigin);
+			enqueuedSections.put(sectionOrigin, frameCounter);
 		}
 	}
 
@@ -186,44 +227,48 @@ public final class OptiminiumChunkUploadAdmission {
 
 		// Always reserve at least 1 slot for urgent uploads
 		int urgentReserve = MIN_URGENT_RESERVE;
-		int admissionBudget = Math.max(urgentReserve, effectiveBudget - urgentReserve);
 
 		int processed = 0;
 
 		// Phase 1: Process CRITICAL uploads (unbounded, always admitted)
 		processed += processQueue(criticalQueue, Integer.MAX_VALUE, processed);
 
-		// Phase 2: Process HIGH uploads (within remaining budget)
+		// Phase 2: Process HIGH uploads (within remaining budget, with frame-time cap)
+		uploadedThisRun = processed;
 		int remaining = effectiveBudget - processed;
 		if (remaining > 0) {
-			processed += processQueue(highQueue, remaining, processed);
+			int highBudget = optiminium$frameAwareBudget(remaining);
+			processed += processQueue(highQueue, highBudget, processed);
 		}
 
 		// Phase 3: Process NORMAL uploads (within remaining budget after reserve)
 		remaining = Math.max(0, effectiveBudget - processed - urgentReserve);
 		if (remaining > 0 && !burstPreventionActive) {
-			processed += processQueue(normalQueue, remaining, processed);
+			int normBudget = optiminium$frameAwareBudget(remaining);
+			processed += processQueue(normalQueue, normBudget, processed);
 		}
 
 		// Phase 4: Admit BACKGROUND uploads only when very comfortable
 		if (!burstPreventionActive && processed < effectiveBudget / 2) {
-			int bgBudget = Math.min(2, effectiveBudget / 2 - processed);
+			int bgBudget = Math.min(2, optiminium$frameAwareBudget(effectiveBudget / 2 - processed));
 			processed += processQueue(backgroundQueue, bgBudget, processed);
 		}
 
 		// Phase 5: Deferred - only admit when truly idle
 		if (processed == 0 && !burstPreventionActive && totalPending() > 0) {
 			// Spread deferred uploads across frames
-			int spreadAdmit = Math.min(lastFrameDeferredCount > 0 ? 1 : 0, effectiveBudget);
+			int spreadAdmit = Math.min(lastFrameDeferredCount > 0 ? 1 : 0, optiminium$frameAwareBudget(effectiveBudget));
 			processed += processQueue(deferredQueue, spreadAdmit, processed);
+		}
+
+		// Priority 5: If we spent too much time uploading this frame, cut budget for next frame
+		if (uploadElapsedThisFrame > BUDGET_CUT_THRESHOLD_NANOS) {
+			consecutiveBudgetCutFrames = Math.min(consecutiveBudgetCutFrames + 1, CONSECUTIVE_CUT_LIMIT);
 		}
 
 		// Record metrics
 		OptiminiumSectionSignificance.reportDeferredCount(deferredThisFrame);
 		lastFrameDeferredCount = deferredThisFrame;
-
-		// Re-enqueue any deferred entries for future frames
-		// (they stay in their queues, just not processed)
 
 		return processed;
 	}
@@ -245,6 +290,7 @@ public final class OptiminiumChunkUploadAdmission {
 		backgroundQueue.clear();
 		deferredQueue.clear();
 		enqueuedSections.clear();
+		lastDedupEvictFrame = 0L;
 		admittedThisFrame = 0;
 		deferredThisFrame = 0;
 		burstPreventionActive = false;
@@ -322,11 +368,12 @@ public final class OptiminiumChunkUploadAdmission {
 				}
 				long profileStart = OptiminiumGpuOptimizer.profileStart();
 
-				// Track budget usage
+				// Track budget usage and frame-time pacing
 				long startNanos = System.nanoTime();
 				entry.task.run();
 				long elapsedNanos = System.nanoTime() - startNanos;
 				OptiminiumSectionSignificance.recordUploadBudgetMs(elapsedNanos);
+				recordUploadTime(elapsedNanos);
 
 				OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
 				admittedThisFrame++;
@@ -387,7 +434,6 @@ public final class OptiminiumChunkUploadAdmission {
 	 * Re-evaluate queued uploads for promotion based on camera movement or interaction.
 	 */
 	private static void promoteQueuedUploads(Camera camera) {
-		// Check deferred -> background promotion
 		promoteQueue(deferredQueue, camera);
 		promoteQueue(backgroundQueue, camera);
 		promoteQueue(normalQueue, camera);
@@ -428,8 +474,56 @@ public final class OptiminiumChunkUploadAdmission {
 		return mc.gameRenderer.getMainCamera();
 	}
 
+	/**
+	 * Returns a frame-time-aware budget cap that reduces when uploads are
+	 * consuming too much frame time. This prevents individual frames from
+	 * being hijacked by excessive upload work.
+	 */
+	private static int optiminium$frameAwareBudget(int requested) {
+		if (requested <= 0) return 0;
+		// If we've spent too much total time on uploads this frame, cap remaining
+		if (uploadElapsedThisFrame >= maxUploadNanosPerFrame) {
+			return 0;
+		}
+		// Apply consecutive-budget-cut scaling
+		if (consecutiveBudgetCutFrames > 0) {
+			double cutFactor = Math.max(0.25D, 1.0D - consecutiveBudgetCutFrames * 0.25D);
+			return Math.max(1, (int)(requested * cutFactor));
+		}
+		return requested;
+	}
+
+	// ---- Time tracking (called by processQueue) ----
+	static void recordUploadTime(long nanos) {
+		uploadElapsedThisFrame += nanos;
+		uploadCountThisFrame++;
+	}
+
 	private static int totalPending() {
 		return criticalQueue.size() + highQueue.size() + normalQueue.size()
 				+ backgroundQueue.size() + deferredQueue.size();
+	}
+
+	/**
+	 * Evict stale entries from the deduplication set.
+	 * Prevents entries submitted but never admitted from blocking future uploads.
+	 */
+
+	// ============================================================
+	//  Diagnostics
+	// ============================================================
+
+	public static long getUploadElapsedThisFrame() {
+		return uploadElapsedThisFrame;
+	}
+
+	public static int getUploadCountThisFrame() {
+		return uploadCountThisFrame;
+	}
+
+	private static void evictStaleDedupEntries() {
+		if (enqueuedSections.isEmpty()) return;
+		long cutoff = frameCounter - DEDUP_MAX_STALE_FRAMES;
+		enqueuedSections.values().removeIf(frame -> frame < cutoff);
 	}
 }

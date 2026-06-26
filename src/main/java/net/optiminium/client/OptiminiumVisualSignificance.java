@@ -845,7 +845,11 @@ public final class OptiminiumVisualSignificance {
 
 		boolean visible = inFront && hasMinimumBlockEntityScreenPresence(distanceSqr);
 
-		if (visible && distanceSqr <= BLOCK_ENTITY_VISIBLE_DISTANCE_SQR && classification > THROTTLED) {
+		// Allow visible block entities to reach REUSED when stable.
+		// Previously ANY visible entity within BLOCK_ENTITY_VISIBLE_DISTANCE_SQR
+		// with classification > THROTTLED (including REUSED) was forced to THROTTLED.
+		// Now only CULLED entities are promoted; REUSED entities stay REUSED.
+		if (visible && distanceSqr <= BLOCK_ENTITY_VISIBLE_DISTANCE_SQR && classification == CULLED) {
 			if (classification == CULLED) blockEntityCullPreventedByVisibility++;
 			mem.lowSignificanceFrames = 0;
 			return THROTTLED;
@@ -926,7 +930,14 @@ public final class OptiminiumVisualSignificance {
 		if (previous == UNKNOWN || previous == CULLED) {
 			byte raw = scoreToBand(effectiveScore);
 			if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
-				return THROTTLED;
+				// Previously THROTTLED was returned here, which skipped REUSED entirely.
+				// For re-entering visible objects, start at REUSED (not THROTTLED)
+				// to make REUSED a meaningful intermediate band.
+				// Only looked-at or important objects get THROTTLED.
+				if (lookedAt || important) {
+					return THROTTLED;
+				}
+				return REUSED;
 			}
 			if (raw == CULLED && category != EntityCategory.ITEM && category != EntityCategory.OTHER
 					&& effectiveScore > 0.15D) {
@@ -947,9 +958,15 @@ public final class OptiminiumVisualSignificance {
 		if (desired < FULL) desired = FULL;
 		if (desired > CULLED) desired = CULLED;
 
+		// Allow stable visible objects to reach REUSED.
+		// Only objects that are clearly visible AND important or
+		// looked-at should stay at THROTTLED or above.
 		if (isClearlyVisible && category != EntityCategory.ITEM && category != EntityCategory.OTHER) {
-			if (desired > THROTTLED) {
+			if (desired > THROTTLED && (lookedAt || important || distanceSqr <= ENTITY_NEAR_DISTANCE_SQR)) {
 				desired = THROTTLED;
+			} else if (desired > REUSED) {
+				// For stable visible objects not directly looked at: allow REUSED
+				desired = REUSED;
 			}
 		}
 
