@@ -266,8 +266,6 @@ public final class OptiminiumVisualSignificance {
 	private static boolean cameraFastMoving;
 
 	// ---- Cleanup state ----
-	private static int objectMemoryCount;
-	private static int entityMemoryCount;
 	private static final int MAX_OBJECT_MEMORY = 4096;
 	private static final int MAX_ENTITY_MEMORY = 1024;
 	private static int cleanupCounter;
@@ -345,7 +343,19 @@ public final class OptiminiumVisualSignificance {
 	public static boolean shouldRenderEntityDuringFade(Entity entity) {
 		if (!isEnabled()) return false;
 		EntityMemory mem = entityMemory.get(entity.getId());
-		return mem != null && mem.lastClassification == CULLED && isFadingOut(mem.lastChangedFrame);
+		if (mem == null) return false;
+		// New entity: never seen before, don't start rendering until it's actually come into view.
+		// This prevents the "pop at full alpha and fade out" effect for entities that load at a distance.
+		if (frameIndex - mem.firstSeenFrame < FADE_TRANSITION_FRAMES) {
+			return false;
+		}
+		// Fade-out: entity was just culled, keep rendering during fade transition
+		if (mem.lastClassification == CULLED && isFadingOut(mem.lastChangedFrame)) return true;
+		// Fade-in: entity was just promoted from CULLED, keep rendering during fade transition
+		if (mem.lastClassification != CULLED && mem.lastClassification != UNKNOWN
+				&& (mem.previousClassification == CULLED || mem.previousClassification == UNKNOWN)
+				&& isFadingOut(mem.lastChangedFrame)) return true;
+		return false;
 	}
 
 	public static boolean shouldProtectBlockEntity(BlockEntity blockEntity) {
@@ -576,6 +586,7 @@ public final class OptiminiumVisualSignificance {
 		EntityMemory mem = entityMemory.get(entityId);
 		if (mem == null) {
 			mem = new EntityMemory();
+			mem.firstSeenFrame = frameIndex;
 			entityMemory.put(entityId, mem);
 		}
 		mem.lastSeenFrame = frameIndex;
@@ -626,6 +637,7 @@ public final class OptiminiumVisualSignificance {
 			trackEntityOscillation(entityId, classification);
 		}
 
+		mem.previousClassification = previousClassification;
 		mem.lastClassification = classification;
 		mem.lastScore = score;
 		mem.lastCulled = (classification == CULLED);
@@ -1037,6 +1049,7 @@ public final class OptiminiumVisualSignificance {
 
 	private static final class EntityMemory {
 		byte lastClassification = UNKNOWN;
+		byte previousClassification = UNKNOWN;
 		double lastScore;
 		double continuousScore;
 		double visibilityDecay;
@@ -1056,6 +1069,7 @@ public final class OptiminiumVisualSignificance {
 		EntityCategory category = EntityCategory.OTHER;
 		long lastVisibleFrame = NEVER_INTERACTED_FRAME;
 		int lowSignificanceFrames;
+		long firstSeenFrame = 1;
 	}
 
 	private static final class EntityOscillationTracker {
@@ -1227,8 +1241,6 @@ public final class OptiminiumVisualSignificance {
 			- (cameraFastMoving ? 0.15D : 0.0D)));
 		if (newClassification != mem.lastClassification) {
 			mem.lastChangedFrame = frameIndex;
-			mem.recentlyPromoted = newClassification < mem.lastClassification;
-			mem.recentlyDemoted = newClassification > mem.lastClassification;
 		}
 	}
 
@@ -1372,7 +1384,6 @@ public final class OptiminiumVisualSignificance {
 				it.remove(); seenCounts.remove(e.getLongKey());
 			}
 		}
-		objectMemoryCount = objectMemory.size();
 	}
 
 	private static void cleanupStaleEntityMemory() {
@@ -1385,7 +1396,6 @@ public final class OptiminiumVisualSignificance {
 				it.remove(); entityOscillation.remove(e.getIntKey());
 			}
 		}
-		entityMemoryCount = entityMemory.size();
 	}
 
 	// ============================================================
@@ -1660,6 +1670,13 @@ public final class OptiminiumVisualSignificance {
 		return currentBudget;
 	}
 
+	/**
+	 * Public accessor for camera position, used by Sodium compat mixins.
+	 */
+	public static Vec3 getCameraPosition() {
+		return cameraPosition();
+	}
+
 	private static void updateBudget() {
 		int totalThisFrame = fullThisFrame + throttledThisFrame + reusedThisFrame + proxyThisFrame + culledThisFrame;
 		budgetCulledFraction = totalThisFrame > 0 ? (double)culledThisFrame / totalThisFrame : 0.0D;
@@ -1701,6 +1718,10 @@ public final class OptiminiumVisualSignificance {
 		return snapshot().toLine();
 	}
 
+	public static String diagnosticLine(int trackedObjectFallback) {
+		return snapshot(trackedObjectFallback).toLine();
+	}
+
 	/**
 	 * Returns the top expensive objects line (cached, only re-sorts on dirty).
 	 */
@@ -1723,6 +1744,10 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	public static Snapshot snapshot() {
+		return snapshot(0);
+	}
+
+	public static Snapshot snapshot(int trackedObjectFallback) {
 		double avgScore = accumulatedScoreCount > 0 ? accumulatedContinuousScores / accumulatedScoreCount : 0.0D;
 		double avgConf = accumulatedScoreCount > 0 ? accumulatedConfidence / accumulatedScoreCount : 0.0D;
 		double avgCost = accumulatedScoreCount > 0 ? accumulatedRenderCost / accumulatedScoreCount : 0.0D;
@@ -1756,7 +1781,7 @@ public final class OptiminiumVisualSignificance {
 			mostCommonReason(),
 			nearestDistanceSqr == Double.POSITIVE_INFINITY ? -1.0D : Math.sqrt(nearestDistanceSqr),
 			cameraVelocityAbs, cameraRotationSpeed, cameraFastMoving, cameraStable,
-			objectMemoryCount, entityMemoryCount,
+			Math.max(objectMemory.size(), trackedObjectFallback), entityMemory.size(),
 			promotionsPreventedByHysteresis, demotionsPreventedByHysteresis,
 			promotionsPreventedByConfidence, demotionsPreventedByConfidence,
 			singleBandTransitionsEnforced, avgScore, avgConf,
@@ -1807,7 +1832,7 @@ public final class OptiminiumVisualSignificance {
 		nearestDistanceSqr = Double.POSITIVE_INFINITY;
 		seenCounts.clear(); recentlyInteracted.clear(); beClassifications.clear();
 		objectMemory.clear(); entityMemory.clear(); entityOscillation.clear();
-		objectMemoryCount = 0; entityMemoryCount = 0; cleanupCounter = 0;
+		cleanupCounter = 0;
 		cameraStable = false; cameraFastMoving = false; cameraVelocityAbs = 0.0D;
 		cameraRotationSpeed = 0.0D; cameraAcceleration = 0.0D; lastCameraVelocityAbs = 0.0D;
 		lastCameraX = Double.NaN; lastCameraY = Double.NaN; lastCameraZ = Double.NaN;

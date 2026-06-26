@@ -8,6 +8,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
 
@@ -162,7 +163,7 @@ public final class OptiminiumBenchmark {
 		long entitiesPrevented = onMetrics.culledEntityRenders() - offMetrics.culledEntityRenders();
 		long totalPrevented = Math.max(0L, particlesPrevented) + Math.max(0L, blockEntitiesPrevented) + Math.max(0L, entitiesPrevented);
 		List<String> lines = new ArrayList<>();
-		lines.add("Optiminium benchmark " + FORMAT_VERSION + ": OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
+		lines.add("Optiminium benchmark " + FORMAT_VERSION + ": rendererCompatibilityMode=" + OptiminiumSodiumCompat.rendererModeString() + " OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
 		lines.add(String.format("Optiminium benchmark net: GPU savings=%.2f ms, CPU overhead=%.3f ms/frame, net frame gain=%.2f ms, FPS gain=%.1f", gpuSavingsMs, onProfile.totalOptiminiumCpuMs(), frameSavingsMs, fpsGain));
 		lines.add("Optiminium benchmark normalized OFF[" + normalizedCpuLine(offFrames, offThreadCpuFrames, offGpuFrames, offProfile) + "] ON[" + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, onProfile) + "]");
 		lines.add(String.format("Optiminium benchmark prevented: particles=%d, blockEntities=%d, entities=%d", particlesPrevented, blockEntitiesPrevented, entitiesPrevented));

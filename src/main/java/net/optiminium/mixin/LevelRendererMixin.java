@@ -21,6 +21,7 @@ import net.minecraft.world.phys.Vec3;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumRenderProfiler;
 import net.optiminium.client.OptiminiumVisualSignificance;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumSettings;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -114,6 +115,9 @@ public abstract class LevelRendererMixin {
 
 	@Unique
 	private void optiminium$recordRawVisibleBlockEntities(Vec3 cameraPosition) {
+		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			return;
+		}
 		int count = 0;
 		boolean recordSignificance = OptiminiumVisualSignificance.isEnabled();
 		for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {

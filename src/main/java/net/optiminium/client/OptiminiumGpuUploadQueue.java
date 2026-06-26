@@ -202,17 +202,14 @@ public final class OptiminiumGpuUploadQueue {
 			}
 
 			// Process this upload
+			long profileStart = OptiminiumGpuOptimizer.profileStart();
 			uploads.removeFirst();
 			if (entry.location != null) {
 				enqueuedLocations.remove(entry.location);
 			}
+			OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
 
-			long profileStart = OptiminiumGpuOptimizer.profileStart();
-			try {
-				entry.task.run();
-			} finally {
-				OptiminiumGpuOptimizer.recordUploadManagementProfileNanos(profileStart);
-			}
+			entry.task.run();
 			processed++;
 		}
 

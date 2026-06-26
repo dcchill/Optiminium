@@ -18,8 +18,13 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.phys.Vec3;
 import net.optiminium.OptiminiumMod;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
+
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 
 public final class OptiminiumGpuOptimizer {
 	private static final double ITEM_ENTITY_RENDER_DISTANCE_SQR = 48.0D * 48.0D;
@@ -119,6 +124,7 @@ public final class OptiminiumGpuOptimizer {
 	private static final long[] profileTotals = new long[PROFILE_COUNT];
 	private static final long[] profileFrameTotals = new long[PROFILE_COUNT];
 	private static final long[] profileWorstFrames = new long[PROFILE_COUNT];
+	private static final Set<BlockEntity> rawVisibleBlockEntityCandidates = Collections.newSetFromMap(new IdentityHashMap<>());
 
 	private OptiminiumGpuOptimizer() {
 	}
@@ -134,6 +140,7 @@ public final class OptiminiumGpuOptimizer {
 		maxRawVisibleBlockEntities = Math.max(maxRawVisibleBlockEntities, lastRawVisibleBlockEntities);
 		maxRenderedBlockEntities = Math.max(maxRenderedBlockEntities, lastRenderedBlockEntities);
 		rawVisibleBlockEntitiesThisFrame = 0;
+		rawVisibleBlockEntityCandidates.clear();
 		renderedBlockEntitiesThisFrame = 0;
 		countedDenseParticleBudgetFrame = false;
 		countedDenseBlockEntityBudgetFrame = false;
@@ -325,7 +332,8 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
+			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
+			OptiminiumSodiumCompat.rendererModeString(),
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
 			latestCpuFrameNanos / 1_000_000.0D,
@@ -344,16 +352,16 @@ public final class OptiminiumGpuOptimizer {
 			profile.worstBlockEntityCullingMs(),
 			profile.worstEntityCullingMs(),
 			profile.worstOptiminiumCpuMs(),
-			lastRawVisibleBlockEntities,
-			maxRawVisibleBlockEntities,
+			reportedRawVisibleBlockEntities(),
+			reportedMaxRawVisibleBlockEntities(),
 			lastRenderedBlockEntities,
 			renderedBlockEntitiesThisRun,
 			culledBlockEntitiesThisRun,
-			maxRawVisibleBlockEntities,
+			reportedMaxRawVisibleBlockEntities(),
 			maxRenderedBlockEntities,
 			OptiminiumSettings.getDenseBlockEntityThreshold(),
 			OptiminiumSettings.getDenseSceneAdaptiveMode().name().toLowerCase(),
-			denseSceneFrames,
+			reportedDenseSceneFrames(),
 			denseAdaptiveFrames,
 			adaptiveActivationAttempts,
 			adaptiveActivationSuccesses,
@@ -367,7 +375,7 @@ public final class OptiminiumGpuOptimizer {
 			denseRebuildBudgetFrames,
 			denseUploadBudgetFrames,
 			experimentalUploadStallLimitedFrames,
-			OptiminiumVisualSignificance.diagnosticLine(),
+			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()),
 			lastAdaptiveReason,
 			OptiminiumGpuUploadQueue.pendingUploads(),
 			OptiminiumGpuUploadQueue.uploadsSkippedBecauseLowSignificance(),
@@ -381,14 +389,14 @@ public final class OptiminiumGpuOptimizer {
 	public static SceneSnapshot sceneSnapshot() {
 		ensureFrameState();
 		return new SceneSnapshot(
-			lastRawVisibleBlockEntities,
-			maxRawVisibleBlockEntities,
+			reportedRawVisibleBlockEntities(),
+			reportedMaxRawVisibleBlockEntities(),
 			lastRenderedBlockEntities,
 			maxRenderedBlockEntities,
 			renderedBlockEntitiesThisRun,
 			culledBlockEntitiesThisRun,
-			denseSceneFrames,
-			OptiminiumVisualSignificance.snapshot()
+			reportedDenseSceneFrames(),
+			OptiminiumVisualSignificance.snapshot(reportedRawVisibleBlockEntities())
 		);
 	}
 
@@ -477,7 +485,15 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	public static void recordRawVisibleBlockEntitiesBeforeCulling(int count) {
+		ensureFrameState();
 		rawVisibleBlockEntitiesThisFrame = Math.max(rawVisibleBlockEntitiesThisFrame, count);
+	}
+
+	public static void recordRawVisibleBlockEntityBeforeCulling(BlockEntity blockEntity) {
+		ensureFrameState();
+		if (blockEntity != null && rawVisibleBlockEntityCandidates.add(blockEntity)) {
+			rawVisibleBlockEntitiesThisFrame++;
+		}
 	}
 
 	public static void recordRenderedBlockEntityAfterCulling() {
@@ -506,6 +522,7 @@ public final class OptiminiumGpuOptimizer {
 		minParticleScale = 1.0D;
 		minBlockEntityScale = 1.0D;
 		rawVisibleBlockEntitiesThisFrame = 0;
+		rawVisibleBlockEntityCandidates.clear();
 		renderedBlockEntitiesThisFrame = 0;
 		lastRawVisibleBlockEntities = 0;
 		lastRenderedBlockEntities = 0;
@@ -565,6 +582,18 @@ public final class OptiminiumGpuOptimizer {
 		pendingCulledBlockEntityRenders = 0;
 		pendingHiddenNameTags = 0;
 		pendingHiddenParticles = 0;
+	}
+
+	private static int reportedRawVisibleBlockEntities() {
+		return Math.max(lastRawVisibleBlockEntities, rawVisibleBlockEntitiesThisFrame);
+	}
+
+	private static int reportedMaxRawVisibleBlockEntities() {
+		return Math.max(maxRawVisibleBlockEntities, rawVisibleBlockEntitiesThisFrame);
+	}
+
+	private static long reportedDenseSceneFrames() {
+		return denseSceneFrames + (rawVisibleBlockEntitiesThisFrame >= OptiminiumSettings.getDenseBlockEntityThreshold() ? 1L : 0L);
 	}
 
 	private static void ensureFrameState() {
@@ -813,6 +842,9 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	private static void logAdaptiveReason() {
+		if (profilingEnabled) {
+			return;
+		}
 		long now = System.nanoTime();
 		if (now - lastAdaptiveDebugNanos < 1_000_000_000L) {
 			return;

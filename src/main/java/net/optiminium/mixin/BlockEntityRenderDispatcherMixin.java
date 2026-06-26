@@ -7,11 +7,13 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.optiminium.client.OptiminiumBlockEntityCulling;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.optiminium.client.OptiminiumFadeBufferSource;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumVisualSignificance;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(BlockEntityRenderDispatcher.class)
@@ -43,5 +45,14 @@ public abstract class BlockEntityRenderDispatcherMixin {
 			CallbackInfo callback) {
 		RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 		RenderSystem.disableBlend();
+	}
+
+	@ModifyVariable(
+		method = "setupAndRender",
+		at = @At("HEAD"),
+		argsOnly = true
+	)
+	private static <T extends BlockEntity> MultiBufferSource optiminium$fadeBlockEntityBuffer(MultiBufferSource bufferSource, BlockEntityRenderer<T> renderer, T blockEntity) {
+		return OptiminiumFadeBufferSource.wrap(bufferSource, OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity));
 	}
 }

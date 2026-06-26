@@ -50,6 +50,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 
 /**
  * Distance-culling block entity renderers integrated with Visual Significance.
@@ -124,6 +125,7 @@ public final class OptiminiumBlockEntityCulling {
 				RenderSystem.enableBlend();
 				RenderSystem.defaultBlendFunc();
 				RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, alpha);
+				bufferSource = OptiminiumFadeBufferSource.wrap(bufferSource, alpha);
 			}
 			OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
 			try {
@@ -138,6 +140,9 @@ public final class OptiminiumBlockEntityCulling {
 		public boolean shouldRender(T blockEntity, Vec3 cameraPos) {
 			long profileStart = OptiminiumGpuOptimizer.profileStart();
 			try {
+				if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+					OptiminiumGpuOptimizer.recordRawVisibleBlockEntityBeforeCulling(blockEntity);
+				}
 				if (!OptiminiumGpuOptimizer.isBlockEntityCullingActive()) {
 					return delegate.shouldRender(blockEntity, cameraPos);
 				}
