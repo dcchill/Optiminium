@@ -16,7 +16,7 @@ public final class OptiminiumSettings {
 	private static volatile boolean gpuTimerPacing = true;
 	private static volatile int gpuTargetFps = 60;
 	private static volatile int gpuMinRenderScalePercent = 60;
-	private static volatile int chunkUploadsPerFrame = 8;
+	private static volatile int gpuUploadsPerFrame = 8;
 	private static volatile int entityAlwaysRenderDistanceBlocks = 50;
 	private static volatile boolean particleLimiter = true;
 	private static volatile int particleRenderDistanceBlocks = 64;
@@ -26,7 +26,6 @@ public final class OptiminiumSettings {
 	private static volatile int blockEntityDistanceScalePercent = 100;
 	private static volatile int denseBlockEntityThreshold = 512;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
-	private static volatile boolean occlusionRebuildPriority = true;
 	private static volatile boolean shaderResourceCache = true;
 	private static volatile boolean experimentalRendererFeatures = false;
 	private static volatile boolean experimentalUploadStallLimiter = false;
@@ -66,7 +65,6 @@ public final class OptiminiumSettings {
 		asyncResourceStreaming = true;
 		shaderResourceCache = true;
 		blockEntityCulling = true;
-		occlusionRebuildPriority = true;
 		adaptiveSimulationDistance = true;
 		smartTickScheduler = true;
 		aiPathfindingOptimizer = true;
@@ -74,7 +72,7 @@ public final class OptiminiumSettings {
 			case HIGH_PERFORMANCE -> {
 				gpuTargetFps = 120;
 				gpuMinRenderScalePercent = 45;
-				chunkUploadsPerFrame = 4;
+				gpuUploadsPerFrame = 4;
 				entityAlwaysRenderDistanceBlocks = 40;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 32;
@@ -87,7 +85,7 @@ public final class OptiminiumSettings {
 			case MEDIUM -> {
 				gpuTargetFps = 75;
 				gpuMinRenderScalePercent = 60;
-				chunkUploadsPerFrame = 8;
+				gpuUploadsPerFrame = 8;
 				entityAlwaysRenderDistanceBlocks = 50;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 64;
@@ -100,7 +98,7 @@ public final class OptiminiumSettings {
 			case QUALITY -> {
 				gpuTargetFps = 60;
 				gpuMinRenderScalePercent = 85;
-				chunkUploadsPerFrame = 16;
+				gpuUploadsPerFrame = 16;
 				entityAlwaysRenderDistanceBlocks = 70;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 128;
@@ -114,34 +112,12 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isChunkRebuildScheduling() {
-		return true;
+	public static int getGpuUploadsPerFrame() {
+		return gpuUploadsPerFrame;
 	}
 
-	public static boolean isOcclusionRebuildPriority() {
-		return occlusionRebuildPriority;
-	}
-
-	public static boolean toggleOcclusionRebuildPriority() {
-		occlusionRebuildPriority = !occlusionRebuildPriority;
-		save();
-		return occlusionRebuildPriority;
-	}
-
-	public static int getChunkRebuildsPerFrame() {
-		return 2;
-	}
-
-	public static int getSyncChunkRebuildsPerFrame() {
-		return 0;
-	}
-
-	public static int getChunkUploadsPerFrame() {
-		return chunkUploadsPerFrame;
-	}
-
-	public static void setChunkUploadsPerFrame(int uploadsPerFrame) {
-		chunkUploadsPerFrame = clamp(uploadsPerFrame, 1, 64);
+	public static void setGpuUploadsPerFrame(int uploadsPerFrame) {
+		gpuUploadsPerFrame = clamp(uploadsPerFrame, 1, 64);
 		save();
 	}
 
@@ -457,7 +433,7 @@ public final class OptiminiumSettings {
 			gpuTimerPacing = Boolean.parseBoolean(properties.getProperty("gpuTimerPacing", Boolean.toString(gpuTimerPacing)));
 			gpuTargetFps = clamp(Integer.parseInt(properties.getProperty("gpuTargetFps", Integer.toString(gpuTargetFps))), 30, 240);
 			gpuMinRenderScalePercent = clamp(Integer.parseInt(properties.getProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent))), 35, 100);
-			chunkUploadsPerFrame = clamp(Integer.parseInt(properties.getProperty("chunkUploadsPerFrame", Integer.toString(chunkUploadsPerFrame))), 1, 64);
+			gpuUploadsPerFrame = clamp(Integer.parseInt(properties.getProperty("gpuUploadsPerFrame", properties.getProperty("chunkUploadsPerFrame", Integer.toString(gpuUploadsPerFrame)))), 1, 64);
 			entityAlwaysRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks))), 10, 200);
 			particleLimiter = Boolean.parseBoolean(properties.getProperty("particleLimiter", Boolean.toString(particleLimiter)));
 			particleRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks))), 16, 160);
@@ -467,7 +443,6 @@ public final class OptiminiumSettings {
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
-			occlusionRebuildPriority = Boolean.parseBoolean(properties.getProperty("occlusionRebuildPriority", Boolean.toString(occlusionRebuildPriority)));
 			shaderResourceCache = Boolean.parseBoolean(properties.getProperty("shaderResourceCache", Boolean.toString(shaderResourceCache)));
 			experimentalRendererFeatures = Boolean.parseBoolean(properties.getProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures)));
 			experimentalUploadStallLimiter = Boolean.parseBoolean(properties.getProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter)));
@@ -488,7 +463,7 @@ public final class OptiminiumSettings {
 		properties.setProperty("gpuTimerPacing", Boolean.toString(gpuTimerPacing));
 		properties.setProperty("gpuTargetFps", Integer.toString(gpuTargetFps));
 		properties.setProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent));
-		properties.setProperty("chunkUploadsPerFrame", Integer.toString(chunkUploadsPerFrame));
+		properties.setProperty("gpuUploadsPerFrame", Integer.toString(gpuUploadsPerFrame));
 		properties.setProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks));
 		properties.setProperty("particleLimiter", Boolean.toString(particleLimiter));
 		properties.setProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks));
@@ -498,7 +473,6 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
-		properties.setProperty("occlusionRebuildPriority", Boolean.toString(occlusionRebuildPriority));
 		properties.setProperty("shaderResourceCache", Boolean.toString(shaderResourceCache));
 		properties.setProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures));
 		properties.setProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter));

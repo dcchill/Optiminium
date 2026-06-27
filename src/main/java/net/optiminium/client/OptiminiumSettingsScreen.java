@@ -95,8 +95,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.build());
 		this.addRenderableWidget(new SettingsSlider(x, y + 208, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 234, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
-		this.addRenderableWidget(new SettingsSlider(x, y + 260, OptiminiumSettings::getChunkUploadsPerFrame, OptiminiumSettings::setChunkUploadsPerFrame, 1, 64, "Chunk Uploads/Frame"));
-		this.addRenderableWidget(new SettingsSlider(x, y + 286, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 260, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -111,22 +110,19 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(denseSceneAdaptiveLabel(), button -> button.setMessage(denseSceneAdaptiveLabel(OptiminiumSettings.cycleDenseSceneAdaptiveMode())))
 			.bounds(x, y + 138, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(occlusionRebuildPriorityLabel(), button -> button.setMessage(Component.literal("Occlusion Rebuild Priority: " + (OptiminiumSettings.toggleOcclusionRebuildPriority() ? "ON" : "OFF"))))
+		this.addRenderableWidget(Button.builder(adaptiveSimulationLabel(), button -> button.setMessage(Component.literal("Dynamic Simulation Distance: " + (OptiminiumSettings.toggleAdaptiveSimulationDistance() ? "ON" : "OFF"))))
 			.bounds(x, y + 172, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(adaptiveSimulationLabel(), button -> button.setMessage(Component.literal("Dynamic Simulation Distance: " + (OptiminiumSettings.toggleAdaptiveSimulationDistance() ? "ON" : "OFF"))))
-			.bounds(x, y + 206, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 232, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt, 35, 80, "Target MSPT"));
-		this.addRenderableWidget(new SettingsSlider(x, y + 258, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks, 2, 12, "Min Sim Distance"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 198, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt, 35, 80, "Target MSPT"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 224, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks, 2, 12, "Min Sim Distance"));
 		this.addRenderableWidget(Button.builder(smartTickLabel(), button -> button.setMessage(Component.literal("SmartTick Scheduler: " + (OptiminiumSettings.toggleSmartTickScheduler() ? "ON" : "OFF"))))
-			.bounds(x, y + 292, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 258, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(aiPathfindingLabel(), button -> button.setMessage(Component.literal("AI Pathfinding Optimizer: " + (OptiminiumSettings.toggleAiPathfindingOptimizer() ? "ON" : "OFF"))))
-			.bounds(x, y + 318, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 284, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
-			.bounds(x, y + 352, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 318, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
@@ -207,10 +203,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component denseSceneAdaptiveLabel(OptiminiumSettings.DenseSceneAdaptiveMode mode) {
 		return Component.literal("Dense Scene Mode: " + mode.name().toLowerCase());
-	}
-
-	private static Component occlusionRebuildPriorityLabel() {
-		return Component.literal("Occlusion Rebuild Priority: " + (OptiminiumSettings.isOcclusionRebuildPriority() ? "ON" : "OFF"));
 	}
 
 	private static Component adaptiveSimulationLabel() {

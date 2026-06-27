@@ -151,7 +151,7 @@ public final class OptiminiumGpuUploadQueue {
 			}
 			return;
 		}
-		int baseBudget = OptiminiumGpuOptimizer.scaledChunkUploadBudget(OptiminiumSettings.getChunkUploadsPerFrame());
+		int baseBudget = OptiminiumGpuOptimizer.scaledGpuUploadBudget(OptiminiumSettings.getGpuUploadsPerFrame());
 		if (baseBudget <= 0 || uploads.isEmpty()) {
 			return;
 		}

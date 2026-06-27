@@ -273,7 +273,7 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String significanceLine(OptiminiumVisualSignificance.Snapshot bands, OptiminiumMetrics.Snapshot metrics, OptiminiumGpuOptimizer.SceneSnapshot scene) {
-		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
+		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, avgConfidence=%.4f, minConfidence=%.4f, maxConfidence=%.4f, avgPopRisk=%.4f, avgVisualImportance=%.4f, avgGameplayImportance=%.4f, avgSafetyImportance=%.4f, lowConfidenceDemotionBlocks=%d, highPopRiskDemotionBlocks=%d, recentlyVisibleProtections=%d, recentlyLookedAtProtections=%d, recentlyInteractedProtections=%d, recentlyChangedProtections=%d, recentlyMovedProtections=%d, recentlyEnteredViewProtections=%d, fastCameraDemotionBlocks=%d, promotionsBecauseLowConfidence=%d, demotionsAllowedBecauseHighConfidence=%d, importantButCulled=%d, averageBandLifetime=%.2f, demotionsPerFrame=%.4f, promotionsPerFrame=%.4f, avgImportanceDebt=%.4f, importanceDebtPromotions=%d, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
 			bands.full(),
 			bands.throttled(),
 			bands.reused(),
@@ -281,6 +281,30 @@ public final class OptiminiumBenchmark {
 			bands.culled(),
 			bands.significanceCpuMs(),
 			bands.worstSignificanceCpuMs(),
+			bands.averageConfidence(),
+			bands.minConfidence(),
+			bands.maxConfidence(),
+			bands.averagePopRisk(),
+			bands.averageVisualImportance(),
+			bands.averageGameplayImportance(),
+			bands.averageSafetyImportance(),
+			bands.lowConfidenceDemotionBlocks(),
+			bands.highPopRiskDemotionBlocks(),
+			bands.recentlyVisibleProtections(),
+			bands.recentlyLookedAtProtections(),
+			bands.recentlyInteractedProtections(),
+			bands.recentlyChangedProtections(),
+			bands.recentlyMovedProtections(),
+			bands.recentlyEnteredViewProtections(),
+			bands.fastCameraDemotionBlocks(),
+			bands.promotionsBecauseLowConfidence(),
+			bands.demotionsAllowedBecauseHighConfidence(),
+			bands.importantButCulled(),
+			bands.averageBandLifetime(),
+			bands.demotionsPerFrame(),
+			bands.promotionsPerFrame(),
+			bands.averageImportanceDebt(),
+			bands.importanceDebtPromotions(),
 			scene.culledBlockEntitiesThisRun(),
 			metrics.hiddenParticles(),
 			metrics.culledEntityRenders(),
@@ -382,7 +406,7 @@ public final class OptiminiumBenchmark {
 			return "reduce measurement/decision overhead before adding optimizations";
 		}
 		if (onRenderProfile.bufferUploadCount() > offRenderProfile.bufferUploadCount() || onRenderProfile.bufferUploadMs() > offRenderProfile.bufferUploadMs()) {
-			return "next safe GL target: reduce redundant Optiminium-managed chunk upload scheduling, without caching raw GL state";
+			return "next safe GL target: inspect Optiminium-owned resource uploads, without touching terrain chunk scheduling";
 		}
 		if (onRenderProfile.renderLayerSwitchCount() > offRenderProfile.renderLayerSwitchCount()) {
 			return "next safe GL target: batch Optiminium debug/overlay work by existing RenderType, without changing vanilla layer order";
@@ -449,9 +473,12 @@ public final class OptiminiumBenchmark {
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
 			0L, 0L, 0L, 0L, "none", "none",
 			0.0D, 0.0D, "none", -1.0D, 0.0D, 0.0D, false, false, 0, 0,
-			0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D,
+			0L, 0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+			0L, 0.0D, 0.0D, 0.0D, 0.0D,
 			0.0D, 0.0D, 0.0D, 0.0D, 0.0D, "none",
-			0L, 0L, 0L, 0L, 0L));
+			0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, 0.0D, 0.0D, 0L,
+			0.0D, 0.0D, 0.0D, 0.0D));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {
