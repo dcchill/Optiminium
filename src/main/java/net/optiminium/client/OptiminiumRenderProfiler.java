@@ -20,10 +20,20 @@ public final class OptiminiumRenderProfiler {
 	private static long totalRenderProfilingNanos;
 	private static long frameBufferUploadNanos;
 	private static long frameRenderProfilingNanos;
+	private static int frameTextureBinds;
+	private static int frameShaderBinds;
+	private static int frameBufferUploads;
+	private static int frameRenderLayerSwitches;
+	private static int maxTextureBindsPerFrame;
+	private static int maxShaderBindsPerFrame;
+	private static int maxBufferUploadsPerFrame;
+	private static int maxRenderLayerSwitchesPerFrame;
+	private static long maxBufferUploadNanosPerFrame;
 	private static boolean frameHasTranslucentRender;
 	private static boolean frameHasParticleRender;
 	private static boolean frameHasTerrainRender;
 	private static int uploadPressureFrames;
+	private static FrameSnapshot lastFrameSnapshot = FrameSnapshot.EMPTY;
 
 	private OptiminiumRenderProfiler() {
 	}
@@ -51,7 +61,12 @@ public final class OptiminiumRenderProfiler {
 			particleRenderFrames,
 			terrainRenderFrames,
 			suspectedGlStallFrames,
-			totalRenderProfilingNanos / 1_000_000.0D
+			totalRenderProfilingNanos / 1_000_000.0D,
+			maxTextureBindsPerFrame,
+			maxShaderBindsPerFrame,
+			maxBufferUploadsPerFrame,
+			maxRenderLayerSwitchesPerFrame,
+			maxBufferUploadNanosPerFrame / 1_000_000.0D
 		);
 	}
 
@@ -70,6 +85,16 @@ public final class OptiminiumRenderProfiler {
 		totalRenderProfilingNanos = 0L;
 		frameBufferUploadNanos = 0L;
 		frameRenderProfilingNanos = 0L;
+		frameTextureBinds = 0;
+		frameShaderBinds = 0;
+		frameBufferUploads = 0;
+		frameRenderLayerSwitches = 0;
+		maxTextureBindsPerFrame = 0;
+		maxShaderBindsPerFrame = 0;
+		maxBufferUploadsPerFrame = 0;
+		maxRenderLayerSwitchesPerFrame = 0;
+		maxBufferUploadNanosPerFrame = 0L;
+		lastFrameSnapshot = FrameSnapshot.EMPTY;
 		frameHasTranslucentRender = false;
 		frameHasParticleRender = false;
 		frameHasTerrainRender = false;
@@ -79,6 +104,7 @@ public final class OptiminiumRenderProfiler {
 	public static void recordTextureBind(long startNanos) {
 		if (startNanos != 0L) {
 			textureBindCount++;
+			frameTextureBinds++;
 			recordRenderProfilingSince(startNanos);
 			frameOpen = true;
 		}
@@ -87,6 +113,7 @@ public final class OptiminiumRenderProfiler {
 	public static void recordShaderBind(long startNanos) {
 		if (startNanos != 0L) {
 			shaderBindCount++;
+			frameShaderBinds++;
 			recordRenderProfilingSince(startNanos);
 			frameOpen = true;
 		}
@@ -103,6 +130,7 @@ public final class OptiminiumRenderProfiler {
 	public static void recordRenderLayerSwitch() {
 		if (isActive()) {
 			renderLayerSwitchCount++;
+			frameRenderLayerSwitches++;
 			frameOpen = true;
 		}
 	}
@@ -142,6 +170,7 @@ public final class OptiminiumRenderProfiler {
 		}
 		long nanos = Math.max(0L, System.nanoTime() - startNanos);
 		bufferUploadCount++;
+		frameBufferUploads++;
 		bufferUploadNanos += nanos;
 		recordRenderProfilingDuration(nanos);
 		frameBufferUploadNanos += nanos;
@@ -164,6 +193,19 @@ public final class OptiminiumRenderProfiler {
 		if (frameBufferUploadNanos >= STALL_NANOS || frameRenderProfilingNanos >= STALL_NANOS) {
 			suspectedGlStallFrames++;
 		}
+		lastFrameSnapshot = new FrameSnapshot(
+			frameTextureBinds,
+			frameShaderBinds,
+			frameBufferUploads,
+			frameRenderLayerSwitches,
+			frameBufferUploadNanos / 1_000_000.0D,
+			frameRenderProfilingNanos / 1_000_000.0D
+		);
+		maxTextureBindsPerFrame = Math.max(maxTextureBindsPerFrame, frameTextureBinds);
+		maxShaderBindsPerFrame = Math.max(maxShaderBindsPerFrame, frameShaderBinds);
+		maxBufferUploadsPerFrame = Math.max(maxBufferUploadsPerFrame, frameBufferUploads);
+		maxRenderLayerSwitchesPerFrame = Math.max(maxRenderLayerSwitchesPerFrame, frameRenderLayerSwitches);
+		maxBufferUploadNanosPerFrame = Math.max(maxBufferUploadNanosPerFrame, frameBufferUploadNanos);
 		if (frameBufferUploadNanos >= STALL_NANOS) {
 			uploadPressureFrames = UPLOAD_PRESSURE_HOLD_FRAMES;
 		} else if (uploadPressureFrames > 0) {
@@ -180,6 +222,10 @@ public final class OptiminiumRenderProfiler {
 		}
 		frameBufferUploadNanos = 0L;
 		frameRenderProfilingNanos = 0L;
+		frameTextureBinds = 0;
+		frameShaderBinds = 0;
+		frameBufferUploads = 0;
+		frameRenderLayerSwitches = 0;
 		frameHasTranslucentRender = false;
 		frameHasParticleRender = false;
 		frameHasTerrainRender = false;
@@ -188,6 +234,21 @@ public final class OptiminiumRenderProfiler {
 
 	private static boolean isActive() {
 		return enabled || OptiminiumSettings.isExperimentalUploadStallLimiter();
+	}
+
+	public static FrameSnapshot frameSnapshot() {
+		return lastFrameSnapshot;
+	}
+
+	public record FrameSnapshot(
+		int textureBinds,
+		int shaderBinds,
+		int bufferUploads,
+		int renderLayerSwitches,
+		double bufferUploadMs,
+		double renderProfileMs
+	) {
+		private static final FrameSnapshot EMPTY = new FrameSnapshot(0, 0, 0, 0, 0.0D, 0.0D);
 	}
 
 	public record Snapshot(
@@ -201,7 +262,12 @@ public final class OptiminiumRenderProfiler {
 		long particleRenderFrames,
 		long terrainRenderFrames,
 		long suspectedGlStallFrames,
-		double totalRenderProfilingMs
+		double totalRenderProfilingMs,
+		int maxTextureBindsPerFrame,
+		int maxShaderBindsPerFrame,
+		int maxBufferUploadsPerFrame,
+		int maxRenderLayerSwitchesPerFrame,
+		double maxBufferUploadMsPerFrame
 	) {
 	}
 }

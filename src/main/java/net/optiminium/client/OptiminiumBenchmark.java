@@ -8,15 +8,23 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.optiminium.OptiminiumMod;
 import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBenchmark {
@@ -45,6 +53,7 @@ public final class OptiminiumBenchmark {
 	private static final List<Long> onThreadCpuFrames = new ArrayList<>();
 	private static final List<Long> offGpuFrames = new ArrayList<>();
 	private static final List<Long> onGpuFrames = new ArrayList<>();
+	private static final List<FrameBurstSample> onBurstFrames = new ArrayList<>();
 
 	private OptiminiumBenchmark() {
 	}
@@ -76,6 +85,7 @@ public final class OptiminiumBenchmark {
 		onThreadCpuFrames.clear();
 		offGpuFrames.clear();
 		onGpuFrames.clear();
+		onBurstFrames.clear();
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
 		OptiminiumGpuOptimizer.setProfilingEnabled(true);
 		OptiminiumRenderProfiler.setEnabled(true);
@@ -91,7 +101,14 @@ public final class OptiminiumBenchmark {
 		long now = System.nanoTime();
 		long threadCpuNanos = readThreadCpuNanos();
 		if (lastFrameNanos != 0L) {
-			(phase == Phase.OFF ? offFrames : onFrames).add(now - lastFrameNanos);
+			long frameNanos = now - lastFrameNanos;
+			(phase == Phase.OFF ? offFrames : onFrames).add(frameNanos);
+			if (phase == Phase.ON) {
+				onBurstFrames.add(new FrameBurstSample(frameNanos,
+					OptiminiumVisualSignificance.frameBurstSnapshot(),
+					OptiminiumRenderProfiler.frameSnapshot(),
+					OptiminiumGpuUploadQueue.frameSnapshot()));
+			}
 		}
 		if (lastThreadCpuNanos != 0L && threadCpuNanos != 0L) {
 			(phase == Phase.OFF ? offThreadCpuFrames : onThreadCpuFrames).add(Math.max(0L, threadCpuNanos - lastThreadCpuNanos));
@@ -161,6 +178,7 @@ public final class OptiminiumBenchmark {
 		long particlesPrevented = onMetrics.hiddenParticles() - offMetrics.hiddenParticles();
 		long blockEntitiesPrevented = onMetrics.culledBlockEntityRenders() - offMetrics.culledBlockEntityRenders();
 		long entitiesPrevented = onMetrics.culledEntityRenders() - offMetrics.culledEntityRenders();
+		String recommendation = recommendation(onProfile, offRenderProfile, onRenderProfile, particlesPrevented, blockEntitiesPrevented, entitiesPrevented);
 		long totalPrevented = Math.max(0L, particlesPrevented) + Math.max(0L, blockEntitiesPrevented) + Math.max(0L, entitiesPrevented);
 		List<String> lines = new ArrayList<>();
 		lines.add("Optiminium benchmark " + FORMAT_VERSION + ": rendererCompatibilityMode=" + OptiminiumSodiumCompat.rendererModeString() + " OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
@@ -177,8 +195,13 @@ public final class OptiminiumBenchmark {
 		lines.add("Optiminium benchmark render ON[" + renderProfileLine(onRenderProfile, onFrames.size()) + "]");
 		lines.add("Optiminium benchmark render delta: " + renderDeltaLine(offRenderProfile, onRenderProfile));
 		lines.add("Optiminium benchmark low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
-		lines.add("Optiminium benchmark recommendation: " + recommendation(onProfile, offRenderProfile, onRenderProfile, particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
+		lines.add("Optiminium benchmark recommendation: " + recommendation);
 		lines.add("Optiminium benchmark diagnostics: OFF" + offDiagnostics + " | ON" + onDiagnostics + ", cameraStable=" + cameraStable + ", phaseTicks=" + PHASE_TICKS);
+		Path htmlReport = writeHtmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
+			offRenderProfile, onRenderProfile, onDiagnostics, recommendation);
+		if (htmlReport != null) {
+			lines.add("Optiminium benchmark HTML report: " + htmlReport);
+		}
 		return lines;
 	}
 
@@ -273,7 +296,7 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String significanceLine(OptiminiumVisualSignificance.Snapshot bands, OptiminiumMetrics.Snapshot metrics, OptiminiumGpuOptimizer.SceneSnapshot scene) {
-		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, avgConfidence=%.4f, minConfidence=%.4f, maxConfidence=%.4f, avgPopRisk=%.4f, avgVisualImportance=%.4f, avgGameplayImportance=%.4f, avgSafetyImportance=%.4f, lowConfidenceDemotionBlocks=%d, highPopRiskDemotionBlocks=%d, recentlyVisibleProtections=%d, recentlyLookedAtProtections=%d, recentlyInteractedProtections=%d, recentlyChangedProtections=%d, recentlyMovedProtections=%d, recentlyEnteredViewProtections=%d, fastCameraDemotionBlocks=%d, promotionsBecauseLowConfidence=%d, demotionsAllowedBecauseHighConfidence=%d, importantButCulled=%d, averageBandLifetime=%.2f, demotionsPerFrame=%.4f, promotionsPerFrame=%.4f, avgImportanceDebt=%.4f, importanceDebtPromotions=%d, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
+		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, avgConfidence=%.4f, minConfidence=%.4f, maxConfidence=%.4f, avgWeightedAttentionScore=%.4f, avgWeightedAttentionFull=%.4f, avgWeightedAttentionThrottled=%.4f, avgWeightedAttentionReused=%.4f, avgWeightedAttentionProxy=%.4f, avgWeightedAttentionCulled=%.4f, confidenceBuckets=[%d,%d,%d,%d,%d], avgPopRisk=%.4f, avgVisualImportance=%.4f, avgGameplayImportance=%.4f, avgSafetyImportance=%.4f, lowConfidenceDemotionBlocks=%d, highPopRiskDemotionBlocks=%d, recentlyVisibleProtections=%d, recentlyLookedAtProtections=%d, recentlyInteractedProtections=%d, recentlyChangedProtections=%d, recentlyMovedProtections=%d, recentlyEnteredViewProtections=%d, fastCameraDemotionBlocks=%d, promotionsBecauseLowConfidence=%d, demotionsAllowedBecauseHighConfidence=%d, importantButCulled=%d, averageBandLifetime=%.2f, averageTicksInBand=%.2f, demotionsPerFrame=%.4f, promotionsPerFrame=%.4f, avgImportanceDebt=%.4f, importanceDebtPromotions=%d, decisionBecauseWeightedScore=%d, decisionBecausePopRiskVeto=%d, decisionBecauseConfidenceVeto=%d, decisionBecauseSafetyOverride=%d, decisionBecauseRecentlyVisible=%d, decisionBecauseImportanceDebt=%d, decisionBecauseHysteresis=%d, decisionBecauseNearbyOverride=%d, decisionBecauseGameplayOverride=%d, topTransitionPairs=%s, dirtyObjectsThisFrame=%d, dirtyObjectsTotal=%d, skippedStableObjects=%d, scoreCacheHits=%d, scoreRecomputes=%d, bandTransitionBudgetUsed=%d, bandTransitionBudgetUsedThisFrame=%d, bandTransitionsDeferred=%d, periodicRechecks=%d, transitionsFromDirtyObjects=%d, transitionsFromStableObjects=%d, dirtyReasons=%s, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
 			bands.full(),
 			bands.throttled(),
 			bands.reused(),
@@ -284,6 +307,17 @@ public final class OptiminiumBenchmark {
 			bands.averageConfidence(),
 			bands.minConfidence(),
 			bands.maxConfidence(),
+			bands.averageWeightedAttentionScore(),
+			bands.averageWeightedAttentionFull(),
+			bands.averageWeightedAttentionThrottled(),
+			bands.averageWeightedAttentionReused(),
+			bands.averageWeightedAttentionProxy(),
+			bands.averageWeightedAttentionCulled(),
+			bands.confidenceBucketVeryLow(),
+			bands.confidenceBucketLow(),
+			bands.confidenceBucketMedium(),
+			bands.confidenceBucketHigh(),
+			bands.confidenceBucketVeryHigh(),
 			bands.averagePopRisk(),
 			bands.averageVisualImportance(),
 			bands.averageGameplayImportance(),
@@ -301,10 +335,33 @@ public final class OptiminiumBenchmark {
 			bands.demotionsAllowedBecauseHighConfidence(),
 			bands.importantButCulled(),
 			bands.averageBandLifetime(),
+			bands.averageTicksInBand(),
 			bands.demotionsPerFrame(),
 			bands.promotionsPerFrame(),
 			bands.averageImportanceDebt(),
 			bands.importanceDebtPromotions(),
+			bands.decisionBecauseWeightedScore(),
+			bands.decisionBecausePopRiskVeto(),
+			bands.decisionBecauseConfidenceVeto(),
+			bands.decisionBecauseSafetyOverride(),
+			bands.decisionBecauseRecentlyVisible(),
+			bands.decisionBecauseImportanceDebt(),
+			bands.decisionBecauseHysteresis(),
+			bands.decisionBecauseNearbyOverride(),
+			bands.decisionBecauseGameplayOverride(),
+			bands.topTransitionPairs(),
+			bands.dirtyObjectsThisFrame(),
+			bands.dirtyObjectsTotal(),
+			bands.skippedStableObjects(),
+			bands.scoreCacheHits(),
+			bands.scoreRecomputes(),
+			bands.bandTransitionBudgetUsed(),
+			bands.bandTransitionBudgetUsedThisFrame(),
+			bands.bandTransitionsDeferred(),
+			bands.periodicRechecks(),
+			bands.transitionsFromDirtyObjects(),
+			bands.transitionsFromStableObjects(),
+			bands.dirtyReasons(),
 			scene.culledBlockEntitiesThisRun(),
 			metrics.hiddenParticles(),
 			metrics.culledEntityRenders(),
@@ -335,7 +392,7 @@ public final class OptiminiumBenchmark {
 
 	private static String renderProfileLine(OptiminiumRenderProfiler.Snapshot profile, int frames) {
 		double divisor = Math.max(1, frames);
-		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, textureBindsPerFrame=%.2f, shaderBindsPerFrame=%.2f, renderLayerSwitchesPerFrame=%.2f, bufferUploadsPerFrame=%.2f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f",
+		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, textureBindsPerFrame=%.2f, shaderBindsPerFrame=%.2f, renderLayerSwitchesPerFrame=%.2f, bufferUploadsPerFrame=%.2f, maxTextureBindsPerFrame=%d, maxShaderBindsPerFrame=%d, maxBufferUploadsPerFrame=%d, maxRenderLayerSwitchesPerFrame=%d, maxBufferUploadMsPerFrame=%.3f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f",
 			profile.renderLayerSwitchCount(),
 			profile.textureBindCount(),
 			profile.shaderBindCount(),
@@ -346,6 +403,11 @@ public final class OptiminiumBenchmark {
 			profile.shaderBindCount() / divisor,
 			profile.renderLayerSwitchCount() / divisor,
 			profile.bufferUploadCount() / divisor,
+			profile.maxTextureBindsPerFrame(),
+			profile.maxShaderBindsPerFrame(),
+			profile.maxBufferUploadsPerFrame(),
+			profile.maxRenderLayerSwitchesPerFrame(),
+			profile.maxBufferUploadMsPerFrame(),
 			profile.translucentRenderFrames(),
 			profile.particleRenderFrames(),
 			profile.terrainRenderFrames(),
@@ -423,6 +485,541 @@ public final class OptiminiumBenchmark {
 		return "entity render culling remains the best next target";
 	}
 
+	private static Path writeHtmlReport(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics,
+			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
+			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
+			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
+			String onDiagnostics, String recommendation) {
+		try {
+			Path directory = Minecraft.getInstance().gameDirectory.toPath().resolve("optiminium_reports");
+			Files.createDirectories(directory);
+			String mode = OptiminiumSodiumCompat.rendererModeString().replaceAll("[^A-Za-z0-9_-]", "_");
+			String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"));
+			Path report = directory.resolve("optiminium-benchmark-" + timestamp + "-" + mode + ".html");
+			Files.writeString(report, htmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
+				offRenderProfile, onRenderProfile, onDiagnostics, recommendation), StandardCharsets.UTF_8);
+			return report;
+		} catch (IOException | RuntimeException exception) {
+			OptiminiumMod.LOGGER.warn("Failed to write Optiminium benchmark HTML report", exception);
+			return null;
+		}
+	}
+
+	private static String htmlReport(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics,
+			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
+			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
+			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
+			String onDiagnostics, String recommendation) {
+		OptiminiumVisualSignificance.Snapshot offBands = offScene.significanceBands();
+		OptiminiumVisualSignificance.Snapshot onBands = onScene.significanceBands();
+		double offFps = averageFps(offFrames);
+		double onFps = averageFps(onFrames);
+		double offOneLow = onePercentLowOrZero(offFrames);
+		double onOneLow = onePercentLowOrZero(onFrames);
+		double offWorstFps = worstFrameFps(offFrames);
+		double onWorstFps = worstFrameFps(onFrames);
+		double offGpuMs = averageNanosOrZero(offGpuFrames) / 1_000_000.0D;
+		double onGpuMs = averageNanosOrZero(onGpuFrames) / 1_000_000.0D;
+		double offCpuMs = averageNanosOrZero(offFrames) / 1_000_000.0D;
+		double onCpuMs = averageNanosOrZero(onFrames) / 1_000_000.0D;
+		StringBuilder html = new StringBuilder(32000);
+		html.append("<!doctype html><html><head><meta charset=\"utf-8\"><title>Optiminium Benchmark</title><style>");
+		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
+		html.append("<h1>Optiminium Benchmark</h1><p class=\"muted\">")
+			.append(escape(FORMAT_VERSION)).append(" | rendererCompatibilityMode=")
+			.append(escape(OptiminiumSodiumCompat.rendererModeString())).append("</p>");
+		html.append("<div class=\"card\"><strong>Recommendation</strong><br>").append(escape(recommendation)).append("</div>");
+		html.append("<h2>Summary</h2><div class=\"grid\">");
+		card(html, "OFF average FPS", offFps, "fps", false);
+		card(html, "ON average FPS", onFps, "fps", false);
+		card(html, "FPS gain", onFps - offFps, "fps", onFps >= offFps);
+		card(html, "FPS gain percent", percentChange(offFps, onFps), "%", onFps >= offFps);
+		card(html, "OFF 1% low FPS", offOneLow, "fps", false);
+		card(html, "ON 1% low FPS", onOneLow, "fps", false);
+		card(html, "1% low gain percent", percentChange(offOneLow, onOneLow), "%", onOneLow >= offOneLow);
+		card(html, "OFF worst-frame FPS", offWorstFps, "fps", false);
+		card(html, "ON worst-frame FPS", onWorstFps, "fps", false);
+		card(html, "Worst-frame gain percent", percentChange(offWorstFps, onWorstFps), "%", onWorstFps >= offWorstFps);
+		card(html, "GPU ms delta", onGpuMs - offGpuMs, "ms", onGpuMs <= offGpuMs);
+		card(html, "CPU ms delta", onCpuMs - offCpuMs, "ms", onCpuMs <= offCpuMs);
+		card(html, "Optiminium CPU overhead", onProfile.totalOptiminiumCpuMs(), "ms/frame", onProfile.totalOptiminiumCpuMs() <= 0.20D);
+		html.append("</div>");
+		appendFramePacingDashboard(html, offFrames, onFrames, onBurstFrames);
+		html.append("<h2>Charts</h2>");
+		html.append(barChart("OFF vs ON FPS comparison", new String[]{"OFF avg FPS","ON avg FPS"}, new double[]{offFps, onFps}));
+		html.append(barChart("OFF vs ON 1% low comparison", new String[]{"OFF 1% low","ON 1% low"}, new double[]{offOneLow, onOneLow}));
+		html.append(barChart("OFF vs ON worst-frame comparison", new String[]{"OFF worst","ON worst"}, new double[]{offWorstFps, onWorstFps}));
+		html.append(barChart("GPU ms OFF vs ON", new String[]{"OFF GPU ms","ON GPU ms"}, new double[]{offGpuMs, onGpuMs}));
+		html.append(barChart("CPU ms OFF vs ON", new String[]{"OFF CPU ms","ON CPU ms"}, new double[]{offCpuMs, onCpuMs}));
+		html.append(barChart("Significance band counts", new String[]{"Full","Throttled","Reused","Proxy","Culled"}, new double[]{onBands.full(), onBands.throttled(), onBands.reused(), onBands.proxy(), onBands.culled()}));
+		html.append(barChart("Confidence distribution", new String[]{"0.00-0.20","0.20-0.40","0.40-0.60","0.60-0.80","0.80-1.00"}, new double[]{onBands.confidenceBucketVeryLow(), onBands.confidenceBucketLow(), onBands.confidenceBucketMedium(), onBands.confidenceBucketHigh(), onBands.confidenceBucketVeryHigh()}));
+		html.append(barChart("Pop-risk / confidence / importance averages", new String[]{"Pop risk","Confidence","Visual","Gameplay","Safety"}, new double[]{onBands.averagePopRisk(), onBands.averageConfidence(), onBands.averageVisualImportance(), onBands.averageGameplayImportance(), onBands.averageSafetyImportance()}));
+		html.append(barChart("Render stats", new String[]{"Uploads","Texture binds","Shader binds","Layer switches"}, new double[]{onRenderProfile.bufferUploadCount(), onRenderProfile.textureBindCount(), onRenderProfile.shaderBindCount(), onRenderProfile.renderLayerSwitchCount()}));
+		html.append(barChart("Protection counters", new String[]{"Pop-risk blocks","Confidence blocks","Recently visible","Hysteresis"}, new double[]{onBands.highPopRiskDemotionBlocks(), onBands.lowConfidenceDemotionBlocks(), onBands.recentlyVisibleProtections(), onBands.demotionsPreventedByHysteresis()}));
+		html.append("<h2>Decision Engine</h2>");
+		html.append(barChart("Weighted attention score averages", new String[]{"All","Full","Throttled","Reused","Proxy","Culled"}, new double[]{onBands.averageWeightedAttentionScore(), onBands.averageWeightedAttentionFull(), onBands.averageWeightedAttentionThrottled(), onBands.averageWeightedAttentionReused(), onBands.averageWeightedAttentionProxy(), onBands.averageWeightedAttentionCulled()}));
+		html.append(barChart("Dominant decision reasons", new String[]{"Weighted score","Pop-risk veto","Confidence veto","Safety override","Recently visible","Importance debt","Hysteresis","Nearby","Gameplay"}, new double[]{onBands.decisionBecauseWeightedScore(), onBands.decisionBecausePopRiskVeto(), onBands.decisionBecauseConfidenceVeto(), onBands.decisionBecauseSafetyOverride(), onBands.decisionBecauseRecentlyVisible(), onBands.decisionBecauseImportanceDebt(), onBands.decisionBecauseHysteresis(), onBands.decisionBecauseNearbyOverride(), onBands.decisionBecauseGameplayOverride()}));
+		html.append(barChart("Dirty evaluation cache", new String[]{"Cache hits","Score recomputes","Dirty objects","Periodic checks"}, new double[]{onBands.scoreCacheHits(), onBands.scoreRecomputes(), onBands.dirtyObjectsTotal(), onBands.periodicRechecks()}));
+		html.append("<p><span class=\"pill\">dominant promotion reason: ").append(escape(onBands.mostCommonReason())).append("</span><span class=\"pill\">confidence vetoes: ").append(onBands.lowConfidenceDemotionBlocks()).append("</span><span class=\"pill\">pop-risk vetoes: ").append(onBands.highPopRiskDemotionBlocks()).append("</span><span class=\"pill\">importance debt promotions: ").append(onBands.importanceDebtPromotions()).append("</span></p>");
+		html.append("<h2>Stability</h2><div class=\"grid\">");
+		card(html, "Entity cull oscillation events", onBands.entityCullOscillationEvents(), "events", onBands.entityCullOscillationEvents() <= 100L);
+		card(html, "Entity band transitions", onBands.entityBandTransitions(), "transitions", false);
+		card(html, "Transitions per frame", onBands.demotionsPerFrame() + onBands.promotionsPerFrame(), "per frame", (onBands.demotionsPerFrame() + onBands.promotionsPerFrame()) <= 1.0D);
+		card(html, "Average band lifetime", onBands.averageBandLifetime(), "frames", onBands.averageBandLifetime() >= 4.0D);
+		card(html, "Average ticks in band", onBands.averageTicksInBand(), "ticks", onBands.averageTicksInBand() >= 8.0D);
+		card(html, "Skipped stable objects", onBands.skippedStableObjects(), "cache skips", onBands.skippedStableObjects() > onBands.scoreRecomputes());
+		card(html, "Score cache hits", onBands.scoreCacheHits(), "hits", onBands.scoreCacheHits() > onBands.scoreRecomputes());
+		card(html, "Score recomputes", onBands.scoreRecomputes(), "recomputes", false);
+		card(html, "Transition budget used", onBands.bandTransitionBudgetUsed(), "transitions", false);
+		card(html, "Transitions deferred", onBands.bandTransitionsDeferred(), "deferred", onBands.bandTransitionsDeferred() > 0L);
+		card(html, "Transitions from stable objects", onBands.transitionsFromStableObjects(), "transitions", onBands.transitionsFromStableObjects() == 0L);
+		card(html, "Demotions blocked by hysteresis", onBands.demotionsPreventedByHysteresis(), "blocks", false);
+		card(html, "Promotions blocked by hysteresis", onBands.promotionsPreventedByHysteresis(), "blocks", false);
+		html.append("</div><div class=\"card\"><strong>Top transition pairs</strong><p>")
+			.append(escape(onBands.topTransitionPairs())).append("</p><strong>Dirty reasons</strong><p>")
+			.append(escape(onBands.dirtyReasons())).append("</p></div>");
+		html.append("<h2>Percent Changes</h2><div class=\"grid\">");
+		card(html, "FPS percent change", percentChange(offFps, onFps), "%", onFps >= offFps);
+		card(html, "1% low percent change", percentChange(offOneLow, onOneLow), "%", onOneLow >= offOneLow);
+		card(html, "Worst-frame percent change", percentChange(offWorstFps, onWorstFps), "%", onWorstFps >= offWorstFps);
+		card(html, "GPU ms percent change", percentChange(offGpuMs, onGpuMs), "%", onGpuMs <= offGpuMs);
+		card(html, "CPU ms percent change", percentChange(offCpuMs, onCpuMs), "%", onCpuMs <= offCpuMs);
+		card(html, "Upload count percent change", percentChange(offRenderProfile.bufferUploadCount(), onRenderProfile.bufferUploadCount()), "%", onRenderProfile.bufferUploadCount() <= offRenderProfile.bufferUploadCount());
+		card(html, "Texture bind percent change", percentChange(offRenderProfile.textureBindCount(), onRenderProfile.textureBindCount()), "%", onRenderProfile.textureBindCount() <= offRenderProfile.textureBindCount());
+		card(html, "Shader bind percent change", percentChange(offRenderProfile.shaderBindCount(), onRenderProfile.shaderBindCount()), "%", onRenderProfile.shaderBindCount() <= offRenderProfile.shaderBindCount());
+		card(html, "Proxy band percent change", percentChange(offBands.proxy(), onBands.proxy()), "%", false);
+		html.append("</div><h2>Fix Priorities</h2>");
+		appendFixPriorities(html, offBands, onBands, offRenderProfile, onRenderProfile,
+			offFps, onFps, offOneLow, onOneLow, offWorstFps, onWorstFps);
+		html.append("<h2>Regression Warnings</h2><div class=\"card\">");
+		appendWarnings(html, offFps, onFps, offOneLow, onOneLow, offWorstFps, onWorstFps, offGpuMs, onGpuMs,
+			offCpuMs, onCpuMs, onProfile, offBands, onBands, offRenderProfile, onRenderProfile);
+		html.append("</div>");
+		html.append("<details><summary>Raw benchmark metrics</summary><div class=\"raw\">")
+			.append(escape("OFF stats: " + stats(offFrames, offGpuFrames) + "\nON stats: " + stats(onFrames, onGpuFrames)
+				+ "\nOFF significance: " + significanceLine(offBands, offMetrics, offScene)
+				+ "\nON significance: " + significanceLine(onBands, onMetrics, onScene)
+				+ "\nOFF render: " + renderProfileLine(offRenderProfile, offFrames.size())
+				+ "\nON render: " + renderProfileLine(onRenderProfile, onFrames.size())
+				+ "\nRender delta: " + renderDeltaLine(offRenderProfile, onRenderProfile)
+				+ "\nON diagnostics: " + onDiagnostics))
+			.append("</div></details>");
+		html.append("</main></body></html>");
+		return html.toString();
+	}
+
+	private static void card(StringBuilder html, String label, double value, String unit, boolean classified) {
+		String lowerLabel = label.toLowerCase(Locale.ROOT);
+		String cls = classified ? " good"
+			: (lowerLabel.contains("gain") || lowerLabel.contains("delta")
+				|| lowerLabel.contains("change") || lowerLabel.contains("overhead") ? " bad" : "");
+		html.append("<div class=\"card\"><div class=\"muted\">").append(escape(label)).append("</div><div class=\"value")
+			.append(cls).append("\">").append(format(value)).append("</div><div class=\"muted\">")
+			.append(escape(unit)).append("</div></div>");
+	}
+
+	private static String barChart(String title, String[] labels, double[] values) {
+		double max = 0.0D;
+		for (double value : values) {
+			max = Math.max(max, Math.abs(value));
+		}
+		max = Math.max(1.0D, max);
+		int rowHeight = 28;
+		int height = 36 + labels.length * rowHeight;
+		StringBuilder svg = new StringBuilder(1024);
+		svg.append("<div class=\"chart\"><strong>").append(escape(title)).append("</strong><svg viewBox=\"0 0 720 ")
+			.append(height).append("\" role=\"img\">");
+		for (int i = 0; i < labels.length; i++) {
+			int y = 30 + i * rowHeight;
+			double value = values[i];
+			int width = (int)Math.round(Math.abs(value) / max * 440.0D);
+			String color = value < 0.0D ? "#ff8b73" : "#66d986";
+			svg.append("<text x=\"8\" y=\"").append(y + 15).append("\" fill=\"#c8d3df\" font-size=\"12\">")
+				.append(escape(labels[i])).append("</text>");
+			svg.append("<rect x=\"180\" y=\"").append(y).append("\" width=\"").append(width)
+				.append("\" height=\"18\" rx=\"3\" fill=\"").append(color).append("\"></rect>");
+			svg.append("<text x=\"").append(190 + width).append("\" y=\"").append(y + 14)
+				.append("\" fill=\"#e8edf2\" font-size=\"12\">").append(format(value)).append("</text>");
+		}
+		svg.append("</svg></div>");
+		return svg.toString();
+	}
+
+	private static void appendFramePacingDashboard(StringBuilder html, List<Long> offFrameTimes,
+			List<Long> onFrameTimes, List<FrameBurstSample> bursts) {
+		html.append("<h2>Frame Pacing</h2><div class=\"grid\">");
+		card(html, "OFF p95 frame time", percentileNanos(offFrameTimes, 0.95D) / 1_000_000.0D, "ms", false);
+		card(html, "ON p95 frame time", percentileNanos(onFrameTimes, 0.95D) / 1_000_000.0D, "ms",
+			percentileNanos(onFrameTimes, 0.95D) <= percentileNanos(offFrameTimes, 0.95D));
+		card(html, "OFF p99 frame time", percentileNanos(offFrameTimes, 0.99D) / 1_000_000.0D, "ms", false);
+		card(html, "ON p99 frame time", percentileNanos(onFrameTimes, 0.99D) / 1_000_000.0D, "ms",
+			percentileNanos(onFrameTimes, 0.99D) <= percentileNanos(offFrameTimes, 0.99D));
+		FrameBurstSample worst = maxBurst(bursts, BurstMetric.FRAME_TIME);
+		FrameBurstSample recompute = maxBurst(bursts, BurstMetric.RECOMPUTES);
+		FrameBurstSample upload = maxBurst(bursts, BurstMetric.UPLOADS);
+		FrameBurstSample transition = maxBurst(bursts, BurstMetric.TRANSITIONS);
+		FrameBurstSample periodic = maxBurst(bursts, BurstMetric.PERIODIC);
+		FrameBurstSample proxy = maxBurst(bursts, BurstMetric.PROXY_OPS);
+		card(html, "Largest burst frame", frameMs(worst), "ms", false);
+		card(html, "Largest upload frame", upload == null ? 0.0D : upload.render.bufferUploads(), "uploads", false);
+		card(html, "Largest transition frame", transition == null ? 0.0D : transition.significance.totalTransitions(), "transitions", false);
+		card(html, "Largest periodic frame", periodic == null ? 0.0D : periodic.significance.periodicRechecks(), "rechecks", false);
+		card(html, "Largest proxy-op frame", proxy == null ? 0.0D : proxy.significance.proxyCreations() + proxy.significance.proxyDestructions(), "proxy ops", false);
+		html.append("</div>");
+		html.append("<div class=\"grid\">");
+		operationCards(html, "Recomputes", bursts, BurstMetric.RECOMPUTES);
+		operationCards(html, "Transitions", bursts, BurstMetric.TRANSITIONS);
+		operationCards(html, "Uploads", bursts, BurstMetric.UPLOADS);
+		operationCards(html, "Proxy ops", bursts, BurstMetric.PROXY_OPS);
+		operationCards(html, "Periodic", bursts, BurstMetric.PERIODIC);
+		html.append("</div>");
+		html.append(barChart("Frame time histogram", new String[]{"<8ms","8-12ms","12-16ms","16-25ms","25-40ms",">40ms"}, frameTimeHistogram(onFrameTimes)));
+		html.append(barChart("Transitions per frame", new String[]{"0","1-4","5-16","17-64","65-128",">128"}, burstHistogram(bursts, BurstMetric.TRANSITIONS)));
+		html.append(barChart("Score recomputes per frame", new String[]{"0","1-32","33-96","97-192","193-384",">384"}, burstHistogram(bursts, BurstMetric.RECOMPUTES)));
+		html.append("<div class=\"card\"><strong>Worst 10 frames</strong><p>")
+			.append(escape(worstFramesLine(bursts))).append("</p><strong>Largest contributors</strong><p>")
+			.append(escape(contributorLine(worst, recompute, upload, transition, periodic))).append("</p></div>");
+	}
+
+	private static double frameMs(FrameBurstSample sample) {
+		return sample == null ? 0.0D : sample.frameNanos / 1_000_000.0D;
+	}
+
+	private static void operationCards(StringBuilder html, String label, List<FrameBurstSample> bursts, BurstMetric metric) {
+		card(html, label + " avg", averageBurst(bursts, metric), "per frame", false);
+		card(html, label + " max", maxBurstValue(bursts, metric), "per frame", false);
+		card(html, label + " p95", percentileBurst(bursts, metric, 0.95D), "per frame", false);
+		card(html, label + " p99", percentileBurst(bursts, metric, 0.99D), "per frame", false);
+	}
+
+	private static double percentileNanos(List<Long> frames, double percentile) {
+		if (frames.isEmpty()) return 0.0D;
+		List<Long> sorted = new ArrayList<>(frames);
+		sorted.sort(Long::compareTo);
+		int index = Math.min(sorted.size() - 1, Math.max(0, (int)Math.ceil(sorted.size() * percentile) - 1));
+		return sorted.get(index);
+	}
+
+	private static double[] frameTimeHistogram(List<Long> frames) {
+		double[] buckets = new double[6];
+		for (long nanos : frames) {
+			double ms = nanos / 1_000_000.0D;
+			if (ms < 8.0D) buckets[0]++;
+			else if (ms < 12.0D) buckets[1]++;
+			else if (ms < 16.0D) buckets[2]++;
+			else if (ms < 25.0D) buckets[3]++;
+			else if (ms < 40.0D) buckets[4]++;
+			else buckets[5]++;
+		}
+		return buckets;
+	}
+
+	private static double[] burstHistogram(List<FrameBurstSample> bursts, BurstMetric metric) {
+		double[] buckets = new double[6];
+		for (FrameBurstSample sample : bursts) {
+			long value = metricValue(sample, metric);
+			if (value == 0L) buckets[0]++;
+			else if (value <= 4L && metric == BurstMetric.TRANSITIONS) buckets[1]++;
+			else if (value <= 16L && metric == BurstMetric.TRANSITIONS) buckets[2]++;
+			else if (value <= 64L && metric == BurstMetric.TRANSITIONS) buckets[3]++;
+			else if (value <= 128L && metric == BurstMetric.TRANSITIONS) buckets[4]++;
+			else if (metric == BurstMetric.TRANSITIONS) buckets[5]++;
+			else if (value <= 32L) buckets[1]++;
+			else if (value <= 96L) buckets[2]++;
+			else if (value <= 192L) buckets[3]++;
+			else if (value <= 384L) buckets[4]++;
+			else buckets[5]++;
+		}
+		return buckets;
+	}
+
+	private static FrameBurstSample maxBurst(List<FrameBurstSample> bursts, BurstMetric metric) {
+		FrameBurstSample best = null;
+		long bestValue = Long.MIN_VALUE;
+		for (FrameBurstSample sample : bursts) {
+			long value = metricValue(sample, metric);
+			if (value > bestValue) {
+				best = sample;
+				bestValue = value;
+			}
+		}
+		return best;
+	}
+
+	private static double averageBurst(List<FrameBurstSample> bursts, BurstMetric metric) {
+		if (bursts.isEmpty()) return 0.0D;
+		long total = 0L;
+		for (FrameBurstSample sample : bursts) {
+			total += metricValue(sample, metric);
+		}
+		return total / (double)bursts.size();
+	}
+
+	private static long maxBurstValue(List<FrameBurstSample> bursts, BurstMetric metric) {
+		FrameBurstSample sample = maxBurst(bursts, metric);
+		return sample == null ? 0L : metricValue(sample, metric);
+	}
+
+	private static double percentileBurst(List<FrameBurstSample> bursts, BurstMetric metric, double percentile) {
+		if (bursts.isEmpty()) return 0.0D;
+		List<Long> values = new ArrayList<>(bursts.size());
+		for (FrameBurstSample sample : bursts) {
+			values.add(metricValue(sample, metric));
+		}
+		values.sort(Long::compareTo);
+		int index = Math.min(values.size() - 1, Math.max(0, (int)Math.ceil(values.size() * percentile) - 1));
+		return values.get(index);
+	}
+
+	private static long metricValue(FrameBurstSample sample, BurstMetric metric) {
+		return switch (metric) {
+			case FRAME_TIME -> sample.frameNanos;
+			case RECOMPUTES -> sample.significance.scoreRecomputes();
+			case TRANSITIONS -> sample.significance.totalTransitions();
+			case UPLOADS -> sample.render.bufferUploads();
+			case PROXY_OPS -> sample.significance.proxyCreations() + sample.significance.proxyDestructions();
+			case PERIODIC -> sample.significance.periodicRechecks();
+		};
+	}
+
+	private static String worstFramesLine(List<FrameBurstSample> bursts) {
+		if (bursts.isEmpty()) return "none";
+		List<FrameBurstSample> sorted = new ArrayList<>(bursts);
+		sorted.sort((left, right) -> Long.compare(right.frameNanos, left.frameNanos));
+		StringBuilder builder = new StringBuilder();
+		int count = Math.min(10, sorted.size());
+		for (int i = 0; i < count; i++) {
+			FrameBurstSample sample = sorted.get(i);
+			if (i > 0) builder.append(" | ");
+			builder.append("frame=").append(sample.significance.frameIndex())
+				.append(",ms=").append(format(sample.frameNanos / 1_000_000.0D))
+				.append(",recomputes=").append(sample.significance.scoreRecomputes())
+				.append(",transitions=").append(sample.significance.totalTransitions())
+				.append(",uploads=").append(sample.render.bufferUploads())
+				.append(",proxyOps=").append(sample.significance.proxyCreations() + sample.significance.proxyDestructions())
+				.append(",deferred=").append(sample.deferredWork())
+				.append(",periodic=").append(sample.significance.periodicRechecks())
+				.append(",dirty=").append(sample.significance.dirtyObjects());
+		}
+		return builder.toString();
+	}
+
+	private static String contributorLine(FrameBurstSample worst, FrameBurstSample recompute,
+			FrameBurstSample upload, FrameBurstSample transition, FrameBurstSample periodic) {
+		if (worst == null) return "none";
+		return "worstFrame=" + burstSummary(worst)
+			+ " | maxRecompute=" + burstSummary(recompute)
+			+ " | maxUpload=" + burstSummary(upload)
+			+ " | maxTransition=" + burstSummary(transition)
+			+ " | maxPeriodic=" + burstSummary(periodic)
+			+ " | likelyWorstContributor=" + likelyContributor(worst);
+	}
+
+	private static String burstSummary(FrameBurstSample sample) {
+		if (sample == null) return "none";
+		return "frame " + sample.significance.frameIndex()
+			+ " ms=" + format(sample.frameNanos / 1_000_000.0D)
+			+ " recomputes=" + sample.significance.scoreRecomputes()
+			+ " transitions=" + sample.significance.totalTransitions()
+			+ " proxyOps=" + (sample.significance.proxyCreations() + sample.significance.proxyDestructions())
+			+ " uploads=" + sample.render.bufferUploads()
+			+ " uploadMs=" + format(sample.render.bufferUploadMs())
+			+ " periodic=" + sample.significance.periodicRechecks();
+	}
+
+	private static String likelyContributor(FrameBurstSample sample) {
+		long recomputes = sample.significance.scoreRecomputes();
+		long transitions = sample.significance.totalTransitions();
+		long uploads = sample.render.bufferUploads();
+		long periodic = sample.significance.periodicRechecks();
+		long proxyOps = sample.significance.proxyCreations() + sample.significance.proxyDestructions();
+		if (uploads > 0L && sample.render.bufferUploadMs() >= 1.0D) return "buffer uploads";
+		if (proxyOps >= transitions && proxyOps > 0L) return "proxy band churn";
+		if (recomputes >= transitions && recomputes >= periodic && recomputes > 0L) return "score recomputes";
+		if (transitions >= periodic && transitions > 0L) return "band transitions";
+		if (periodic > 0L) return "periodic rechecks";
+		return "external renderer or uninstrumented work";
+	}
+
+	private static void appendFixPriorities(StringBuilder html, OptiminiumVisualSignificance.Snapshot offBands,
+			OptiminiumVisualSignificance.Snapshot onBands, OptiminiumRenderProfiler.Snapshot offRenderProfile,
+			OptiminiumRenderProfiler.Snapshot onRenderProfile, double offFps, double onFps,
+			double offOneLow, double onOneLow, double offWorstFps, double onWorstFps) {
+		html.append("<div class=\"grid\">");
+		int count = 0;
+		long interactionDirtyCount = dirtyReasonCount(onBands.dirtyReasons(), "interaction");
+		if (interactionDirtyCount > 10_000L && (onOneLow < offOneLow || onWorstFps < offWorstFps)) {
+			priority(html, "High", "Interaction dirty trigger likely misclassified",
+				"interaction dirty count=" + interactionDirtyCount
+					+ ", scoreRecomputes=" + onBands.scoreRecomputes()
+					+ ", scoreCacheHits=" + onBands.scoreCacheHits()
+					+ ", 1% low change=" + format(percentChange(offOneLow, onOneLow)) + "%"
+					+ ", worst-frame change=" + format(percentChange(offWorstFps, onWorstFps)) + "%",
+				"Passive visibility, importance, or tracking is probably being counted as player interaction.",
+				"Reserve interaction dirty state for actual use/attack targets and move passive changes to specific dirty reasons.");
+			count++;
+		}
+		if (onBands.entityCullOscillationEvents() > 100L && (onOneLow < offOneLow || onWorstFps < offWorstFps)) {
+			priority(html, "High", "Band oscillation causing frame pacing regression",
+				"entityCullOscillationEvents=" + onBands.entityCullOscillationEvents()
+					+ ", topTransitionPairs=" + onBands.topTransitionPairs()
+					+ ", transitionsFromStableObjects=" + onBands.transitionsFromStableObjects()
+					+ ", 1% low change=" + format(percentChange(offOneLow, onOneLow)) + "%"
+					+ ", worst-frame change=" + format(percentChange(offWorstFps, onWorstFps)) + "%"
+					+ ", average FPS change=" + format(percentChange(offFps, onFps)) + "%",
+				"Objects are rapidly crossing adjacent weighted-attention bands, especially FULL/THROTTLED.",
+				"Keep stable objects on cached bands and only re-enter weighted attention from dirty or periodic triggers.");
+			count++;
+		}
+		if (onBands.transitionsFromStableObjects() > 0L) {
+			priority(html, "High", "Stable objects still changing bands",
+				"transitionsFromStableObjects=" + onBands.transitionsFromStableObjects()
+					+ ", dirtyReasons=" + onBands.dirtyReasons(),
+				"At least one band assignment path is bypassing dirty-state gating.",
+				"Route every band change through the dirty transition function and keep clean objects on cached bands.");
+			count++;
+		}
+		if (onBands.scoreCacheHits() > 0L && onBands.scoreRecomputes() >= onBands.scoreCacheHits()) {
+			priority(html, "Medium", "Score recomputes too close to cache hits",
+				"scoreCacheHits=" + onBands.scoreCacheHits() + ", scoreRecomputes=" + onBands.scoreRecomputes()
+					+ ", dirtyReasons=" + onBands.dirtyReasons(),
+				"Dirty triggers are too broad or periodic reevaluation is too frequent.",
+				"Tighten dirty triggers so stationary, off-center, low-importance objects reuse cached scores longer.");
+			count++;
+		}
+		if (onBands.bandTransitionsDeferred() > 0L) {
+			priority(html, "Low", "Transition budget saturated",
+				"bandTransitionsDeferred=" + onBands.bandTransitionsDeferred()
+					+ ", bandTransitionBudgetUsed=" + onBands.bandTransitionBudgetUsed(),
+				"More non-urgent objects requested transitions than the per-frame budget allowed.",
+				"Check whether deferred transitions are mostly low-risk demotions before increasing the budget.");
+			count++;
+		}
+		long confidenceSamples = onBands.confidenceBucketVeryLow() + onBands.confidenceBucketLow()
+			+ onBands.confidenceBucketMedium() + onBands.confidenceBucketHigh() + onBands.confidenceBucketVeryHigh();
+		if (confidenceSamples > 0L && onBands.confidenceBucketVeryLow() * 100L / confidenceSamples >= 90L) {
+			priority(html, "High", "Confidence collapsed into lowest bucket",
+				"avg=" + format(onBands.averageConfidence()) + ", min=" + format(onBands.minConfidence())
+					+ ", max=" + format(onBands.maxConfidence()) + ", buckets=[" + onBands.confidenceBucketVeryLow()
+					+ "," + onBands.confidenceBucketLow() + "," + onBands.confidenceBucketMedium() + ","
+					+ onBands.confidenceBucketHigh() + "," + onBands.confidenceBucketVeryHigh() + "]",
+				"Confidence target is over-penalized or self-reinforcing near the floor.",
+				"Rebalance confidence inputs so stable, far, low-risk objects can leave the floor.");
+			count++;
+		}
+		if (onBands.demotionsAllowedBecauseHighConfidence() == 0L
+				&& (onBands.decisionBecauseConfidenceVeto() > 0L || onBands.lowConfidenceDemotionBlocks() > 0L)) {
+			priority(html, "High", "Confidence only acting as veto",
+				"demotionsAllowedBecauseHighConfidence=0, confidence vetoes=" + onBands.decisionBecauseConfidenceVeto(),
+				"High-confidence threshold is unreachable or confidence is checked only as a brake.",
+				"Let high-confidence, low-attention, low-pop-risk candidates shorten demotion hold or reach proxy/reuse.");
+			count++;
+		}
+		if (onBands.averagePopRisk() > 0.50D && onBands.decisionBecausePopRiskVeto() == 0L) {
+			priority(html, "High", "Pop-risk veto inactive despite high pop risk",
+				"avgPopRisk=" + format(onBands.averagePopRisk()) + ", decisionBecausePopRiskVeto=0",
+				"Earlier gates are likely preventing the pop-risk stage from observing risky demotions.",
+				"Run pop-risk veto before lower-priority confidence/hysteresis gates for demotion candidates.");
+			count++;
+		}
+		double textureBindChange = percentChange(offRenderProfile.textureBindCount(), onRenderProfile.textureBindCount());
+		if (textureBindChange > 5.0D) {
+			priority(html, textureBindChange > 10.0D ? "Medium" : "Low", "Texture binds increased",
+				"textureBindCount " + offRenderProfile.textureBindCount() + " -> " + onRenderProfile.textureBindCount()
+					+ " (" + format(textureBindChange) + "%)",
+				"Optiminium-owned warmup, fade, overlay, or proxy paths may be triggering extra texture state changes.",
+				"Avoid unchanged/redundant Optiminium-owned texture work; do not cache global GL state.");
+			count++;
+		}
+		double shaderBindChange = percentChange(offRenderProfile.shaderBindCount(), onRenderProfile.shaderBindCount());
+		if (shaderBindChange > 5.0D) {
+			priority(html, shaderBindChange > 10.0D ? "Medium" : "Low", "Shader binds increased",
+				"shaderBindCount " + offRenderProfile.shaderBindCount() + " -> " + onRenderProfile.shaderBindCount()
+					+ " (" + format(shaderBindChange) + "%)",
+				"Optiminium-owned debug, overlay, fade, or proxy rendering may be causing extra shader transitions.",
+				"Batch Optiminium-owned work by existing RenderType where correctness allows.");
+			count++;
+		}
+		double uploadChange = percentChange(offRenderProfile.bufferUploadCount(), onRenderProfile.bufferUploadCount());
+		if (uploadChange > 5.0D) {
+			priority(html, uploadChange > 10.0D ? "Medium" : "Low", "Upload count increased",
+				"bufferUploadCount " + offRenderProfile.bufferUploadCount() + " -> " + onRenderProfile.bufferUploadCount()
+					+ " (" + format(uploadChange) + "%)",
+				"Optiminium-owned resource warmup or temporary buffers may be uploading unchanged work.",
+				"Skip redundant Optiminium-owned uploads and reuse valid resources; do not alter terrain chunk scheduling.");
+			count++;
+		}
+		if (count == 0) {
+			html.append("<div class=\"card\"><strong>No ranked fix priorities</strong><p class=\"muted\">No automatic tuning issue crossed the configured thresholds.</p></div>");
+		}
+		html.append("</div>");
+	}
+
+	private static void priority(StringBuilder html, String severity, String title, String evidence, String likelyCause, String nextFix) {
+		String cls = "High".equals(severity) ? "bad" : ("Medium".equals(severity) ? "warn" : "muted");
+		html.append("<div class=\"card\"><strong class=\"").append(cls).append("\">").append(escape(severity))
+			.append("</strong><h3>").append(escape(title)).append("</h3><p><strong>Evidence:</strong> ")
+			.append(escape(evidence)).append("</p><p><strong>Likely cause:</strong> ")
+			.append(escape(likelyCause)).append("</p><p><strong>Recommended next fix:</strong> ")
+			.append(escape(nextFix)).append("</p></div>");
+	}
+
+	private static void appendWarnings(StringBuilder html, double offFps, double onFps,
+			double offOneLow, double onOneLow, double offWorstFps, double onWorstFps,
+			double offGpuMs, double onGpuMs, double offCpuMs, double onCpuMs,
+			OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
+			OptiminiumVisualSignificance.Snapshot offBands, OptiminiumVisualSignificance.Snapshot onBands,
+			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile) {
+		int warnings = 0;
+		warnings += warning(html, onFps < offFps, "FPS gain is negative.");
+		warnings += warning(html, onOneLow < offOneLow, "1% low FPS gain is negative.");
+		warnings += warning(html, onWorstFps < offWorstFps, "High severity: worst-frame FPS gain is negative.");
+		warnings += warning(html, onGpuMs > offGpuMs, "GPU frame time increased.");
+		warnings += warning(html, onCpuMs > offCpuMs, "CPU frame time increased.");
+		warnings += warning(html, onProfile.totalOptiminiumCpuMs() > 0.20D, "Optiminium CPU overhead is above 0.20 ms/frame.");
+		warnings += warning(html, onBands.entityCullOscillationEvents() > offBands.entityCullOscillationEvents(), "Entity cull oscillation events increased.");
+		warnings += warning(html, onBands.entityCullOscillationEvents() > 100L, "High severity: entityCullOscillationEvents is above 100.");
+		warnings += warning(html, dirtyReasonCount(onBands.dirtyReasons(), "interaction") > 10_000L, "High severity: interaction dirty trigger likely misclassified.");
+		warnings += warning(html, onBands.transitionsFromStableObjects() > 0L, "High severity: transitionsFromStableObjects is above 0.");
+		warnings += warning(html, onBands.scoreCacheHits() > 0L && onBands.scoreRecomputes() >= onBands.scoreCacheHits(), "Score recomputes are close to or above score cache hits.");
+		warnings += warning(html, onBands.bandTransitionsDeferred() > 0L, "Band transition budget deferred one or more non-urgent transitions.");
+		warnings += warning(html, onBands.averageBandLifetime() > 0.0D && onBands.averageBandLifetime() < 4.0D, "Medium severity: average band lifetime is below 4 frames.");
+		warnings += warning(html, onBands.importantButCulled() > 0L, "Important objects were culled.");
+		warnings += warning(html, onBands.demotionsAllowedBecauseHighConfidence() == 0L, "demotionsAllowedBecauseHighConfidence remains 0.");
+		warnings += warning(html, onRenderProfile.suspectedGlStallFrames() > offRenderProfile.suspectedGlStallFrames(), "Suspected GL stalls increased.");
+		warnings += warning(html, increasedSignificantly(offRenderProfile.textureBindCount(), onRenderProfile.textureBindCount()), "Texture binds increased significantly.");
+		warnings += warning(html, increasedSignificantly(offRenderProfile.shaderBindCount(), onRenderProfile.shaderBindCount()), "Shader binds increased significantly.");
+		warnings += warning(html, increasedSignificantly(offRenderProfile.bufferUploadCount(), onRenderProfile.bufferUploadCount()), "Buffer upload count increased significantly.");
+		if (warnings == 0) {
+			html.append("<p class=\"good\">No automatic regression warnings triggered.</p>");
+		}
+	}
+
+	private static int warning(StringBuilder html, boolean condition, String message) {
+		if (!condition) return 0;
+		html.append("<p class=\"warn\">").append(escape(message)).append("</p>");
+		return 1;
+	}
+
+	private static long dirtyReasonCount(String dirtyReasons, String reason) {
+		if (dirtyReasons == null || dirtyReasons.isEmpty() || "none".equals(dirtyReasons)) return 0L;
+		String prefix = reason + ":";
+		int start = dirtyReasons.indexOf(prefix);
+		if (start < 0) return 0L;
+		start += prefix.length();
+		int end = dirtyReasons.indexOf('|', start);
+		if (end < 0) end = dirtyReasons.length();
+		try {
+			return Long.parseLong(dirtyReasons.substring(start, end));
+		} catch (NumberFormatException exception) {
+			return 0L;
+		}
+	}
+
+	private static boolean increasedSignificantly(long offValue, long onValue) {
+		return onValue > offValue && percentChange(offValue, onValue) > 10.0D;
+	}
+
 	private static double estimatedFpsGain(double fpsGain, long prevented, long totalPrevented) {
 		if (fpsGain <= 0.0D || prevented <= 0L || totalPrevented <= 0L) {
 			return 0.0D;
@@ -433,6 +1030,31 @@ public final class OptiminiumBenchmark {
 	private static double averageFps(List<Long> frames) {
 		double average = averageNanosOrZero(frames);
 		return average <= 0.0D ? 0.0D : 1_000_000_000.0D / average;
+	}
+
+	private static double onePercentLowOrZero(List<Long> frames) {
+		return frames.isEmpty() ? 0.0D : onePercentLowFps(frames);
+	}
+
+	private static double worstFrameFps(List<Long> frames) {
+		long worst = maxNanos(frames);
+		return worst <= 0L ? 0.0D : 1_000_000_000.0D / worst;
+	}
+
+	private static double percentChange(double oldValue, double newValue) {
+		if (Math.abs(oldValue) < 0.000001D) {
+			return Math.abs(newValue) < 0.000001D ? 0.0D : 100.0D;
+		}
+		return (newValue - oldValue) * 100.0D / Math.abs(oldValue);
+	}
+
+	private static String format(double value) {
+		return String.format(Locale.US, "%.2f", value);
+	}
+
+	private static String escape(String text) {
+		return text == null ? "" : text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+			.replace("\"", "&quot;").replace("'", "&#39;");
 	}
 
 	private static double averageNanosOrZero(List<Long> frames) {
@@ -478,11 +1100,16 @@ public final class OptiminiumBenchmark {
 			0L, 0.0D, 0.0D, 0.0D, 0.0D,
 			0.0D, 0.0D, 0.0D, 0.0D, 0.0D, "none",
 			0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0.0D, 0.0D, 0.0D, 0L,
-			0.0D, 0.0D, 0.0D, 0.0D));
+			0.0D, 0.0D, 0.0D, 0.0D,
+			0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D,
+			0L, 0L, 0L, 0L, 0L,
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "none",
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0.0D, 0L, 0L, "none"));
 	}
 
 	private static OptiminiumRenderProfiler.Snapshot emptyRenderProfile() {
-		return new OptiminiumRenderProfiler.Snapshot(0L, 0L, 0L, 0L, 0.0D, 0L, 0L, 0L, 0L, 0L, 0.0D);
+		return new OptiminiumRenderProfiler.Snapshot(0L, 0L, 0L, 0L, 0.0D, 0L, 0L, 0L, 0L, 0L, 0.0D,
+			0, 0, 0, 0, 0.0D);
 	}
 
 	private static double onePercentLowFps(List<Long> frames) {
@@ -533,9 +1160,31 @@ public final class OptiminiumBenchmark {
 		}
 	}
 
+	private enum BurstMetric {
+		FRAME_TIME,
+		RECOMPUTES,
+		TRANSITIONS,
+		UPLOADS,
+		PROXY_OPS,
+		PERIODIC
+	}
+
 	private enum Phase {
 		OFF,
 		ON
+	}
+
+	private record FrameBurstSample(
+		long frameNanos,
+		OptiminiumVisualSignificance.FrameBurstSnapshot significance,
+		OptiminiumRenderProfiler.FrameSnapshot render,
+		OptiminiumGpuUploadQueue.FrameSnapshot uploads
+	) {
+		long deferredWork() {
+			return significance.scoreRecomputesDeferred()
+				+ significance.bandTransitionsDeferred()
+				+ uploads.deferred();
+		}
 	}
 
 	private record CameraSnapshot(double x, double y, double z, float xRot, float yRot) {

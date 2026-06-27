@@ -58,6 +58,13 @@ public final class OptiminiumGpuUploadQueue {
 	private static long uploadsDeferredBySignificance;
 	private static long uploadsPromotedBecauseNear;
 	private static long redundantUploadSchedulingPrevented;
+	private static int uploadsScheduledThisFrame;
+	private static int uploadsProcessedThisFrame;
+	private static int uploadsDeferredThisFrame;
+	private static int maxUploadsScheduledPerFrame;
+	private static int maxUploadsProcessedPerFrame;
+	private static int maxUploadsDeferredPerFrame;
+	private static FrameSnapshot lastFrameSnapshot = FrameSnapshot.EMPTY;
 
 	// ---- Constants ----
 	private static final int MAX_PENDING_UPLOADS = 256;
@@ -97,6 +104,7 @@ public final class OptiminiumGpuUploadQueue {
 
 		UploadEntry entry = new UploadEntry(upload, location, isTexture);
 		uploads.addLast(entry);
+		uploadsScheduledThisFrame++;
 		if (location != null) {
 			enqueuedLocations.add(location);
 		}
@@ -128,6 +136,7 @@ public final class OptiminiumGpuUploadQueue {
 	public static long uploadsDeferredBySignificance() { return uploadsDeferredBySignificance; }
 	public static long uploadsPromotedBecauseNear() { return uploadsPromotedBecauseNear; }
 	public static long redundantUploadSchedulingPrevented() { return redundantUploadSchedulingPrevented; }
+	public static FrameSnapshot frameSnapshot() { return lastFrameSnapshot; }
 
 	public static void resetMetrics() {
 		uploadsSkippedBecauseLowSignificance = 0L;
@@ -135,10 +144,18 @@ public final class OptiminiumGpuUploadQueue {
 		uploadsDeferredBySignificance = 0L;
 		uploadsPromotedBecauseNear = 0L;
 		redundantUploadSchedulingPrevented = 0L;
+		uploadsScheduledThisFrame = 0;
+		uploadsProcessedThisFrame = 0;
+		uploadsDeferredThisFrame = 0;
+		maxUploadsScheduledPerFrame = 0;
+		maxUploadsProcessedPerFrame = 0;
+		maxUploadsDeferredPerFrame = 0;
+		lastFrameSnapshot = FrameSnapshot.EMPTY;
 	}
 
 	@SubscribeEvent
 	public static void onFrame(RenderFrameEvent.Pre event) {
+		captureFrameSnapshot();
 		frameCounter++;
 		// When Sodium is present, skip Optiminium-managed texture upload queue.
 		// Sodium manages its own texture upload pipeline and this queue would
@@ -203,6 +220,7 @@ public final class OptiminiumGpuUploadQueue {
 				entry.deferCount++;
 				uploadsDeferredBySignificance++;
 				deferredThisFrame++;
+				uploadsDeferredThisFrame++;
 				uploads.removeFirst();
 				uploads.addLast(entry);
 
@@ -223,6 +241,7 @@ public final class OptiminiumGpuUploadQueue {
 
 			entry.task.run();
 			processed++;
+			uploadsProcessedThisFrame++;
 		}
 
 		// Track skipped uploads (those that were deferred but never processed)
@@ -245,5 +264,29 @@ public final class OptiminiumGpuUploadQueue {
 	public static void clear() {
 		uploads.clear();
 		enqueuedLocations.clear();
+	}
+
+	private static void captureFrameSnapshot() {
+		lastFrameSnapshot = new FrameSnapshot(
+			uploadsScheduledThisFrame,
+			uploadsProcessedThisFrame,
+			uploadsDeferredThisFrame,
+			uploads.size()
+		);
+		maxUploadsScheduledPerFrame = Math.max(maxUploadsScheduledPerFrame, uploadsScheduledThisFrame);
+		maxUploadsProcessedPerFrame = Math.max(maxUploadsProcessedPerFrame, uploadsProcessedThisFrame);
+		maxUploadsDeferredPerFrame = Math.max(maxUploadsDeferredPerFrame, uploadsDeferredThisFrame);
+		uploadsScheduledThisFrame = 0;
+		uploadsProcessedThisFrame = 0;
+		uploadsDeferredThisFrame = 0;
+	}
+
+	public record FrameSnapshot(
+		int scheduled,
+		int processed,
+		int deferred,
+		int pending
+	) {
+		private static final FrameSnapshot EMPTY = new FrameSnapshot(0, 0, 0, 0);
 	}
 }
