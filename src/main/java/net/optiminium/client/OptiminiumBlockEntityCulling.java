@@ -120,6 +120,7 @@ public final class OptiminiumBlockEntityCulling {
 			if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, viewDistance)) {
 				return;
 			}
+			OptiminiumBlockEntityLod.recordRendered(blockEntity);
 			float alpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
 			if (alpha < 1.0F) {
 				RenderSystem.enableBlend();
@@ -150,7 +151,7 @@ public final class OptiminiumBlockEntityCulling {
 				// Feed ALL block entities into Visual Significance (including out-of-range ones)
 				// so VS builds complete memory even for entities beyond the distance threshold.
 				OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPos);
-
+				OptiminiumBlockEntityLod.observe(blockEntity);
 				int scaledViewDistance = OptiminiumGpuOptimizer.scaledBlockEntityViewDistance(viewDistance);
 				Vec3 center = blockEntity.getBlockPos().getCenter();
 				double dx = center.x - cameraPos.x;
@@ -161,12 +162,14 @@ public final class OptiminiumBlockEntityCulling {
 				// Distance check (base culling)
 				if (distanceSqr > scaledViewDistance * scaledViewDistance) {
 					OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
+					OptiminiumBlockEntityLod.recordSkippedRender(blockEntity);
 					return false;
 				}
 
 				// Delegate's own shouldRender (e.g., AABB frustum check)
 				if (!delegate.shouldRender(blockEntity, cameraPos)) {
 					OptiminiumGpuOptimizer.recordCulledBlockEntityRender();
+					OptiminiumBlockEntityLod.recordSkippedRender(blockEntity);
 					return false;
 				}
 

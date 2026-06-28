@@ -200,6 +200,9 @@ public final class OptiminiumOptimizer {
 						+ ", hiddenNameTags=" + snapshot.hiddenNameTags()
 						+ ", hiddenParticles=" + snapshot.hiddenParticles()
 						+ ", suppressedSounds=" + snapshot.suppressedSounds()
+						+ ", blockEntityLodCached=" + snapshot.blockEntityLodCachedEntries()
+						+ ", blockEntityLodRendered=" + snapshot.blockEntityLodRendered()
+						+ ", blockEntityLodEstimatedSkipped=" + snapshot.blockEntityLodEstimatedSkippedRenders()
 						+ clientStats()
 				), false);
 				return 1;

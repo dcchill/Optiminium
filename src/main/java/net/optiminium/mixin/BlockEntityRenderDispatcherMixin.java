@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.optiminium.client.OptiminiumBlockEntityLod;
 import net.optiminium.client.OptiminiumBlockEntityCulling;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.optiminium.client.OptiminiumFadeBufferSource;
@@ -26,10 +27,12 @@ public abstract class BlockEntityRenderDispatcherMixin {
 	private static <T extends BlockEntity> void optiminium$countRenderedBlockEntity(BlockEntityRenderer<T> renderer, T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
 			CallbackInfo callback) {
 		if (!OptiminiumBlockEntityCulling.isDistanceCullingRenderer(renderer)) {
+			OptiminiumBlockEntityLod.observe(blockEntity);
 			if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, renderer.getViewDistance())) {
 				callback.cancel();
 				return;
 			}
+			OptiminiumBlockEntityLod.recordRendered(blockEntity);
 			float alpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
 			if (alpha < 1.0F) {
 				RenderSystem.enableBlend();

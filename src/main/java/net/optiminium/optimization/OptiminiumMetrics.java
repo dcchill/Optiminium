@@ -1,6 +1,7 @@
 package net.optiminium.optimization;
 
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class OptiminiumMetrics {
 	private static final LongAdder skippedEntityTicks = new LongAdder();
@@ -12,6 +13,9 @@ public final class OptiminiumMetrics {
 	private static final LongAdder hiddenNameTags = new LongAdder();
 	private static final LongAdder hiddenParticles = new LongAdder();
 	private static final LongAdder suppressedSounds = new LongAdder();
+	private static final AtomicLong blockEntityLodCachedEntries = new AtomicLong();
+	private static final LongAdder blockEntityLodRendered = new LongAdder();
+	private static final LongAdder blockEntityLodEstimatedSkippedRenders = new LongAdder();
 
 	private OptiminiumMetrics() {
 	}
@@ -73,6 +77,22 @@ public final class OptiminiumMetrics {
 		suppressedSounds.increment();
 	}
 
+	public static void blockEntityLodCachedEntries(long count) {
+		blockEntityLodCachedEntries.set(Math.max(0L, count));
+	}
+
+	public static void blockEntityLodRendered(long count) {
+		if (count > 0) {
+			blockEntityLodRendered.add(count);
+		}
+	}
+
+	public static void blockEntityLodEstimatedSkippedRenders(long count) {
+		if (count > 0) {
+			blockEntityLodEstimatedSkippedRenders.add(count);
+		}
+	}
+
 	public static Snapshot snapshot() {
 		return new Snapshot(
 			skippedEntityTicks.sum(),
@@ -83,7 +103,10 @@ public final class OptiminiumMetrics {
 			culledBlockEntityRenders.sum(),
 			hiddenNameTags.sum(),
 			hiddenParticles.sum(),
-			suppressedSounds.sum()
+			suppressedSounds.sum(),
+			blockEntityLodCachedEntries.get(),
+			blockEntityLodRendered.sum(),
+			blockEntityLodEstimatedSkippedRenders.sum()
 		);
 	}
 
@@ -97,6 +120,9 @@ public final class OptiminiumMetrics {
 		hiddenNameTags.reset();
 		hiddenParticles.reset();
 		suppressedSounds.reset();
+		blockEntityLodCachedEntries.set(0L);
+		blockEntityLodRendered.reset();
+		blockEntityLodEstimatedSkippedRenders.reset();
 	}
 
 	public record Snapshot(
@@ -108,7 +134,10 @@ public final class OptiminiumMetrics {
 		long culledBlockEntityRenders,
 		long hiddenNameTags,
 		long hiddenParticles,
-		long suppressedSounds
+		long suppressedSounds,
+		long blockEntityLodCachedEntries,
+		long blockEntityLodRendered,
+		long blockEntityLodEstimatedSkippedRenders
 	) {
 	}
 }

@@ -96,6 +96,9 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(new SettingsSlider(x, y + 208, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 234, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 260, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
+		this.addRenderableWidget(Button.builder(blockEntityLodDebugLabel(), button -> button.setMessage(Component.literal("Block Entity LOD Debug: " + (OptiminiumSettings.toggleBlockEntityLodDebug() ? "ON" : "OFF"))))
+			.bounds(x, y + 286, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -106,23 +109,26 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(blockEntityCullingLabel(), button -> button.setMessage(Component.literal("Block Entity Culling: " + (OptiminiumSettings.toggleBlockEntityCulling() ? "ON" : "OFF"))))
 			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 112, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
+		this.addRenderableWidget(Button.builder(blockEntityLodCubesLabel(), button -> button.setMessage(Component.literal("Block Entity LOD Cubes: " + (OptiminiumSettings.toggleBlockEntityLodCubes() ? "ON" : "OFF"))))
+			.bounds(x, y + 112, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 138, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
 		this.addRenderableWidget(Button.builder(denseSceneAdaptiveLabel(), button -> button.setMessage(denseSceneAdaptiveLabel(OptiminiumSettings.cycleDenseSceneAdaptiveMode())))
-			.bounds(x, y + 138, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 164, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(adaptiveSimulationLabel(), button -> button.setMessage(Component.literal("Dynamic Simulation Distance: " + (OptiminiumSettings.toggleAdaptiveSimulationDistance() ? "ON" : "OFF"))))
-			.bounds(x, y + 172, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 198, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 198, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt, 35, 80, "Target MSPT"));
-		this.addRenderableWidget(new SettingsSlider(x, y + 224, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks, 2, 12, "Min Sim Distance"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 224, OptiminiumSettings::getAdaptiveSimulationTargetMspt, OptiminiumSettings::setAdaptiveSimulationTargetMspt, 35, 80, "Target MSPT"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 250, OptiminiumSettings::getAdaptiveSimulationMinDistanceChunks, OptiminiumSettings::setAdaptiveSimulationMinDistanceChunks, 2, 12, "Min Sim Distance"));
 		this.addRenderableWidget(Button.builder(smartTickLabel(), button -> button.setMessage(Component.literal("SmartTick Scheduler: " + (OptiminiumSettings.toggleSmartTickScheduler() ? "ON" : "OFF"))))
-			.bounds(x, y + 258, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
-		this.addRenderableWidget(Button.builder(aiPathfindingLabel(), button -> button.setMessage(Component.literal("AI Pathfinding Optimizer: " + (OptiminiumSettings.toggleAiPathfindingOptimizer() ? "ON" : "OFF"))))
 			.bounds(x, y + 284, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
+		this.addRenderableWidget(Button.builder(aiPathfindingLabel(), button -> button.setMessage(Component.literal("AI Pathfinding Optimizer: " + (OptiminiumSettings.toggleAiPathfindingOptimizer() ? "ON" : "OFF"))))
+			.bounds(x, y + 310, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
-			.bounds(x, y + 318, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 344, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
@@ -195,6 +201,14 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component blockEntityCullingLabel() {
 		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
+	}
+
+	private static Component blockEntityLodCubesLabel() {
+		return Component.literal("Block Entity LOD Cubes: " + (OptiminiumSettings.isBlockEntityLodCubesEnabled() ? "ON" : "OFF"));
+	}
+
+	private static Component blockEntityLodDebugLabel() {
+		return Component.literal("Block Entity LOD Debug: " + (OptiminiumSettings.isBlockEntityLodDebugEnabled() ? "ON" : "OFF"));
 	}
 
 	private static Component denseSceneAdaptiveLabel() {

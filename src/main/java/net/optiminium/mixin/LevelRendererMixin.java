@@ -4,7 +4,6 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LightTexture;
@@ -12,6 +11,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.Vec3;
+import net.optiminium.client.OptiminiumBlockEntityLod;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumRenderProfiler;
 import net.optiminium.client.OptiminiumVisualSignificance;
@@ -30,10 +30,6 @@ import java.util.Set;
 
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererMixin {
-	@Shadow
-	@Final
-	private Minecraft minecraft;
-
 	@Shadow
 	private net.minecraft.client.multiplayer.ClientLevel level;
 
@@ -80,6 +76,7 @@ public abstract class LevelRendererMixin {
 			if (recordSignificance) {
 				for (BlockEntity blockEntity : blockEntities) {
 					OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPosition);
+					OptiminiumBlockEntityLod.observe(blockEntity);
 				}
 			}
 		}
@@ -88,6 +85,7 @@ public abstract class LevelRendererMixin {
 			if (recordSignificance) {
 				for (BlockEntity blockEntity : this.globalBlockEntities) {
 					OptiminiumVisualSignificance.recordBlockEntity(blockEntity, cameraPosition);
+					OptiminiumBlockEntityLod.observe(blockEntity);
 				}
 			}
 		}

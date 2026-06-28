@@ -24,6 +24,13 @@ public final class OptiminiumSettings {
 	private static volatile boolean asyncResourceStreaming = true;
 	private static volatile boolean blockEntityCulling = true;
 	private static volatile int blockEntityDistanceScalePercent = 100;
+	private static volatile boolean blockEntityLodCubes = true;
+	private static volatile int blockEntityLodMinDistanceBlocks = 24;
+	private static volatile int blockEntityLodMaxDistanceBlocks = 128;
+	private static volatile int blockEntityLodMaxCachedEntries = 4096;
+	private static volatile int blockEntityLodStaleTimeoutFrames = 600;
+	private static volatile int blockEntityLodUnloadMarginBlocks = 48;
+	private static volatile boolean blockEntityLodDebug = false;
 	private static volatile int denseBlockEntityThreshold = 512;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean shaderResourceCache = true;
@@ -65,6 +72,7 @@ public final class OptiminiumSettings {
 		asyncResourceStreaming = true;
 		shaderResourceCache = true;
 		blockEntityCulling = true;
+		blockEntityLodCubes = true;
 		adaptiveSimulationDistance = true;
 		smartTickScheduler = true;
 		aiPathfindingOptimizer = true;
@@ -78,6 +86,11 @@ public final class OptiminiumSettings {
 				particleRenderDistanceBlocks = 32;
 				maxParticlesPerFrame = 64;
 				blockEntityDistanceScalePercent = 75;
+				blockEntityLodMinDistanceBlocks = 20;
+				blockEntityLodMaxDistanceBlocks = 96;
+				blockEntityLodMaxCachedEntries = 4096;
+				blockEntityLodStaleTimeoutFrames = 450;
+				blockEntityLodUnloadMarginBlocks = 64;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.AGGRESSIVE;
 				adaptiveSimulationTargetMspt = 45;
 				adaptiveSimulationMinDistanceChunks = 3;
@@ -91,6 +104,11 @@ public final class OptiminiumSettings {
 				particleRenderDistanceBlocks = 64;
 				maxParticlesPerFrame = 128;
 				blockEntityDistanceScalePercent = 100;
+				blockEntityLodMinDistanceBlocks = 24;
+				blockEntityLodMaxDistanceBlocks = 128;
+				blockEntityLodMaxCachedEntries = 4096;
+				blockEntityLodStaleTimeoutFrames = 600;
+				blockEntityLodUnloadMarginBlocks = 48;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 				adaptiveSimulationTargetMspt = 50;
 				adaptiveSimulationMinDistanceChunks = 4;
@@ -104,6 +122,11 @@ public final class OptiminiumSettings {
 				particleRenderDistanceBlocks = 128;
 				maxParticlesPerFrame = 256;
 				blockEntityDistanceScalePercent = 160;
+				blockEntityLodMinDistanceBlocks = 32;
+				blockEntityLodMaxDistanceBlocks = 160;
+				blockEntityLodMaxCachedEntries = 2048;
+				blockEntityLodStaleTimeoutFrames = 900;
+				blockEntityLodUnloadMarginBlocks = 32;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.CONSERVATIVE;
 				adaptiveSimulationTargetMspt = 55;
 				adaptiveSimulationMinDistanceChunks = 6;
@@ -244,6 +267,16 @@ public final class OptiminiumSettings {
 		return blockEntityCulling;
 	}
 
+	public static boolean isBlockEntityLodCubesEnabled() {
+		return blockEntityLodCubes;
+	}
+
+	public static boolean toggleBlockEntityLodCubes() {
+		blockEntityLodCubes = !blockEntityLodCubes;
+		save();
+		return blockEntityLodCubes;
+	}
+
 	public static int getBlockEntityDistanceScalePercent() {
 		return blockEntityDistanceScalePercent;
 	}
@@ -251,6 +284,67 @@ public final class OptiminiumSettings {
 	public static void setBlockEntityDistanceScalePercent(int scalePercent) {
 		blockEntityDistanceScalePercent = clamp(scalePercent, 25, 200);
 		save();
+	}
+
+	public static int getBlockEntityLodMinDistanceBlocks() {
+		return blockEntityLodMinDistanceBlocks;
+	}
+
+	public static void setBlockEntityLodMinDistanceBlocks(int distanceBlocks) {
+		blockEntityLodMinDistanceBlocks = clamp(distanceBlocks, 0, 256);
+		if (blockEntityLodMinDistanceBlocks > blockEntityLodMaxDistanceBlocks) {
+			blockEntityLodMaxDistanceBlocks = blockEntityLodMinDistanceBlocks;
+		}
+		save();
+	}
+
+	public static int getBlockEntityLodMaxDistanceBlocks() {
+		return blockEntityLodMaxDistanceBlocks;
+	}
+
+	public static void setBlockEntityLodMaxDistanceBlocks(int distanceBlocks) {
+		blockEntityLodMaxDistanceBlocks = clamp(distanceBlocks, 1, 512);
+		if (blockEntityLodMaxDistanceBlocks < blockEntityLodMinDistanceBlocks) {
+			blockEntityLodMinDistanceBlocks = blockEntityLodMaxDistanceBlocks;
+		}
+		save();
+	}
+
+	public static int getBlockEntityLodMaxCachedEntries() {
+		return blockEntityLodMaxCachedEntries;
+	}
+
+	public static void setBlockEntityLodMaxCachedEntries(int maxEntries) {
+		blockEntityLodMaxCachedEntries = clamp(maxEntries, 0, 32768);
+		save();
+	}
+
+	public static int getBlockEntityLodStaleTimeoutFrames() {
+		return blockEntityLodStaleTimeoutFrames;
+	}
+
+	public static void setBlockEntityLodStaleTimeoutFrames(int frames) {
+		blockEntityLodStaleTimeoutFrames = clamp(frames, 1, 7200);
+		save();
+	}
+
+	public static int getBlockEntityLodUnloadMarginBlocks() {
+		return blockEntityLodUnloadMarginBlocks;
+	}
+
+	public static void setBlockEntityLodUnloadMarginBlocks(int blocks) {
+		blockEntityLodUnloadMarginBlocks = clamp(blocks, 0, 256);
+		save();
+	}
+
+	public static boolean isBlockEntityLodDebugEnabled() {
+		return blockEntityLodDebug;
+	}
+
+	public static boolean toggleBlockEntityLodDebug() {
+		blockEntityLodDebug = !blockEntityLodDebug;
+		save();
+		return blockEntityLodDebug;
 	}
 
 	public static int getDenseBlockEntityThreshold() {
@@ -441,6 +535,13 @@ public final class OptiminiumSettings {
 			asyncResourceStreaming = Boolean.parseBoolean(properties.getProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming)));
 			blockEntityCulling = Boolean.parseBoolean(properties.getProperty("blockEntityCulling", Boolean.toString(blockEntityCulling)));
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
+			blockEntityLodCubes = Boolean.parseBoolean(properties.getProperty("blockEntityLodCubes", Boolean.toString(blockEntityLodCubes)));
+			blockEntityLodMinDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("blockEntityLodMinDistanceBlocks", Integer.toString(blockEntityLodMinDistanceBlocks))), 0, 256);
+			blockEntityLodMaxDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("blockEntityLodMaxDistanceBlocks", Integer.toString(blockEntityLodMaxDistanceBlocks))), 1, 512);
+			blockEntityLodMaxCachedEntries = clamp(Integer.parseInt(properties.getProperty("blockEntityLodMaxCachedEntries", Integer.toString(blockEntityLodMaxCachedEntries))), 0, 32768);
+			blockEntityLodStaleTimeoutFrames = clamp(Integer.parseInt(properties.getProperty("blockEntityLodStaleTimeoutFrames", Integer.toString(blockEntityLodStaleTimeoutFrames))), 1, 7200);
+			blockEntityLodUnloadMarginBlocks = clamp(Integer.parseInt(properties.getProperty("blockEntityLodUnloadMarginBlocks", Integer.toString(blockEntityLodUnloadMarginBlocks))), 0, 256);
+			blockEntityLodDebug = Boolean.parseBoolean(properties.getProperty("blockEntityLodDebug", Boolean.toString(blockEntityLodDebug)));
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
 			shaderResourceCache = Boolean.parseBoolean(properties.getProperty("shaderResourceCache", Boolean.toString(shaderResourceCache)));
@@ -471,6 +572,13 @@ public final class OptiminiumSettings {
 		properties.setProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming));
 		properties.setProperty("blockEntityCulling", Boolean.toString(blockEntityCulling));
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
+		properties.setProperty("blockEntityLodCubes", Boolean.toString(blockEntityLodCubes));
+		properties.setProperty("blockEntityLodMinDistanceBlocks", Integer.toString(blockEntityLodMinDistanceBlocks));
+		properties.setProperty("blockEntityLodMaxDistanceBlocks", Integer.toString(blockEntityLodMaxDistanceBlocks));
+		properties.setProperty("blockEntityLodMaxCachedEntries", Integer.toString(blockEntityLodMaxCachedEntries));
+		properties.setProperty("blockEntityLodStaleTimeoutFrames", Integer.toString(blockEntityLodStaleTimeoutFrames));
+		properties.setProperty("blockEntityLodUnloadMarginBlocks", Integer.toString(blockEntityLodUnloadMarginBlocks));
+		properties.setProperty("blockEntityLodDebug", Boolean.toString(blockEntityLodDebug));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
 		properties.setProperty("shaderResourceCache", Boolean.toString(shaderResourceCache));

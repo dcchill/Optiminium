@@ -11,6 +11,7 @@ bin/
 .project
 .agents/
 .vscode/
+graphify-out/
 
 
 # Minecraft client/server files

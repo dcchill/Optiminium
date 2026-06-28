@@ -142,6 +142,7 @@ public final class OptiminiumGpuOptimizer {
 		rawVisibleBlockEntitiesThisFrame = 0;
 		rawVisibleBlockEntityCandidates.clear();
 		renderedBlockEntitiesThisFrame = 0;
+		OptiminiumBlockEntityLod.beginFrame();
 		countedDenseParticleBudgetFrame = false;
 		countedDenseBlockEntityBudgetFrame = false;
 		countedDenseRebuildBudgetFrame = false;
@@ -283,24 +284,27 @@ public final class OptiminiumGpuOptimizer {
 			if (!blockEntityCulling || !hasCamera) {
 				return true;
 			}
+			// Protected (nearby/important/looked-at) entities bypass distance budget culling
+			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
+				return true;
+			}
 			// Visual Significance can CULL low-importance block entities
 			// while still keeping them in VS memory for classification tracking.
 			if (OptiminiumVisualSignificance.isEnabled() && !OptiminiumVisualSignificance.shouldRenderBySignificance(blockEntity)) {
 				recordCulledBlockEntityRender();
+				OptiminiumBlockEntityLod.recordSkippedRender(blockEntity);
 				return false;
-			}
-			// Protected (nearby/important/looked-at) entities bypass distance budget culling
-			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
-				return true;
 			}
 			int scaledViewDistance = scaledBlockEntityViewDistance(viewDistance);
 			double distanceSqr = distanceToCameraSqr(blockEntity.getBlockPos().getX() + 0.5D, blockEntity.getBlockPos().getY() + 0.5D, blockEntity.getBlockPos().getZ() + 0.5D);
 			if (distanceSqr > scaledViewDistance * scaledViewDistance) {
 				recordCulledBlockEntityRender();
+				OptiminiumBlockEntityLod.recordSkippedRender(blockEntity);
 				return false;
 			}
 			if (shouldDeferBlockEntityRender(blockEntity, distanceSqr)) {
 				recordCulledBlockEntityRender();
+				OptiminiumBlockEntityLod.recordSkippedRender(blockEntity);
 				return false;
 			}
 			return true;
@@ -332,7 +336,7 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
+			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, blockEntityLodCached=%d, blockEntityLodRendered=%d, blockEntityLodEstimatedSkipped=%d, blockEntityLodDebug=\"%s\", %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
 			OptiminiumSodiumCompat.rendererModeString(),
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
@@ -375,6 +379,10 @@ public final class OptiminiumGpuOptimizer {
 			denseRebuildBudgetFrames,
 			denseUploadBudgetFrames,
 			experimentalUploadStallLimitedFrames,
+			OptiminiumBlockEntityLod.cachedEntries(),
+			OptiminiumMetrics.snapshot().blockEntityLodRendered(),
+			OptiminiumBlockEntityLod.skippedRenderEstimatesThisFrame(),
+			OptiminiumBlockEntityLod.debugLine(),
 			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()),
 			lastAdaptiveReason,
 			OptiminiumGpuUploadQueue.pendingUploads(),
@@ -619,6 +627,7 @@ public final class OptiminiumGpuOptimizer {
 		OptiminiumMetrics.culledBlockEntityRenders(pendingCulledBlockEntityRenders);
 		OptiminiumMetrics.hiddenNameTags(pendingHiddenNameTags);
 		OptiminiumMetrics.hiddenParticles(pendingHiddenParticles);
+		OptiminiumMetrics.blockEntityLodEstimatedSkippedRenders(OptiminiumBlockEntityLod.skippedRenderEstimatesThisFrame());
 		pendingCulledEntityRenders = 0;
 		pendingCulledBlockEntityRenders = 0;
 		pendingHiddenNameTags = 0;

@@ -40,6 +40,8 @@ import net.minecraft.world.phys.Vec3;
 import net.optiminium.OptiminiumMod;
 import net.optiminium.optimization.OptiminiumSettings;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 /**
  * Second-generation Visual Importance Engine with entity anti-pop protection.
  * 
@@ -133,13 +135,17 @@ public final class OptiminiumVisualSignificance {
 	private static final int RECENT_FULL_DEMOTION_GRACE_FRAMES = 8;
 	private static final double PROMOTION_SCORE_DEADBAND = 0.025D;
 	private static final double DEMOTION_SCORE_DEADBAND = 0.035D;
-	private static final int PERIODIC_RECHECK_FULL_FRAMES = 32;
-	private static final int PERIODIC_RECHECK_THROTTLED_FRAMES = 32;
-	private static final int PERIODIC_RECHECK_REUSED_FRAMES = 16;
-	private static final int PERIODIC_RECHECK_PROXY_FRAMES = 16;
-	private static final int PERIODIC_RECHECK_CULLED_NEAR_FRAMES = 8;
-	private static final int PERIODIC_RECHECK_CULLED_FAR_FRAMES = 40;
+	private static final int PERIODIC_RECHECK_FULL_FRAMES = 31;
+	private static final int PERIODIC_RECHECK_THROTTLED_FRAMES = 37;
+	private static final int PERIODIC_RECHECK_REUSED_FRAMES = 17;
+	private static final int PERIODIC_RECHECK_PROXY_FRAMES = 19;
+	private static final int PERIODIC_RECHECK_CULLED_NEAR_FRAMES = 13;
+	private static final int PERIODIC_RECHECK_CULLED_FAR_FRAMES = 41;
 	private static final int BAND_TRANSITION_BUDGET_PER_FRAME = 64;
+	private static final int MAX_NON_URGENT_TRANSITIONS_PER_FRAME = 48;
+	private static final int MAX_URGENT_TRANSITIONS_PER_FRAME = 128;
+	private static final int DEFERRED_TRANSITIONS_PROCESS_PER_FRAME = 32;
+	private static final int DEFERRED_QUEUE_MAX_SIZE = 512;
 	private static final int SCORE_RECOMPUTE_BUDGET_PER_FRAME = 192;
 
 	private static final int DIRTY_ENTERED_VIEW = 1;
@@ -352,6 +358,15 @@ public final class OptiminiumVisualSignificance {
 	private static int importanceDebtPromotionsThisFrame;
 	private static FrameBurstSnapshot lastFrameBurst = FrameBurstSnapshot.EMPTY;
 
+	// ---- Deferred transition queue (non-urgent transitions exceeding budget) ----
+	private static final Deque<Long> deferredTransitionKeys = new ArrayDeque<>();
+	private static int maxDeferredQueueSize;
+	private static long emergencyTransitionsBypassedBudget;
+	private static long nonUrgentTransitionsDelayed;
+	private static int urgentTransitionsThisFrame;
+	private static int largestTransitionBurstRecorded;
+	private static String largestTransitionBurstReason = "none";
+
 	// ---- Distribution tracking (new) ----
 	private static long fullForcedBySafety;
 	private static long fullByWeightedScore;
@@ -440,6 +455,7 @@ public final class OptiminiumVisualSignificance {
 		recordInteractionTarget();
 		accumulateTotals();
 		resetFrameCounters();
+		processDeferredTransitions();
 		updateCameraMotion();
 		advanceObjectMemories();
 		decayVisibility();
@@ -832,12 +848,26 @@ public final class OptiminiumVisualSignificance {
 			pressured, mem.lastScore, renderCost, category, mem, entityWasRendered);
 	}
 
-	private static byte applyTransitionBudget(byte previous, byte desired, boolean urgentPromotion) {
+	private static byte applyTransitionBudget(byte previous, byte desired, boolean urgentPromotion, long key) {
 		if (previous == UNKNOWN || desired == UNKNOWN || previous == desired) return desired;
-		if (desired < previous && urgentPromotion) return desired;
+		// Urgent promotions (nearby, looked-at, important, recent, safety-critical, etc.)
+		// must never be deferred. Count them for diagnostics.
+		if (desired < previous && urgentPromotion) {
+			emergencyTransitionsBypassedBudget++;
+			urgentTransitionsThisFrame++;
+			bandTransitionBudgetUsedThisFrame++;
+			bandTransitionBudgetUsed++;
+			return desired;
+		}
+		// Non-urgent transitions: strict per-frame cap
 		if (bandTransitionBudgetUsedThisFrame >= BAND_TRANSITION_BUDGET_PER_FRAME) {
+			// Defer: store the key for accelerated recheck next frame
+			nonUrgentTransitionsDelayed++;
 			bandTransitionsDeferred++;
 			bandTransitionsDeferredThisFrame++;
+			if (deferredTransitionKeys.size() < DEFERRED_QUEUE_MAX_SIZE) {
+				deferredTransitionKeys.addLast(key);
+			}
 			return previous;
 		}
 		bandTransitionBudgetUsedThisFrame++;
@@ -979,7 +1009,7 @@ public final class OptiminiumVisualSignificance {
 			distanceSqr, inFront, lookedAt, important, recent, pressured);
 		classification = applyImportanceDebt(mem, classification);
 		classification = applyTransitionBudget(previousClassification, classification,
-			isUrgentBlockPromotion(previousClassification, classification, distanceSqr, lookedAt, important, recent, mem));
+			isUrgentBlockPromotion(previousClassification, classification, distanceSqr, lookedAt, important, recent, mem), key);
 
 		beClassifications.put(key, classification);
 		recordBandTransition(previousClassification, classification, mem.lastChangedFrame, dirtyReasons != 0);
@@ -1088,7 +1118,7 @@ public final class OptiminiumVisualSignificance {
 		classification = applyImportanceDebt(mem, classification);
 		byte previousClassification = mem.lastClassification;
 		classification = applyTransitionBudget(previousClassification, classification,
-			isUrgentEntityPromotion(previousClassification, classification, distanceSqr, lookedAt, important, category, entity, mem));
+			isUrgentEntityPromotion(previousClassification, classification, distanceSqr, lookedAt, important, category, entity, mem), ~entityId);
 
 		recordBandTransition(previousClassification, classification, mem.lastChangedFrame, dirtyReasons != 0);
 		updateEntityConfidence(mem, classification, distanceSqr, centerPresence);
@@ -2890,6 +2920,34 @@ public final class OptiminiumVisualSignificance {
 		proxyDestructionsThisFrame = 0;
 		visibilityChangesThisFrame = 0;
 		importanceDebtPromotionsThisFrame = 0;
+		urgentTransitionsThisFrame = 0;
+	}
+	
+	private static void processDeferredTransitions() {
+		if (deferredTransitionKeys.isEmpty()) return;
+		int processed = 0;
+		int maxProcess = Math.min(DEFERRED_TRANSITIONS_PROCESS_PER_FRAME, deferredTransitionKeys.size());
+		while (processed < maxProcess && !deferredTransitionKeys.isEmpty()) {
+			long key = deferredTransitionKeys.pollFirst();
+			// Entity keys are stored as ~entityId (negative)
+			if (key < 0L) {
+				int entityId = (int)(~key);
+				EntityMemory mem = entityMemory.get(entityId);
+				if (mem != null) {
+					mem.lastReevaluateFrame = 0L;
+				}
+			} else {
+				ObjectMemory mem = objectMemory.get(key);
+				if (mem != null) {
+					mem.lastReevaluateFrame = 0L;
+				}
+			}
+			processed++;
+		}
+		// Track max queue size for diagnostics
+		if (deferredTransitionKeys.size() > maxDeferredQueueSize) {
+			maxDeferredQueueSize = deferredTransitionKeys.size();
+		}
 	}
 
 	private static void captureFrameBurstSnapshot() {
@@ -2908,6 +2966,21 @@ public final class OptiminiumVisualSignificance {
 			visibilityChangesThisFrame,
 			importanceDebtPromotionsThisFrame
 		);
+		// Track largest transition burst for diagnostics
+		int totalTransitionsThisFrame = promotionTransitionsThisFrame + demotionTransitionsThisFrame;
+		if (totalTransitionsThisFrame > largestTransitionBurstRecorded) {
+			largestTransitionBurstRecorded = totalTransitionsThisFrame;
+			String reason = "normal";
+			int maxCount = 0;
+			if (periodicRechecksThisFrame > maxCount) { reason = "periodicRecheck"; maxCount = periodicRechecksThisFrame; }
+			if (dirtyObjectsThisFrame > maxCount) { reason = "dirtyObjects"; maxCount = dirtyObjectsThisFrame; }
+			if (visibilityChangesThisFrame > maxCount) { reason = "visibilityChange"; maxCount = visibilityChangesThisFrame; }
+			if (importanceDebtPromotionsThisFrame > maxCount) { reason = "importanceDebt"; maxCount = importanceDebtPromotionsThisFrame; }
+			if (urgentTransitionsThisFrame > maxCount) { reason = "urgentPromotions"; maxCount = urgentTransitionsThisFrame; }
+			largestTransitionBurstReason = reason + ":" + totalTransitionsThisFrame
+				+ "T/" + scoreRecomputesThisFrame + "R/" + periodicRechecksThisFrame + "P"
+				+ "/urgent:" + urgentTransitionsThisFrame;
+		}
 	}
 
 	public static FrameBurstSnapshot frameBurstSnapshot() {
@@ -3120,6 +3193,13 @@ public final class OptiminiumVisualSignificance {
 		lastCameraX = Double.NaN; lastCameraY = Double.NaN; lastCameraZ = Double.NaN;
 		lastCameraYaw = 0.0f; lastCameraPitch = 0.0f; stableFrameCounter = 0;
 		debugEntityId = -1; debugLogCounter = 0;
+deferredTransitionKeys.clear();
+		maxDeferredQueueSize = 0;
+		emergencyTransitionsBypassedBudget = 0L;
+		nonUrgentTransitionsDelayed = 0L;
+		urgentTransitionsThisFrame = 0;
+		largestTransitionBurstRecorded = 0;
+		largestTransitionBurstReason = "none";
 	}
 
 	private static double getMinTopExpensiveScore() {
@@ -3478,7 +3558,13 @@ public final class OptiminiumVisualSignificance {
 				+ ",transitionsFromDirtyObjects:" + transitionsFromDirtyObjects
 				+ ",transitionsFromStableObjects:" + transitionsFromStableObjects
 				+ ",dirtyReasons:" + dirtyReasons
-				+ "," + topExpensiveObjects;
+				+ "," + topExpensiveObjects
+				+ ",maxDeferredTransitions:" + maxDeferredQueueSize
+				+ ",deferredQueueSize:" + deferredTransitionKeys.size()
+				+ ",emergencyBypassedBudget:" + emergencyTransitionsBypassedBudget
+				+ ",nonUrgentDelayed:" + nonUrgentTransitionsDelayed
+				+ ",largestBurstReason:" + largestTransitionBurstReason
+				+ ",largestBurstRecorded:" + largestTransitionBurstRecorded;
 		}
 	}
 }
