@@ -57,6 +57,9 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 180, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+			.bounds(x, y + 206, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
 			.build());
@@ -129,6 +132,9 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 344, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+			.bounds(x, y + 370, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;

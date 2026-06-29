@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.Camera;
@@ -11,6 +12,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.block.Block;
@@ -22,14 +24,18 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.phys.Vec3;
 import net.optiminium.OptiminiumMod;
+import net.optiminium.mixin.FrustumAccessor;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
+import org.joml.Matrix4f;
 
 public final class OptiminiumBlockEntityLod {
 	private static final float CUBE_HALF = 0.56F;
 	private static final float CUBE_ALPHA = 0.90F;
 	private static final int PACKED_LIGHT = 0xF000F0;
 	private static final int DEFAULT_COLOR = 0xFFA09080;
+	private static final int MESH_STRIDE = 6;
+	private static final int MIN_BUCKET_ENTRIES_TO_DRAW = 2;
 	private static final RenderType RENDER_TYPE = RenderType.create(
 		"optiminium_block_entity_lod_cube",
 		DefaultVertexFormat.POSITION_COLOR_LIGHTMAP,
@@ -46,9 +52,13 @@ public final class OptiminiumBlockEntityLod {
 
 	private static final Long2ObjectOpenHashMap<Entry> entriesByPos = new Long2ObjectOpenHashMap<>();
 	private static final Long2ObjectOpenHashMap<SectionBucket> bucketsBySection = new Long2ObjectOpenHashMap<>();
+	private static final ObjectArrayList<Entry> allEntries = new ObjectArrayList<>();
 	private static final LongOpenHashSet activeThisFrame = new LongOpenHashSet();
 	private static final LongOpenHashSet skippedThisFrame = new LongOpenHashSet();
+	private static final LongOpenHashSet visibleSectionsThisFrame = new LongOpenHashSet();
 	private static int frameIndex;
+	private static boolean hasVisibleSectionData;
+	private static Object currentLevel;
 	private static long skippedRenderEstimatesThisFrame;
 	private static DebugSnapshot lastDebugSnapshot = DebugSnapshot.EMPTY;
 	private static long debugObserved;
@@ -64,38 +74,83 @@ public final class OptiminiumBlockEntityLod {
 	private static long debugRejectedStale;
 	private static long debugRejectedTooNear;
 	private static long debugRejectedTooFar;
+	private static long debugSectionFrustumCulled;
+	private static long debugSectionOcclusionCulled;
+	private static long debugEntryFrustumCulled;
+	private static long debugVisibilityRetested;
+	private static long debugCandidates;
+	private static long debugDrawBatches;
+	private static long debugCacheHits;
+	private static long debugCacheRefreshes;
+	private static long debugEvictions;
+	private static long debugBucketsConsidered;
+	private static long debugBucketsFrustumCulled;
+	private static long debugBucketsOcclusionCulled;
+	private static long debugBucketsRebuilt;
 	private static long debugWorldPassCalls;
 	private static long debugWorldPassRendered;
 	private static long debugWorldPassEmpty;
 	private static long debugCleanupRemoved;
+	private static long debugStaleRemoved;
+	private static long debugSourceInvalidRemoved;
 	private static long debugTrimRemoved;
 
 	private OptiminiumBlockEntityLod() {
 	}
 
 	public static void beginFrame() {
+		Minecraft minecraft = Minecraft.getInstance();
+		Object level = minecraft == null ? null : minecraft.level;
+		if (level != currentLevel) {
+			clearCache();
+			currentLevel = level;
+		}
 		publishDebugSnapshot();
 		frameIndex++;
 		activeThisFrame.clear();
 		skippedThisFrame.clear();
+		visibleSectionsThisFrame.clear();
+		hasVisibleSectionData = false;
 		skippedRenderEstimatesThisFrame = 0L;
 		resetDebugCounters();
 	}
 
+	public static void beginVisibleSectionFrame() {
+		visibleSectionsThisFrame.clear();
+		hasVisibleSectionData = true;
+	}
+
+	public static void recordVisibleSection(BlockPos origin) {
+		if (origin == null) return;
+		visibleSectionsThisFrame.add(sectionKey(origin));
+	}
+
 	public static void observe(BlockEntity blockEntity) {
-		observe(blockEntity, false);
+		observe(blockEntity, false, -1);
+	}
+
+	public static void observe(BlockEntity blockEntity, int sourceViewDistance) {
+		observe(blockEntity, false, sourceViewDistance);
 	}
 
 	public static void recordRendered(BlockEntity blockEntity) {
-		observe(blockEntity, true);
+		observe(blockEntity, true, -1);
+	}
+
+	public static void recordRendered(BlockEntity blockEntity, int sourceViewDistance) {
+		observe(blockEntity, true, sourceViewDistance);
 	}
 
 	public static void recordSkippedRender(BlockEntity blockEntity) {
+		recordSkippedRender(blockEntity, -1);
+	}
+
+	public static void recordSkippedRender(BlockEntity blockEntity, int sourceViewDistance) {
 		if (!isEnabled() || blockEntity == null) return;
-		observe(blockEntity, false);
+		observe(blockEntity, false, sourceViewDistance);
 		debugSkippedRecorded++;
 		long posKey = blockEntity.getBlockPos().asLong();
-		if (skippedThisFrame.add(posKey) && shouldRenderEntry(entriesByPos.get(posKey), currentCameraPosition())) {
+		if (skippedThisFrame.add(posKey)) {
 			skippedRenderEstimatesThisFrame++;
 		}
 	}
@@ -108,33 +163,42 @@ public final class OptiminiumBlockEntityLod {
 		return skippedRenderEstimatesThisFrame;
 	}
 
-	public static void render(PoseStack poseStack, MultiBufferSource bufferSource, Camera camera) {
-		if (!isEnabled() || poseStack == null || bufferSource == null || camera == null) return;
+	public static boolean render(PoseStack poseStack, MultiBufferSource bufferSource, Camera camera, Frustum frustum) {
+		if (!isEnabled() || poseStack == null || bufferSource == null || camera == null) return false;
 		debugWorldPassCalls++;
 		if (entriesByPos.isEmpty()) {
 			debugWorldPassEmpty++;
 			OptiminiumMetrics.blockEntityLodCachedEntries(0);
-			return;
+			return false;
 		}
 		Vec3 cameraPosition = camera.getPosition();
-		cleanup(cameraPosition);
+		cleanup();
 		if (entriesByPos.isEmpty()) {
 			debugWorldPassEmpty++;
 			OptiminiumMetrics.blockEntityLodCachedEntries(0);
-			return;
+			return false;
 		}
 
 		int rendered = 0;
-		VertexConsumer consumer = bufferSource.getBuffer(RENDER_TYPE);
-		for (SectionBucket bucket : bucketsBySection.values()) {
-			if (bucket.entries.isEmpty()) continue;
-			for (Entry entry : bucket.entries) {
-				if (!shouldRenderEntry(entry, cameraPosition)) continue;
-				poseStack.pushPose();
-				poseStack.translate(entry.x - cameraPosition.x, entry.y - cameraPosition.y, entry.z - cameraPosition.z);
-				drawCube(consumer, poseStack, CUBE_HALF, entry.red, entry.green, entry.blue, CUBE_ALPHA);
-				poseStack.popPose();
-				rendered++;
+		VertexConsumer consumer = null;
+		Matrix4f pose = poseStack.last().pose();
+		if (hasVisibleSectionData) {
+			LongIterator iterator = visibleSectionsThisFrame.iterator();
+			while (iterator.hasNext()) {
+				SectionBucket bucket = bucketsBySection.get(iterator.nextLong());
+				if (bucket == null || !prepareBucket(bucket, cameraPosition, frustum)) continue;
+				if (consumer == null) consumer = bufferSource.getBuffer(RENDER_TYPE);
+				drawBucketMesh(consumer, pose, bucket, cameraPosition);
+				debugDrawBatches++;
+				rendered += bucket.cachedEntryCount;
+			}
+		} else {
+			for (SectionBucket bucket : bucketsBySection.values()) {
+				if (!prepareBucket(bucket, cameraPosition, frustum)) continue;
+				if (consumer == null) consumer = bufferSource.getBuffer(RENDER_TYPE);
+				drawBucketMesh(consumer, pose, bucket, cameraPosition);
+				debugDrawBatches++;
+				rendered += bucket.cachedEntryCount;
 			}
 		}
 		if (rendered > 0) {
@@ -142,6 +206,7 @@ public final class OptiminiumBlockEntityLod {
 		}
 		debugWorldPassRendered += rendered;
 		OptiminiumMetrics.blockEntityLodCachedEntries(entriesByPos.size());
+		return rendered > 0;
 	}
 
 	public static RenderType renderType() {
@@ -160,7 +225,7 @@ public final class OptiminiumBlockEntityLod {
 		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityLodCubesEnabled();
 	}
 
-	private static void observe(BlockEntity blockEntity, boolean activeRenderer) {
+	private static void observe(BlockEntity blockEntity, boolean activeRenderer, int sourceViewDistance) {
 		if (!isEnabled() || blockEntity == null) return;
 		int maxCachedEntries = OptiminiumSettings.getBlockEntityLodMaxCachedEntries();
 		if (maxCachedEntries <= 0) return;
@@ -172,77 +237,41 @@ public final class OptiminiumBlockEntityLod {
 		}
 		long sectionKey = sectionKey(pos);
 		Entry entry = entriesByPos.get(posKey);
+		double lodMinDistance = lodMinDistance(sourceViewDistance);
 		if (entry == null) {
 			trimToCapacity(maxCachedEntries - 1);
-			entry = new Entry(posKey, sectionKey, pos, color(blockEntity));
+			entry = new Entry(posKey, sectionKey, pos, color(blockEntity), lodMinDistance);
 			entriesByPos.put(posKey, entry);
-			bucketsBySection.computeIfAbsent(sectionKey, SectionBucket::new).entries.add(entry);
+			allEntries.add(entry);
+			SectionBucket bucket = bucketsBySection.computeIfAbsent(sectionKey, SectionBucket::new);
+			bucket.entries.add(entry);
+			refreshBucketLodMinDistance(bucket);
+			bucket.dirty = true;
 			debugCreated++;
 		} else {
-			entry.color = color(blockEntity);
-			entry.applyColor();
+			int color = color(blockEntity);
+			SectionBucket bucket = bucketsBySection.get(entry.sectionKey);
+			if (entry.color != color) {
+				entry.color = color;
+				entry.applyColor();
+				if (bucket != null) bucket.dirty = true;
+				debugCacheRefreshes++;
+			} else {
+				debugCacheHits++;
+			}
+			if (entry.lodMinDistance != lodMinDistance) {
+				entry.lodMinDistance = lodMinDistance;
+				if (bucket != null) refreshBucketLodMinDistance(bucket);
+			}
 			debugUpdated++;
 		}
 		entry.lastSeenFrame = frameIndex;
+		entry.lastObservedFrame = frameIndex;
+		entry.lastObservedNanos = System.nanoTime();
 	}
 
-	private static boolean shouldRenderEntry(Entry entry, Vec3 cameraPosition) {
-		debugRenderChecks++;
-		if (entry == null || cameraPosition == null) {
-			debugRejectedNull++;
-			return false;
-		}
-		if (activeThisFrame.contains(entry.posKey)) {
-			debugRejectedActive++;
-			return false;
-		}
-		int staleFrames = Math.max(1, OptiminiumSettings.getBlockEntityLodStaleTimeoutFrames());
-		if (frameIndex - entry.lastSeenFrame > staleFrames) {
-			debugRejectedStale++;
-			return false;
-		}
-		double distanceSqr = distanceSqr(entry, cameraPosition);
-		double minDistance = OptiminiumSettings.getBlockEntityLodMinDistanceBlocks();
-		double configuredMaxDistance = OptiminiumSettings.getBlockEntityLodMaxDistanceBlocks();
-		double renderDistance = vanillaRenderDistanceBlocks();
-		double unloadMargin = OptiminiumSettings.getBlockEntityLodUnloadMarginBlocks();
-		double predictedUnloadDistance = predictedUnloadDistance(renderDistance, unloadMargin, minDistance);
-		double maxDistance = maxLodDistance(configuredMaxDistance, renderDistance, unloadMargin, minDistance);
-		if (distanceSqr < minDistance * minDistance) {
-			debugRejectedTooNear++;
-			return false;
-		}
-		if (distanceSqr > maxDistance * maxDistance) {
-			debugRejectedTooFar++;
-			return false;
-		}
-		if (isBlockEntityCurrentlyLoaded(entry)) {
-			debugPredictedLoaded++;
-		}
-		debugEligibleChecks++;
-		return true;
-	}
-
-	private static void cleanup(Vec3 cameraPosition) {
-		int staleFrames = Math.max(1, OptiminiumSettings.getBlockEntityLodStaleTimeoutFrames());
-		double renderDistance = maxLodDistance(
-			OptiminiumSettings.getBlockEntityLodMaxDistanceBlocks(),
-			vanillaRenderDistanceBlocks(),
-			OptiminiumSettings.getBlockEntityLodUnloadMarginBlocks(),
-			OptiminiumSettings.getBlockEntityLodMinDistanceBlocks()
-		);
-		ObjectArrayList<Entry> removals = new ObjectArrayList<>();
-		for (Entry entry : entriesByPos.values()) {
-			boolean stale = frameIndex - entry.lastSeenFrame > staleFrames;
-			boolean outsideClientRange = cameraPosition != null && distanceSqr(entry, cameraPosition) > renderDistance * renderDistance;
-			if (stale || outsideClientRange) {
-				removals.add(entry);
-			}
-		}
-		for (Entry entry : removals) {
-			debugCleanupRemoved++;
-			remove(entry);
-		}
+	private static void cleanup() {
+		// ponytail: persistent in-world cache; validate removals only if ghost LODs beat FPS wins.
 		trimToCapacity(OptiminiumSettings.getBlockEntityLodMaxCachedEntries());
 	}
 
@@ -257,6 +286,7 @@ public final class OptiminiumBlockEntityLod {
 			}
 			if (oldest == null) return;
 			debugTrimRemoved++;
+			debugEvictions++;
 			remove(oldest);
 		}
 	}
@@ -299,10 +329,25 @@ public final class OptiminiumBlockEntityLod {
 			debugRejectedStale,
 			debugRejectedTooNear,
 			debugRejectedTooFar,
+			debugSectionFrustumCulled,
+			debugSectionOcclusionCulled,
+			debugEntryFrustumCulled,
+			debugVisibilityRetested,
+			debugCandidates,
+			debugDrawBatches,
+			debugCacheHits,
+			debugCacheRefreshes,
+			debugEvictions,
+			debugBucketsConsidered,
+			debugBucketsFrustumCulled,
+			debugBucketsOcclusionCulled,
+			debugBucketsRebuilt,
 			debugWorldPassCalls,
 			debugWorldPassRendered,
 			debugWorldPassEmpty,
 			debugCleanupRemoved,
+			debugStaleRemoved,
+			debugSourceInvalidRemoved,
 			debugTrimRemoved
 		);
 		if (lastDebugSnapshot.debugEnabled() && frameIndex > 0 && frameIndex % 60 == 0) {
@@ -324,31 +369,140 @@ public final class OptiminiumBlockEntityLod {
 		debugRejectedStale = 0L;
 		debugRejectedTooNear = 0L;
 		debugRejectedTooFar = 0L;
+		debugSectionFrustumCulled = 0L;
+		debugSectionOcclusionCulled = 0L;
+		debugEntryFrustumCulled = 0L;
+		debugVisibilityRetested = 0L;
+		debugCandidates = 0L;
+		debugDrawBatches = 0L;
+		debugCacheHits = 0L;
+		debugCacheRefreshes = 0L;
+		debugEvictions = 0L;
+		debugBucketsConsidered = 0L;
+		debugBucketsFrustumCulled = 0L;
+		debugBucketsOcclusionCulled = 0L;
+		debugBucketsRebuilt = 0L;
 		debugWorldPassCalls = 0L;
 		debugWorldPassRendered = 0L;
 		debugWorldPassEmpty = 0L;
 		debugCleanupRemoved = 0L;
+		debugStaleRemoved = 0L;
+		debugSourceInvalidRemoved = 0L;
 		debugTrimRemoved = 0L;
 	}
 
 	private static void remove(Entry entry) {
 		entriesByPos.remove(entry.posKey);
+		allEntries.remove(entry);
 		SectionBucket bucket = bucketsBySection.get(entry.sectionKey);
 		if (bucket != null) {
 			bucket.entries.remove(entry);
 			if (bucket.entries.isEmpty()) {
 				bucketsBySection.remove(entry.sectionKey);
+			} else {
+				refreshBucketLodMinDistance(bucket);
+				bucket.dirty = true;
 			}
 		}
 		activeThisFrame.remove(entry.posKey);
 		skippedThisFrame.remove(entry.posKey);
 	}
 
-	private static double distanceSqr(Entry entry, Vec3 cameraPosition) {
-		double dx = entry.x - cameraPosition.x;
-		double dy = entry.y - cameraPosition.y;
-		double dz = entry.z - cameraPosition.z;
+	private static void clearCache() {
+		entriesByPos.clear();
+		bucketsBySection.clear();
+		allEntries.clear();
+		activeThisFrame.clear();
+		skippedThisFrame.clear();
+		visibleSectionsThisFrame.clear();
+		hasVisibleSectionData = false;
+	}
+
+	private static double lodMinDistance(int sourceViewDistance) {
+		double configuredMinDistance = OptiminiumSettings.getBlockEntityLodMinDistanceBlocks();
+		if (sourceViewDistance <= 0) return configuredMinDistance;
+		return Math.max(configuredMinDistance, sourceViewDistance + 1.0D);
+	}
+
+	private static boolean shouldRenderBucket(SectionBucket bucket, Vec3 cameraPosition) {
+		debugRenderChecks += bucket.entries.size();
+		if (cameraPosition == null) {
+			debugRejectedNull += bucket.entries.size();
+			return false;
+		}
+		double distanceSqr = sectionDistanceSqr(bucket, cameraPosition);
+		double minDistance = Math.max(OptiminiumSettings.getBlockEntityLodMinDistanceBlocks(), bucket.lodMinDistance);
+		double maxDistance = maxLodDistance(
+			OptiminiumSettings.getBlockEntityLodMaxDistanceBlocks(),
+			vanillaRenderDistanceBlocks(),
+			OptiminiumSettings.getBlockEntityLodUnloadMarginBlocks(),
+			minDistance
+		);
+		if (distanceSqr < minDistance * minDistance) {
+			debugRejectedTooNear += bucket.entries.size();
+			return false;
+		}
+		if (distanceSqr > maxDistance * maxDistance) {
+			debugRejectedTooFar += bucket.entries.size();
+			return false;
+		}
+		debugEligibleChecks += bucket.entries.size();
+		return true;
+	}
+
+	private static boolean prepareBucket(SectionBucket bucket, Vec3 cameraPosition, Frustum frustum) {
+		if (bucket.entries.isEmpty()) return false;
+		debugBucketsConsidered++;
+		int bucketCandidates = bucket.entries.size();
+		debugCandidates += bucketCandidates;
+		if (bucketCandidates < MIN_BUCKET_ENTRIES_TO_DRAW) return false;
+		if (!shouldRenderBucket(bucket, cameraPosition)) return false;
+		debugVisibilityRetested++;
+		if (!isSectionVisibleThisFrame(bucket, frustum)) {
+			debugSectionFrustumCulled += bucketCandidates;
+			debugBucketsFrustumCulled++;
+			return false;
+		}
+		if (isSectionOccludedThisFrame(bucket)) {
+			debugSectionOcclusionCulled += bucketCandidates;
+			debugBucketsOcclusionCulled++;
+			return false;
+		}
+		if (bucket.dirty) {
+			rebuildMesh(bucket);
+			debugBucketsRebuilt++;
+		}
+		return bucket.cachedEntryCount > 0 && bucket.meshLength > 0;
+	}
+
+	private static void refreshBucketLodMinDistance(SectionBucket bucket) {
+		double lodMinDistance = OptiminiumSettings.getBlockEntityLodMinDistanceBlocks();
+		for (Entry entry : bucket.entries) {
+			lodMinDistance = Math.max(lodMinDistance, entry.lodMinDistance);
+		}
+		bucket.lodMinDistance = lodMinDistance;
+	}
+
+	private static double sectionDistanceSqr(SectionBucket bucket, Vec3 cameraPosition) {
+		double dx = axisDistance(cameraPosition.x, bucket.originX, bucket.originX + 16.0D);
+		double dy = axisDistance(cameraPosition.y, bucket.originY, bucket.originY + 16.0D);
+		double dz = axisDistance(cameraPosition.z, bucket.originZ, bucket.originZ + 16.0D);
 		return dx * dx + dy * dy + dz * dz;
+	}
+
+	private static double axisDistance(double value, double min, double max) {
+		if (value < min) return min - value;
+		if (value > max) return value - max;
+		return 0.0D;
+	}
+
+	private static boolean isSectionVisibleThisFrame(SectionBucket bucket, Frustum frustum) {
+		if (frustum == null) return true;
+		return ((FrustumAccessor)frustum).optiminium$cubeInFrustum(bucket.minX, bucket.minY, bucket.minZ, bucket.maxX, bucket.maxY, bucket.maxZ);
+	}
+
+	private static boolean isSectionOccludedThisFrame(SectionBucket bucket) {
+		return hasVisibleSectionData && !visibleSectionsThisFrame.contains(bucket.key);
 	}
 
 	private static double vanillaRenderDistanceBlocks() {
@@ -363,21 +517,8 @@ public final class OptiminiumBlockEntityLod {
 	}
 
 	private static double maxLodDistance(double configuredMaxDistance, double renderDistance, double unloadMargin, double minDistance) {
-		double retainedEdge = renderDistance <= 0.0D ? configuredMaxDistance : renderDistance + Math.max(0.0D, unloadMargin);
-		return Math.max(minDistance, Math.max(configuredMaxDistance, retainedEdge));
-	}
-
-	private static boolean isBlockEntityCurrentlyLoaded(Entry entry) {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft == null || minecraft.level == null || entry == null) return false;
-		BlockPos pos = BlockPos.containing(entry.x, entry.y, entry.z);
-		return minecraft.level.getBlockEntity(pos) != null;
-	}
-
-	private static Vec3 currentCameraPosition() {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft == null || minecraft.gameRenderer == null || minecraft.gameRenderer.getMainCamera() == null) return null;
-		return minecraft.gameRenderer.getMainCamera().getPosition();
+		if (renderDistance <= 0.0D) return Math.max(minDistance, configuredMaxDistance);
+		return Math.max(minDistance, Math.min(configuredMaxDistance, renderDistance));
 	}
 
 	private static long sectionKey(BlockPos pos) {
@@ -420,43 +561,97 @@ public final class OptiminiumBlockEntityLod {
 		return block == Blocks.AIR ? fallback : DEFAULT_COLOR;
 	}
 
-	private static void drawCube(VertexConsumer consumer, PoseStack poseStack, float h, float r, float g, float b, float a) {
-		vertex(consumer, poseStack, -h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, -h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, -h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, -h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, -h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, -h, r, g, b, a);
-		vertex(consumer, poseStack, -h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, -h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, -h, r, g, b, a);
-		vertex(consumer, poseStack, h, -h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, h, r, g, b, a);
-		vertex(consumer, poseStack, h, h, -h, r, g, b, a);
+	private static void rebuildMesh(SectionBucket bucket) {
+		int required = bucket.entries.size() * 24 * MESH_STRIDE;
+		if (bucket.mesh.length < required) {
+			bucket.mesh = new float[required];
+		}
+		refreshBucketLodMinDistance(bucket);
+		int offset = 0;
+		for (Entry entry : bucket.entries) {
+			float x = (float)(entry.x - bucket.originX);
+			float y = (float)(entry.y - bucket.originY);
+			float z = (float)(entry.z - bucket.originZ);
+			offset = appendCube(bucket.mesh, offset, x, y, z, CUBE_HALF, entry.red, entry.green, entry.blue);
+		}
+		bucket.meshLength = offset;
+		bucket.cachedEntryCount = bucket.entries.size();
+		bucket.dirty = false;
 	}
 
-	private static void vertex(VertexConsumer consumer, PoseStack poseStack, float x, float y, float z, float r, float g, float b, float a) {
-		consumer.addVertex(poseStack.last().pose(), x, y, z).setColor(r, g, b, a).setLight(PACKED_LIGHT);
+	private static int appendCube(float[] mesh, int offset, float cx, float cy, float cz, float h, float r, float g, float b) {
+		offset = appendFace(mesh, offset, cx - h, cy + h, cz - h, cx + h, cy + h, cz - h, cx + h, cy + h, cz + h, cx - h, cy + h, cz + h, r, g, b, 1.00F);
+		offset = appendFace(mesh, offset, cx - h, cy - h, cz - h, cx - h, cy - h, cz + h, cx + h, cy - h, cz + h, cx + h, cy - h, cz - h, r, g, b, 0.50F);
+		offset = appendFace(mesh, offset, cx - h, cy - h, cz - h, cx + h, cy - h, cz - h, cx + h, cy + h, cz - h, cx - h, cy + h, cz - h, r, g, b, 0.68F);
+		offset = appendFace(mesh, offset, cx - h, cy - h, cz + h, cx - h, cy + h, cz + h, cx + h, cy + h, cz + h, cx + h, cy - h, cz + h, r, g, b, 0.82F);
+		offset = appendFace(mesh, offset, cx - h, cy - h, cz - h, cx - h, cy + h, cz - h, cx - h, cy + h, cz + h, cx - h, cy - h, cz + h, r, g, b, 0.74F);
+		return appendFace(mesh, offset, cx + h, cy - h, cz - h, cx + h, cy - h, cz + h, cx + h, cy + h, cz + h, cx + h, cy + h, cz - h, r, g, b, 0.90F);
+	}
+
+	private static int appendFace(float[] mesh, int offset,
+			float x1, float y1, float z1, float x2, float y2, float z2,
+			float x3, float y3, float z3, float x4, float y4, float z4,
+			float r, float g, float b, float shade) {
+		r *= shade;
+		g *= shade;
+		b *= shade;
+		offset = appendMeshVertex(mesh, offset, x1, y1, z1, r, g, b);
+		offset = appendMeshVertex(mesh, offset, x2, y2, z2, r, g, b);
+		offset = appendMeshVertex(mesh, offset, x3, y3, z3, r, g, b);
+		return appendMeshVertex(mesh, offset, x4, y4, z4, r, g, b);
+	}
+
+	private static int appendMeshVertex(float[] mesh, int offset, float x, float y, float z, float r, float g, float b) {
+		mesh[offset++] = x;
+		mesh[offset++] = y;
+		mesh[offset++] = z;
+		mesh[offset++] = r;
+		mesh[offset++] = g;
+		mesh[offset++] = b;
+		return offset;
+	}
+
+	private static void drawBucketMesh(VertexConsumer consumer, Matrix4f pose, SectionBucket bucket, Vec3 cameraPosition) {
+		float baseX = (float)(bucket.originX - cameraPosition.x);
+		float baseY = (float)(bucket.originY - cameraPosition.y);
+		float baseZ = (float)(bucket.originZ - cameraPosition.z);
+		float[] mesh = bucket.mesh;
+		for (int i = 0; i < bucket.meshLength; i += MESH_STRIDE) {
+			consumer.addVertex(pose, baseX + mesh[i], baseY + mesh[i + 1], baseZ + mesh[i + 2])
+				.setColor(mesh[i + 3], mesh[i + 4], mesh[i + 5], CUBE_ALPHA)
+				.setLight(PACKED_LIGHT);
+		}
 	}
 
 	private static final class SectionBucket {
 		final long key;
 		final ObjectArrayList<Entry> entries = new ObjectArrayList<>();
+		final int originX;
+		final int originY;
+		final int originZ;
+		final double minX;
+		final double minY;
+		final double minZ;
+		final double maxX;
+		final double maxY;
+		final double maxZ;
+		boolean dirty = true;
+		float[] mesh = new float[0];
+		int meshLength;
+		int cachedEntryCount;
+		double lodMinDistance;
 
 		SectionBucket(long key) {
 			this.key = key;
+			this.originX = SectionPos.x(key) << 4;
+			this.originY = SectionPos.y(key) << 4;
+			this.originZ = SectionPos.z(key) << 4;
+			this.minX = originX;
+			this.minY = originY;
+			this.minZ = originZ;
+			this.maxX = originX + 16.0D;
+			this.maxY = originY + 16.0D;
+			this.maxZ = originZ + 16.0D;
 		}
 	}
 
@@ -466,19 +661,37 @@ public final class OptiminiumBlockEntityLod {
 		final double x;
 		final double y;
 		final double z;
+		final double minX;
+		final double minY;
+		final double minZ;
+		final double maxX;
+		final double maxY;
+		final double maxZ;
 		int color;
 		int lastSeenFrame;
+		int lastObservedFrame;
+		long lastObservedNanos;
+		double lodMinDistance;
 		float red;
 		float green;
 		float blue;
 
-		Entry(long posKey, long sectionKey, BlockPos pos, int color) {
+		Entry(long posKey, long sectionKey, BlockPos pos, int color, double lodMinDistance) {
 			this.posKey = posKey;
 			this.sectionKey = sectionKey;
 			this.x = pos.getX() + 0.5D;
 			this.y = pos.getY() + 0.5D;
 			this.z = pos.getZ() + 0.5D;
+			this.minX = x - CUBE_HALF;
+			this.minY = y - CUBE_HALF;
+			this.minZ = z - CUBE_HALF;
+			this.maxX = x + CUBE_HALF;
+			this.maxY = y + CUBE_HALF;
+			this.maxZ = z + CUBE_HALF;
 			this.color = color;
+			this.lodMinDistance = lodMinDistance;
+			this.lastObservedFrame = frameIndex;
+			this.lastObservedNanos = System.nanoTime();
 			applyColor();
 		}
 
@@ -517,26 +730,43 @@ public final class OptiminiumBlockEntityLod {
 		long rejectedStale,
 		long rejectedTooNear,
 		long rejectedTooFar,
+		long sectionFrustumCulled,
+		long sectionOcclusionCulled,
+		long entryFrustumCulled,
+		long visibilityRetested,
+		long candidates,
+		long drawBatches,
+		long cacheHits,
+		long cacheRefreshes,
+		long cacheEvictions,
+		long bucketsConsidered,
+		long bucketsFrustumCulled,
+		long bucketsOcclusionCulled,
+		long bucketsRebuilt,
 		long worldPassCalls,
 		long worldPassRendered,
 		long worldPassEmpty,
 		long cleanupRemoved,
+		long staleRemoved,
+		long sourceInvalidRemoved,
 		long trimRemoved
 	) {
-		private static final DebugSnapshot EMPTY = new DebugSnapshot(false, false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+		private static final DebugSnapshot EMPTY = new DebugSnapshot(false, false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
 
 		String[] lines() {
 			return new String[] {
 				"Optiminium BE LOD Debug",
 				"enabled=" + optiminiumEnabled + " culling=" + cullingEnabled + " cubes=" + cubesEnabled,
 				"cache=" + cachedEntries + "/" + maxCachedEntries + " observed=" + observed + " new=" + created + " updated=" + updated,
+				"persistent cache hits=" + cacheHits + " refreshes=" + cacheRefreshes + " evictions=" + cacheEvictions,
 				"skipped=" + skippedEntries + " skippedCalls=" + skippedRecorded + " active=" + activeEntries,
-				"draw world=" + worldPassRendered + "/" + worldPassCalls + " empty=" + worldPassEmpty,
-				"checks=" + renderChecks + " eligible=" + eligibleChecks + " range=" + minDistance + "-" + maxDistance + " vanilla=" + vanillaRenderDistance,
+				"draw world=" + worldPassRendered + "/" + worldPassCalls + " bucketMeshes=" + drawBatches + " buckets=" + bucketsConsidered + " culled=" + bucketsFrustumCulled + "/" + bucketsOcclusionCulled + " rebuilt=" + bucketsRebuilt + " empty=" + worldPassEmpty,
+				"visibility retested=" + visibilityRetested + " visible=" + worldPassRendered + " culled section/frustum=" + sectionFrustumCulled + " section/occlusion=" + sectionOcclusionCulled + " entry/frustum=" + entryFrustumCulled,
+				"checks=" + renderChecks + " candidates=" + candidates + " eligible=" + eligibleChecks + " range=" + minDistance + "-" + maxDistance + " sourceMin=perBucket vanilla=" + vanillaRenderDistance,
 				"predict=" + predictedUnloadDistance + " margin=" + unloadMargin,
 				"reject active=" + rejectedActive + " liveTooEarly=" + rejectedLoadedNotSkipped + " liveLod=" + predictedLoaded,
 				"reject near=" + rejectedTooNear + " far=" + rejectedTooFar,
-				"reject stale=" + rejectedStale + " null=" + rejectedNull + " removed=" + cleanupRemoved + "+" + trimRemoved
+				"reject stale=" + rejectedStale + " null=" + rejectedNull + " removed=" + cleanupRemoved + "+" + trimRemoved + " staleRemoved=" + staleRemoved + " sourceInvalidRemoved=" + sourceInvalidRemoved
 			};
 		}
 
@@ -546,18 +776,34 @@ public final class OptiminiumBlockEntityLod {
 				+ ", cubes=" + cubesEnabled
 				+ ", cache=" + cachedEntries + "/" + maxCachedEntries
 				+ ", observed=" + observed
+				+ ", cacheHits=" + cacheHits
+				+ ", cacheRefreshes=" + cacheRefreshes
+				+ ", cacheEvictions=" + cacheEvictions
 				+ ", skipped=" + skippedEntries + "/" + skippedRecorded
 				+ ", active=" + activeEntries
 				+ ", drawWorld=" + worldPassRendered + "/" + worldPassCalls
+				+ ", lodDrawBatches=" + drawBatches
+				+ ", bucketsConsidered=" + bucketsConsidered
+				+ ", bucketsFrustumCulled=" + bucketsFrustumCulled
+				+ ", bucketsOcclusionCulled=" + bucketsOcclusionCulled
+				+ ", bucketsRebuilt=" + bucketsRebuilt
 				+ ", checks=" + renderChecks
+				+ ", candidates=" + candidates
 				+ ", eligible=" + eligibleChecks
+				+ ", visibilityRetested=" + visibilityRetested
+				+ ", sectionFrustumCulled=" + sectionFrustumCulled
+				+ ", sectionOcclusionCulled=" + sectionOcclusionCulled
+				+ ", entryFrustumCulled=" + entryFrustumCulled
 				+ ", rejectActive=" + rejectedActive
 				+ ", rejectLiveTooEarly=" + rejectedLoadedNotSkipped
 				+ ", liveLod=" + predictedLoaded
 				+ ", rejectNear=" + rejectedTooNear
 				+ ", rejectFar=" + rejectedTooFar
 				+ ", rejectStale=" + rejectedStale
+				+ ", staleRemoved=" + staleRemoved
+				+ ", sourceInvalidRemoved=" + sourceInvalidRemoved
 				+ ", range=" + minDistance + "-" + maxDistance
+				+ ", sourceMin=perBucket"
 				+ ", vanillaRange=" + vanillaRenderDistance
 				+ ", predictedUnloadDistance=" + predictedUnloadDistance
 				+ ", unloadMargin=" + unloadMargin;

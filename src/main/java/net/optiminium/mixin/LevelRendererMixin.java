@@ -16,7 +16,6 @@ import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumRenderProfiler;
 import net.optiminium.client.OptiminiumVisualSignificance;
 import net.optiminium.compat.OptiminiumSodiumCompat;
-import net.optiminium.optimization.OptiminiumSettings;
 import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -58,6 +57,18 @@ public abstract class LevelRendererMixin {
 		// Non-Sodium path: proceed with vanilla block entity tracking.
 		OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(false);
 		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
+	}
+
+	@Inject(method = "renderLevel", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/LevelRenderer;compileSections(Lnet/minecraft/client/Camera;)V"))
+	private void optiminium$captureVisibleSectionsForBlockEntityLod(DeltaTracker deltaTracker, boolean renderBlockOutline, Camera camera, GameRenderer gameRenderer, LightTexture lightTexture,
+			Matrix4f frustumMatrix, Matrix4f projectionMatrix, CallbackInfo callback) {
+		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
+			return;
+		}
+		OptiminiumBlockEntityLod.beginVisibleSectionFrame();
+		for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
+			OptiminiumBlockEntityLod.recordVisibleSection(section.getOrigin());
+		}
 	}
 
 	@Unique
@@ -113,27 +124,6 @@ public abstract class LevelRendererMixin {
 			OptiminiumRenderProfiler.recordTranslucentRender();
 		} else if (renderType == RenderType.solid() || renderType == RenderType.cutoutMipped() || renderType == RenderType.cutout()) {
 			OptiminiumRenderProfiler.recordTerrainRender();
-		}
-
-		// Priority 4: Skip empty render layers to avoid unnecessary GL state transitions.
-		// The vanilla renderSectionLayer iterates visibleSections and draws compiled
-		// sections that have geometry for this layer. If no visible section has a
-		// compiled result, we can skip the entire GL state setup/teardown for this layer.
-		// This avoids redundant shader binds, texture binds, and buffer binds.
-		//
-		// Heuristic: if there are no visible sections with compiled data at all,
-		// no layer can have geometry. This is a cheap check (no per-section layer scan).
-		if (OptiminiumSettings.isEnabled() && OptiminiumSettings.isGpuOptimizer()) {
-			boolean hasAnyCompiled = false;
-			for (SectionRenderDispatcher.RenderSection section : this.visibleSections) {
-				if (section.getCompiled() != null) {
-					hasAnyCompiled = true;
-					break;
-				}
-			}
-			if (!hasAnyCompiled) {
-				callback.cancel();
-			}
 		}
 	}
 

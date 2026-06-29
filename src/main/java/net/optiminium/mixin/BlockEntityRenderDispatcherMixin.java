@@ -27,12 +27,12 @@ public abstract class BlockEntityRenderDispatcherMixin {
 	private static <T extends BlockEntity> void optiminium$countRenderedBlockEntity(BlockEntityRenderer<T> renderer, T blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
 			CallbackInfo callback) {
 		if (!OptiminiumBlockEntityCulling.isDistanceCullingRenderer(renderer)) {
-			OptiminiumBlockEntityLod.observe(blockEntity);
+			OptiminiumBlockEntityLod.observe(blockEntity, renderer.getViewDistance());
 			if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, renderer.getViewDistance())) {
 				callback.cancel();
 				return;
 			}
-			OptiminiumBlockEntityLod.recordRendered(blockEntity);
+			OptiminiumBlockEntityLod.recordRendered(blockEntity, renderer.getViewDistance());
 			float alpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
 			if (alpha < 1.0F) {
 				RenderSystem.enableBlend();

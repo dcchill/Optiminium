@@ -174,9 +174,10 @@ public final class OptiminiumGpuUploadQueue {
 		}
 
 		// Determine significance threshold from Visual Significance budget
-		boolean isUnderPressure = OptiminiumVisualSignificance.renderBudget() != OptiminiumVisualSignificance.RenderBudget.NORMAL;
-		boolean isHeavyPressure = OptiminiumVisualSignificance.renderBudget() == OptiminiumVisualSignificance.RenderBudget.HEAVY_PRESSURE
-			|| OptiminiumVisualSignificance.renderBudget() == OptiminiumVisualSignificance.RenderBudget.EMERGENCY;
+		OptiminiumVisualSignificance.RenderBudget renderBudget = OptiminiumVisualSignificance.renderBudget();
+		boolean isUnderPressure = renderBudget != OptiminiumVisualSignificance.RenderBudget.NORMAL;
+		boolean isHeavyPressure = renderBudget == OptiminiumVisualSignificance.RenderBudget.HEAVY_PRESSURE
+			|| renderBudget == OptiminiumVisualSignificance.RenderBudget.EMERGENCY;
 
 		// Calculate catch-up burst limit: allow extra uploads if queue is large,
 		// but cap to prevent frame-time spikes

@@ -240,6 +240,16 @@ public final class OptiminiumSettings {
 		return experimentalTemporalSignificance;
 	}
 
+	public static void setExperimentalRendererFeatures(boolean value) {
+		experimentalRendererFeatures = value;
+		save();
+	}
+
+	public static void setExperimentalTemporalSignificance(boolean value) {
+		experimentalTemporalSignificance = value;
+		save();
+	}
+
 	public static boolean isClientRenderCulling() {
 		return true;
 	}

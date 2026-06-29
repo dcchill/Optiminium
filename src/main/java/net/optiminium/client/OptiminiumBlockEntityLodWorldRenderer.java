@@ -19,7 +19,8 @@ public final class OptiminiumBlockEntityLodWorldRenderer {
 		if (minecraft == null || minecraft.renderBuffers() == null) return;
 
 		MultiBufferSource.BufferSource bufferSource = minecraft.renderBuffers().bufferSource();
-		OptiminiumBlockEntityLod.render(event.getPoseStack(), bufferSource, event.getCamera());
-		bufferSource.endBatch(OptiminiumBlockEntityLod.renderType());
+		if (OptiminiumBlockEntityLod.render(event.getPoseStack(), bufferSource, event.getCamera(), event.getFrustum())) {
+			bufferSource.endBatch(OptiminiumBlockEntityLod.renderType());
+		}
 	}
 }

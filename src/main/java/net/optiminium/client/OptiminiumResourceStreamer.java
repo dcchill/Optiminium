@@ -8,19 +8,18 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumSettings;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumResourceStreamer {
-	private static final Map<ResourceLocation, byte[]> shaderCache = new ConcurrentHashMap<>();
 	private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(task -> {
 		Thread thread = new Thread(task, "Optiminium Resource Streamer");
 		thread.setDaemon(true);
@@ -33,7 +32,8 @@ public final class OptiminiumResourceStreamer {
 
 	@SubscribeEvent
 	public static void onClientTick(ClientTickEvent.Post event) {
-		if (scheduled || !OptiminiumSettings.isEnabled() || !OptiminiumSettings.isAsyncResourceStreaming() || Minecraft.getInstance().level == null) {
+		if (scheduled || !OptiminiumSettings.isEnabled() || !OptiminiumSettings.isAsyncResourceStreaming()
+				|| OptiminiumSodiumCompat.isNonVanillaRenderer() || Minecraft.getInstance().level == null) {
 			return;
 		}
 		scheduled = true;
@@ -47,9 +47,6 @@ public final class OptiminiumResourceStreamer {
 		add(resources, manager.listResources("models", OptiminiumResourceStreamer::isJson));
 		add(resources, manager.listResources("particles", OptiminiumResourceStreamer::isJson));
 		add(resources, manager.listResources("sounds", OptiminiumResourceStreamer::isOgg));
-		if (OptiminiumSettings.isShaderResourceCache()) {
-			add(resources, manager.listResources("shaders", OptiminiumResourceStreamer::isShaderResource));
-		}
 		return resources;
 	}
 
@@ -60,10 +57,7 @@ public final class OptiminiumResourceStreamer {
 	private static void warm(List<WarmResource> resources) {
 		for (WarmResource warmResource : resources) {
 			try (var input = warmResource.resource.open()) {
-				byte[] bytes = input.readAllBytes();
-				if (isShaderResource(warmResource.location)) {
-					shaderCache.put(warmResource.location, bytes);
-				}
+				input.readAllBytes();
 				if (isPng(warmResource.location)) {
 					OptiminiumGpuUploadQueue.enqueue(() -> Minecraft.getInstance().getTextureManager().getTexture(warmResource.location), warmResource.location, true);
 				}
@@ -85,10 +79,5 @@ public final class OptiminiumResourceStreamer {
 
 	private static boolean isOgg(ResourceLocation location) {
 		return location.getPath().endsWith(".ogg");
-	}
-
-	private static boolean isShaderResource(ResourceLocation location) {
-		String path = location.getPath();
-		return path.endsWith(".json") || path.endsWith(".vsh") || path.endsWith(".fsh") || path.endsWith(".glsl");
 	}
 }

@@ -28,11 +28,13 @@ import java.util.Locale;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBenchmark {
-	private static final String FORMAT_VERSION = "scene-v3";
+	private static final String FORMAT_VERSION = "scene-v4";
 	private static final int PHASE_TICKS = 20 * 12;
 	private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
 	private static boolean running;
 	private static boolean previousEnabled;
+	private static boolean previousExperimentalRendererFeatures;
+	private static boolean previousExperimentalTemporalSignificance;
 	private static boolean cameraStable;
 	private static int ticks;
 	private static Phase phase = Phase.OFF;
@@ -41,11 +43,19 @@ public final class OptiminiumBenchmark {
 	private static long lastGpuSample;
 	private static String offDiagnostics = "";
 	private static OptiminiumGpuOptimizer.ProfileSnapshot offProfile = emptyProfile();
+	private static OptiminiumGpuOptimizer.ProfileSnapshot onProfile = emptyProfile();
 	private static OptiminiumGpuOptimizer.SceneSnapshot offScene = emptyScene();
+	private static OptiminiumGpuOptimizer.SceneSnapshot onScene = emptyScene();
 	private static OptiminiumRenderProfiler.Snapshot offRenderProfile = emptyRenderProfile();
+	private static OptiminiumRenderProfiler.Snapshot onRenderProfile = emptyRenderProfile();
 	private static OptiminiumMetrics.Snapshot offMetricStart = emptyMetrics();
 	private static OptiminiumMetrics.Snapshot onMetricStart = emptyMetrics();
 	private static OptiminiumMetrics.Snapshot offMetrics = emptyMetrics();
+	private static OptiminiumMetrics.Snapshot onMetrics = emptyMetrics();
+	private static OptiminiumVisualSignificance.Snapshot offSignificanceStart;
+	private static OptiminiumVisualSignificance.Snapshot offSignificanceEnd;
+	private static OptiminiumVisualSignificance.Snapshot onSignificanceStart;
+	private static OptiminiumVisualSignificance.Snapshot onSignificanceEnd;
 	private static CameraSnapshot offCameraSnapshot = CameraSnapshot.EMPTY;
 	private static final List<Long> offFrames = new ArrayList<>();
 	private static final List<Long> onFrames = new ArrayList<>();
@@ -64,6 +74,12 @@ public final class OptiminiumBenchmark {
 		}
 		running = true;
 		previousEnabled = OptiminiumSettings.isEnabled();
+		previousExperimentalRendererFeatures = OptiminiumSettings.isExperimentalRendererFeatures();
+		previousExperimentalTemporalSignificance = OptiminiumSettings.isExperimentalTemporalSignificance();
+		// Force-enable significance engine for the entire benchmark lifecycle so that
+		// significance metrics are collected during both OFF and ON phases.
+		OptiminiumSettings.setExperimentalRendererFeatures(true);
+		OptiminiumSettings.setExperimentalTemporalSignificance(true);
 		phase = Phase.OFF;
 		ticks = 0;
 		lastFrameNanos = 0L;
@@ -72,11 +88,15 @@ public final class OptiminiumBenchmark {
 		OptiminiumGpuOptimizer.flushPendingMetrics();
 		offDiagnostics = "";
 		offProfile = emptyProfile();
+		onProfile = emptyProfile();
 		offScene = emptyScene();
+		onScene = emptyScene();
 		offRenderProfile = emptyRenderProfile();
+		onRenderProfile = emptyRenderProfile();
 		offMetricStart = OptiminiumMetrics.snapshot();
 		onMetricStart = emptyMetrics();
 		offMetrics = emptyMetrics();
+		onMetrics = emptyMetrics();
 		offCameraSnapshot = CameraSnapshot.capture();
 		cameraStable = true;
 		offFrames.clear();
@@ -90,7 +110,22 @@ public final class OptiminiumBenchmark {
 		OptiminiumGpuOptimizer.setProfilingEnabled(true);
 		OptiminiumRenderProfiler.setEnabled(true);
 		OptiminiumSettings.setEnabled(false);
+		// Capture significance start snapshot after reset — resets accumulators
+		// so the OFF phase significance deltas are measured from a clean baseline.
+		OptiminiumVisualSignificance.reset();
+		offSignificanceStart = OptiminiumVisualSignificance.snapshot();
+		offSignificanceEnd = null;
+		onSignificanceStart = null;
+		onSignificanceEnd = null;
 		message("Optiminium benchmark: OFF pass started.");
+	}
+
+	/**
+	 * Full benchmark — delegates to start() which already runs both OFF and ON phases.
+	 * Exists for the settings GUI button binding.
+	 */
+	public static void startFull() {
+		start();
 	}
 
 	@SubscribeEvent
@@ -134,6 +169,7 @@ public final class OptiminiumBenchmark {
 		}
 		if (phase == Phase.OFF) {
 			OptiminiumGpuOptimizer.flushPendingMetrics();
+			offSignificanceEnd = OptiminiumVisualSignificance.snapshot();
 			offDiagnostics = OptiminiumGpuOptimizer.diagnosticLine();
 			offProfile = OptiminiumGpuOptimizer.profileSnapshot();
 			offScene = OptiminiumGpuOptimizer.sceneSnapshot();
@@ -148,17 +184,23 @@ public final class OptiminiumBenchmark {
 			OptiminiumGpuOptimizer.resetAdaptiveStats();
 			OptiminiumRenderProfiler.reset();
 			onMetricStart = OptiminiumMetrics.snapshot();
+			// Reset significance accumulators so we get a clean baseline for the ON pass.
+			OptiminiumVisualSignificance.reset();
+			onSignificanceStart = OptiminiumVisualSignificance.snapshot();
 			OptiminiumSettings.setEnabled(true);
 			message("Optiminium benchmark: ON pass started.");
 			return;
 		}
 		running = false;
 		OptiminiumGpuOptimizer.flushPendingMetrics();
+		onSignificanceEnd = OptiminiumVisualSignificance.snapshot();
 		String onDiagnostics = OptiminiumGpuOptimizer.diagnosticLine();
-		OptiminiumGpuOptimizer.ProfileSnapshot onProfile = OptiminiumGpuOptimizer.profileSnapshot();
-		OptiminiumGpuOptimizer.SceneSnapshot onScene = OptiminiumGpuOptimizer.sceneSnapshot();
-		OptiminiumRenderProfiler.Snapshot onRenderProfile = OptiminiumRenderProfiler.snapshot();
-		OptiminiumMetrics.Snapshot onMetrics = delta(onMetricStart, OptiminiumMetrics.snapshot());
+		onProfile = OptiminiumGpuOptimizer.profileSnapshot();
+		onScene = OptiminiumGpuOptimizer.sceneSnapshot();
+		onRenderProfile = OptiminiumRenderProfiler.snapshot();
+		onMetrics = delta(onMetricStart, OptiminiumMetrics.snapshot());
+		OptiminiumSettings.setExperimentalRendererFeatures(previousExperimentalRendererFeatures);
+		OptiminiumSettings.setExperimentalTemporalSignificance(previousExperimentalTemporalSignificance);
 		OptiminiumSettings.setEnabled(previousEnabled);
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
@@ -178,6 +220,10 @@ public final class OptiminiumBenchmark {
 		long particlesPrevented = onMetrics.hiddenParticles() - offMetrics.hiddenParticles();
 		long blockEntitiesPrevented = onMetrics.culledBlockEntityRenders() - offMetrics.culledBlockEntityRenders();
 		long entitiesPrevented = onMetrics.culledEntityRenders() - offMetrics.culledEntityRenders();
+		// Significance delta: delta = end - start. Since we called reset() at the start
+		// of each phase, the snapshot is already an isolated accumulation for that phase.
+		OptiminiumVisualSignificance.Snapshot offSignificanceDelta = offSignificanceEnd != null ? offSignificanceEnd : OptiminiumVisualSignificance.snapshot();
+		OptiminiumVisualSignificance.Snapshot onSignificanceDelta = onSignificanceEnd != null ? onSignificanceEnd : OptiminiumVisualSignificance.snapshot();
 		String recommendation = recommendation(onProfile, offRenderProfile, onRenderProfile, particlesPrevented, blockEntitiesPrevented, entitiesPrevented);
 		long totalPrevented = Math.max(0L, particlesPrevented) + Math.max(0L, blockEntitiesPrevented) + Math.max(0L, entitiesPrevented);
 		List<String> lines = new ArrayList<>();
@@ -186,8 +232,8 @@ public final class OptiminiumBenchmark {
 		lines.add("Optiminium benchmark normalized OFF[" + normalizedCpuLine(offFrames, offThreadCpuFrames, offGpuFrames, offProfile) + "] ON[" + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, onProfile) + "]");
 		lines.add(String.format("Optiminium benchmark prevented: particles=%d, blockEntities=%d, entities=%d", particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
 		lines.add("Optiminium benchmark scene OFF[" + sceneLine(offScene) + "] ON[" + sceneLine(onScene) + "]");
-		lines.add("Optiminium benchmark significance OFF[" + significanceLine(offScene.significanceBands(), offMetrics, offScene) + "] ON[" + significanceLine(onScene.significanceBands(), onMetrics, onScene) + "]");
-		lines.add("Optiminium benchmark significance summary OFF[" + significanceSummary(offScene.significanceBands()) + "] ON[" + significanceSummary(onScene.significanceBands()) + "]");
+		lines.add("Optiminium benchmark significance OFF[" + significanceLine(offSignificanceDelta, offMetrics, offScene) + "] ON[" + significanceLine(onSignificanceDelta, onMetrics, onScene) + "]");
+		lines.add("Optiminium benchmark significance summary OFF[" + significanceSummary(offSignificanceDelta) + "] ON[" + significanceSummary(onSignificanceDelta) + "]");
 		lines.add(String.format("Optiminium benchmark FPS estimate: particleCulling=%.1f, blockEntityCulling=%.1f, entityCulling=%.1f, uploadManagement=not isolated, adaptiveQuality=not isolated", estimatedFpsGain(fpsGain, particlesPrevented, totalPrevented), estimatedFpsGain(fpsGain, blockEntitiesPrevented, totalPrevented), estimatedFpsGain(fpsGain, entitiesPrevented, totalPrevented)));
 		lines.add("Optiminium benchmark CPU OFF[" + profileLine(offProfile) + "]");
 		lines.add("Optiminium benchmark CPU ON[" + profileLine(onProfile) + "]");
@@ -197,8 +243,14 @@ public final class OptiminiumBenchmark {
 		lines.add("Optiminium benchmark low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
 		lines.add("Optiminium benchmark recommendation: " + recommendation);
 		lines.add("Optiminium benchmark diagnostics: OFF" + offDiagnostics + " | ON" + onDiagnostics + ", cameraStable=" + cameraStable + ", phaseTicks=" + PHASE_TICKS);
+		// Inactive metric detection: flag optimizations that show zero or negative delta
+		String inactiveMetrics = inactiveMetricDetection(offMetrics, onMetrics, offSignificanceDelta, onSignificanceDelta);
+		if (!inactiveMetrics.isEmpty()) {
+			lines.add("Optiminium benchmark inactive metrics: " + inactiveMetrics);
+		}
 		Path htmlReport = writeHtmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
-			offRenderProfile, onRenderProfile, onDiagnostics, recommendation);
+			offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
+			offSignificanceDelta, onSignificanceDelta);
 		if (htmlReport != null) {
 			lines.add("Optiminium benchmark HTML report: " + htmlReport);
 		}
@@ -226,16 +278,20 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String profileLine(OptiminiumGpuOptimizer.ProfileSnapshot profile) {
-		return String.format("particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstOptiminiumCpuMs=%.3f",
+		return String.format("particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstUploadManagementMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f",
 			profile.particleCullingMs(),
 			profile.blockEntityCullingMs(),
 			profile.entityCullingMs(),
 			profile.uploadManagementMs(),
 			profile.adaptiveQualityMs(),
+			profile.visualSignificanceMs(),
 			profile.totalOptiminiumCpuMs(),
 			profile.worstParticleCullingMs(),
 			profile.worstBlockEntityCullingMs(),
 			profile.worstEntityCullingMs(),
+			profile.worstUploadManagementMs(),
+			profile.worstAdaptiveQualityMs(),
+			profile.worstVisualSignificanceMs(),
 			profile.worstOptiminiumCpuMs()
 		);
 	}
@@ -492,7 +548,9 @@ public final class OptiminiumBenchmark {
 			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
 			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
 			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
-			String onDiagnostics, String recommendation) {
+			String onDiagnostics, String recommendation,
+			OptiminiumVisualSignificance.Snapshot offSignificanceDelta,
+			OptiminiumVisualSignificance.Snapshot onSignificanceDelta) {
 		try {
 			Path directory = Minecraft.getInstance().gameDirectory.toPath().resolve("optiminium_reports");
 			Files.createDirectories(directory);
@@ -500,7 +558,8 @@ public final class OptiminiumBenchmark {
 			String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"));
 			Path report = directory.resolve("optiminium-benchmark-" + timestamp + "-" + mode + ".html");
 			Files.writeString(report, htmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
-				offRenderProfile, onRenderProfile, onDiagnostics, recommendation), StandardCharsets.UTF_8);
+				offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
+				offSignificanceDelta, onSignificanceDelta), StandardCharsets.UTF_8);
 			return report;
 		} catch (IOException | RuntimeException exception) {
 			OptiminiumMod.LOGGER.warn("Failed to write Optiminium benchmark HTML report", exception);
@@ -512,9 +571,11 @@ public final class OptiminiumBenchmark {
 			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
 			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
 			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
-			String onDiagnostics, String recommendation) {
-		OptiminiumVisualSignificance.Snapshot offBands = offScene.significanceBands();
-		OptiminiumVisualSignificance.Snapshot onBands = onScene.significanceBands();
+			String onDiagnostics, String recommendation,
+			OptiminiumVisualSignificance.Snapshot offSignificanceDelta,
+			OptiminiumVisualSignificance.Snapshot onSignificanceDelta) {
+		OptiminiumVisualSignificance.Snapshot offBands = offSignificanceDelta;
+		OptiminiumVisualSignificance.Snapshot onBands = onSignificanceDelta;
 		double offFps = averageFps(offFrames);
 		double onFps = averageFps(onFrames);
 		double offOneLow = onePercentLowOrZero(offFrames);
@@ -598,6 +659,8 @@ public final class OptiminiumBenchmark {
 		appendWarnings(html, offFps, onFps, offOneLow, onOneLow, offWorstFps, onWorstFps, offGpuMs, onGpuMs,
 			offCpuMs, onCpuMs, onProfile, offBands, onBands, offRenderProfile, onRenderProfile);
 		html.append("</div>");
+		appendSelfValidation(html, offFps, onFps, offOneLow, onOneLow, offGpuMs, onGpuMs, offCpuMs, onCpuMs,
+			offMetrics, onMetrics, onProfile, offBands, onBands, offRenderProfile, onRenderProfile, cameraStable);
 		html.append("<details><summary>Raw benchmark metrics</summary><div class=\"raw\">")
 			.append(escape("OFF stats: " + stats(offFrames, offGpuFrames) + "\nON stats: " + stats(onFrames, onGpuFrames)
 				+ "\nOFF significance: " + significanceLine(offBands, offMetrics, offScene)
@@ -958,6 +1021,124 @@ public final class OptiminiumBenchmark {
 		html.append("</div>");
 	}
 
+	private static void appendSelfValidation(StringBuilder html, double offFps, double onFps,
+			double offOneLow, double onOneLow, double offGpuMs, double onGpuMs,
+			double offCpuMs, double onCpuMs,
+			OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics,
+			OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
+			OptiminiumVisualSignificance.Snapshot offBands, OptiminiumVisualSignificance.Snapshot onBands,
+			OptiminiumRenderProfiler.Snapshot offRenderProfile,
+			OptiminiumRenderProfiler.Snapshot onRenderProfile, boolean cameraStable) {
+		html.append("<h2>Self-Validation</h2><div class=\"grid\">");
+		int passes = 0;
+		int failures = 0;
+		// 1. Significance engine was active during both phases
+		boolean significanceActive = onBands.full() + onBands.throttled() + onBands.reused()
+			+ onBands.proxy() + onBands.culled() > 0L;
+		html.append("<div class=\"card\"><strong>Significance engine active</strong><br><span class=\"")
+			.append(significanceActive ? "good\">PASS" : "bad\">FAIL")
+			.append("</span><p class=\"muted\">ON significance band total: ")
+			.append(onBands.full() + onBands.throttled() + onBands.reused() + onBands.proxy() + onBands.culled())
+			.append(" (OFF: ")
+			.append(offBands.full() + offBands.throttled() + offBands.reused() + offBands.proxy() + offBands.culled())
+			.append(")</p></div>");
+		if (significanceActive) passes++; else failures++;
+
+		// 2. Significance delta has at least some band data in both phases
+		boolean offHasBandData = offBands.full() + offBands.throttled() + offBands.reused()
+			+ offBands.proxy() + offBands.culled() > 0L;
+		html.append("<div class=\"card\"><strong>OFF phase band data present</strong><br><span class=\"")
+			.append(offHasBandData ? "good\">PASS" : "warn\">FAIL (significance not recording during OFF)")
+			.append("</span></div>");
+		if (offHasBandData) passes++; else failures++;
+
+		// 3. Camera stability check
+		html.append("<div class=\"card\"><strong>Camera stability</strong><br><span class=\"")
+			.append(cameraStable ? "good\">PASS" : "warn\">WARN (camera moved during benchmark)")
+			.append("</span><p class=\"muted\">cameraStable=").append(cameraStable).append("</p></div>");
+		if (cameraStable) passes++; else failures++;
+
+		// 4. Optiminium CPU overhead within budget
+		boolean cpuOverheadOk = onProfile.totalOptiminiumCpuMs() <= 0.35D;
+		html.append("<div class=\"card\"><strong>CPU overhead budget</strong><br><span class=\"")
+			.append(cpuOverheadOk ? "good\">PASS" : "warn\">WARN (above 0.35 ms/frame)")
+			.append("</span><p class=\"muted\">totalOptiminiumCpuMs=")
+			.append(format(onProfile.totalOptiminiumCpuMs())).append(" ms/frame</p></div>");
+		if (cpuOverheadOk) passes++; else failures++;
+
+		// 5. FPS data collected for both phases
+		boolean hasOffFps = offFps > 0.0D;
+		boolean hasOnFps = onFps > 0.0D;
+		boolean bothPhasesCollected = hasOffFps && hasOnFps;
+		html.append("<div class=\"card\"><strong>Both phases collected data</strong><br><span class=\"")
+			.append(bothPhasesCollected ? "good\">PASS" : "bad\">FAIL")
+			.append("</span><p class=\"muted\">OFF FPS: ").append(format(offFps))
+			.append(", ON FPS: ").append(format(onFps)).append("</p></div>");
+		if (bothPhasesCollected) passes++; else failures++;
+
+		// 6. Score recomputes vs cache hits balance
+		boolean cacheHealthy = onBands.scoreRecomputes() > 0L && onBands.scoreCacheHits() > 0L;
+		html.append("<div class=\"card\"><strong>Score cache health</strong><br><span class=\"")
+			.append(cacheHealthy ? "good\">PASS" : "warn\">WARN (no score cache activity)")
+			.append("</span><p class=\"muted\">cacheHits=").append(onBands.scoreCacheHits())
+			.append(", recomputes=").append(onBands.scoreRecomputes()).append("</p></div>");
+		if (cacheHealthy) passes++; else failures++;
+
+		// 7. GPU timer data collected
+		boolean hasGpuData = onGpuMs > 0.0D || offGpuMs > 0.0D;
+		html.append("<div class=\"card\"><strong>GPU timer data</strong><br><span class=\"")
+			.append(hasGpuData ? "good\">PASS" : "warn\">WARN (no GPU timing available)")
+			.append("</span><p class=\"muted\">OFF GPU ms: ").append(format(offGpuMs))
+			.append(", ON GPU ms: ").append(format(onGpuMs)).append("</p></div>");
+		if (hasGpuData) passes++; else failures++;
+
+		// 8. Culling active — at least one prevented metric
+		boolean cullingActive = onMetrics.hiddenParticles() > 0L || onMetrics.culledBlockEntityRenders() > 0L
+			|| onMetrics.culledEntityRenders() > 0L;
+		html.append("<div class=\"card\"><strong>Culling metrics</strong><br><span class=\"")
+			.append(cullingActive ? "good\">PASS" : "warn\">WARN (no culling detected)")
+			.append("</span><p class=\"muted\">particlesPrevented=").append(onMetrics.hiddenParticles())
+			.append(", blockEntities=").append(onMetrics.culledBlockEntityRenders())
+			.append(", entities=").append(onMetrics.culledEntityRenders()).append("</p></div>");
+		if (cullingActive) passes++; else failures++;
+
+		// 9. Render profiling active
+		boolean renderProfilingActive = onRenderProfile.textureBindCount() > 0L
+			|| onRenderProfile.shaderBindCount() > 0L;
+		html.append("<div class=\"card\"><strong>Render profiling</strong><br><span class=\"")
+			.append(renderProfilingActive ? "good\">PASS" : "warn\">WARN (no render profile data)")
+			.append("</span><p class=\"muted\">textureBinds=").append(onRenderProfile.textureBindCount())
+			.append(", shaderBinds=").append(onRenderProfile.shaderBindCount()).append("</p></div>");
+		if (renderProfilingActive) passes++; else failures++;
+
+		// 10. Band transitions acting (non-zero decisions from engine)
+		boolean engineActive = onBands.decisionBecauseWeightedScore()
+			+ onBands.decisionBecausePopRiskVeto()
+			+ onBands.decisionBecauseConfidenceVeto()
+			+ onBands.decisionBecauseSafetyOverride()
+			+ onBands.decisionBecauseRecentlyVisible() > 0L;
+		html.append("<div class=\"card\"><strong>Decision engine firing</strong><br><span class=\"")
+			.append(engineActive ? "good\">PASS" : "warn\">WARN (no decisions recorded)")
+			.append("</span><p class=\"muted\">decisions: ").append(onBands.decisionBecauseWeightedScore())
+			.append(" weighted, ").append(onBands.decisionBecausePopRiskVeto())
+			.append(" pop-risk, ").append(onBands.decisionBecauseConfidenceVeto())
+			.append(" confidence, ").append(onBands.decisionBecauseSafetyOverride())
+			.append(" safety, ").append(onBands.decisionBecauseRecentlyVisible())
+			.append(" recent-visibility</p></div>");
+		if (engineActive) passes++; else failures++;
+
+		html.append("</div><div class=\"card\"><strong>Validation summary: ")
+			.append(passes).append("/").append(passes + failures)
+			.append(" checks passed</strong>");
+		if (failures == 0) {
+			html.append("<p class=\"good\">All self-validation checks passed — benchmark data is trustworthy.</p>");
+		} else {
+			html.append("<p class=\"warn\">").append(failures)
+				.append(" check(s) failed or warned — review individual results above.</p>");
+		}
+		html.append("</div>");
+	}
+
 	private static void priority(StringBuilder html, String severity, String title, String evidence, String likelyCause, String nextFix) {
 		String cls = "High".equals(severity) ? "bad" : ("Medium".equals(severity) ? "warn" : "muted");
 		html.append("<div class=\"card\"><strong class=\"").append(cls).append("\">").append(escape(severity))
@@ -1021,6 +1202,37 @@ public final class OptiminiumBenchmark {
 
 	private static boolean increasedSignificantly(long offValue, long onValue) {
 		return onValue > offValue && percentChange(offValue, onValue) > 10.0D;
+	}
+
+	private static String inactiveMetricDetection(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics,
+			OptiminiumVisualSignificance.Snapshot offBands, OptiminiumVisualSignificance.Snapshot onBands) {
+		StringBuilder sb = new StringBuilder();
+		// Culling metrics that should have increased (more culling = good when enabled)
+		if (onMetrics.hiddenParticles() <= offMetrics.hiddenParticles() && onMetrics.hiddenParticles() == 0L) {
+			sb.append("|particleLimiter:inactive");
+		}
+		if (onMetrics.culledBlockEntityRenders() <= offMetrics.culledBlockEntityRenders() && onMetrics.culledBlockEntityRenders() == 0L) {
+			sb.append("|blockEntityCulling:inactive");
+		}
+		if (onMetrics.culledEntityRenders() <= offMetrics.culledEntityRenders() && onMetrics.culledEntityRenders() == 0L) {
+			sb.append("|entityCulling:inactive");
+		}
+		// Significance engine counters
+		if (onBands.culled() == 0L && onBands.full() + onBands.throttled() + onBands.reused() + onBands.proxy() > 0L) {
+			sb.append("|significanceCulling:noCulls");
+		}
+		if (onBands.full() + onBands.throttled() + onBands.reused() + onBands.proxy() + onBands.culled() == 0L) {
+			sb.append("|significanceEngine:noActivity");
+		}
+		if (onBands.scoreRecomputes() == 0L) {
+			sb.append("|scoreRecomputes:none");
+		}
+		if (onBands.decisionBecauseWeightedScore() == 0L && onBands.decisionBecausePopRiskVeto() == 0L
+				&& onBands.decisionBecauseConfidenceVeto() == 0L) {
+			sb.append("|decisionEngine:noDecisions");
+		}
+		String result = sb.length() > 0 ? sb.substring(1) : "";
+		return result.isEmpty() ? "none" : result;
 	}
 
 	private static double estimatedFpsGain(double fpsGain, long prevented, long totalPrevented) {

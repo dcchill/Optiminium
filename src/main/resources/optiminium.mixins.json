@@ -8,7 +8,7 @@
   ],
   "client": [
     "BlockEntityRenderDispatcherMixin",
-    "EntityRenderDispatcherMixin",
+    "FrustumAccessor",
     "GlStateManagerMixin",
     "LevelRendererMixin",
     "ParticleEngineMixin",
