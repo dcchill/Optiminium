@@ -40,6 +40,8 @@ import net.minecraft.world.phys.Vec3;
 import net.optiminium.OptiminiumMod;
 import net.optiminium.optimization.OptiminiumSettings;
 
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.util.ArrayDeque;
 import java.util.Deque;
 /**
@@ -142,6 +144,8 @@ public final class OptiminiumVisualSignificance {
 	private static final int PERIODIC_RECHECK_CULLED_NEAR_FRAMES = 13;
 	private static final int PERIODIC_RECHECK_CULLED_FAR_FRAMES = 41;
 	private static final int BAND_TRANSITION_BUDGET_PER_FRAME = 64;
+	private static final int DECAY_OBJECTS_PER_FRAME = 64;
+	private static final int DECAY_ENTITY_MEMORY_PER_FRAME = 32;
 	private static final int MAX_NON_URGENT_TRANSITIONS_PER_FRAME = 48;
 	private static final int MAX_URGENT_TRANSITIONS_PER_FRAME = 128;
 	private static final int DEFERRED_TRANSITIONS_PROCESS_PER_FRAME = 32;
@@ -224,10 +228,14 @@ public final class OptiminiumVisualSignificance {
 	private static final Long2LongOpenHashMap recentlyInteracted = new Long2LongOpenHashMap();
 	private static final Long2ByteOpenHashMap beClassifications = new Long2ByteOpenHashMap();
 	private static final Long2ObjectOpenHashMap<ObjectMemory> objectMemory = new Long2ObjectOpenHashMap<>();
+	private static final LongArrayList objectMemoryKeys = new LongArrayList();
+	private static int objectMemoryDecayIndex;
 
 	// ---- Entity-specific data ----
 	private static final Int2ObjectOpenHashMap<EntityMemory> entityMemory = new Int2ObjectOpenHashMap<>();
 	private static final Int2ObjectOpenHashMap<EntityOscillationTracker> entityOscillation = new Int2ObjectOpenHashMap<>();
+	private static final IntArrayList entityMemoryKeys = new IntArrayList();
+	private static int entityMemoryDecayIndex;
 	private static final Int2LongOpenHashMap recentlyInteractedEntities = new Int2LongOpenHashMap();
 
 	// ---- Per-frame counters ----
@@ -673,35 +681,7 @@ public final class OptiminiumVisualSignificance {
 	//  Core recording (with staggered evaluation)
 	// ============================================================
 
-	/**
-	 * Determines if this object should be fully evaluated this frame based on
-	 * distance, importance, and stagger interval.
-	 */
-	private static boolean shouldEvaluateThisFrame(double distanceSqr, boolean lookedAt,
-			boolean important, boolean recent, ObjectMemory mem) {
-		// Always evaluate near/looked-at/recently-interacted objects
-		if (distanceSqr <= NEAR_DISTANCE_SQR || lookedAt || important || recent) {
-			return true;
-		}
-		// If camera moved significantly, evaluate more aggressively
-		if (cameraMovedSignificantly || cameraRotatedSignificantly) {
-			if (distanceSqr <= STAGGER_MID_DISTANCE_SQR) return true;
-		}
-		// Stagger based on distance
-		int interval;
-		if (distanceSqr <= STAGGER_MID_DISTANCE_SQR) {
-			interval = STAGGER_INTERVAL_MID;
-		} else if (distanceSqr <= STAGGER_FAR_DISTANCE_SQR) {
-			interval = STAGGER_INTERVAL_FAR;
-		} else {
-			interval = STAGGER_INTERVAL_CULLED;
-		}
-		// Use object hash to distribute evaluation across frames
-		if (mem != null) {
-			return (mem.lastSeenFrame + mem.hashCode()) % interval == 0;
-		}
-		return (frameIndex % interval) == 0;
-	}
+	
 
 	private static int blockDirtyReasons(ObjectMemory mem, long key, double distanceSqr, double centerPresence,
 			boolean lookedAt, boolean inFront, boolean important, boolean interactedThisFrame,
@@ -897,7 +877,7 @@ public final class OptiminiumVisualSignificance {
 			boolean lookedAt, boolean important, EntityCategory category, Entity entity, EntityMemory mem) {
 		return lookedAt || important || distanceSqr <= ENTITY_NEAR_DISTANCE_SQR
 			|| (dirtyReasons & DIRTY_INTERACTION) != 0
-			|| entity instanceof Player || entity instanceof LivingEntity || entity instanceof Projectile
+			|| entity instanceof Player || entity instanceof Projectile
 			|| category == EntityCategory.CRITICAL || mem.safetyImportance >= 0.75D
 			|| mem.gameplayImportance >= 0.70D;
 	}
@@ -913,7 +893,7 @@ public final class OptiminiumVisualSignificance {
 			boolean lookedAt, boolean important, EntityCategory category, Entity entity, EntityMemory mem) {
 		return previous != UNKNOWN && desired < previous
 			&& (lookedAt || important || distanceSqr <= ENTITY_NEAR_DISTANCE_SQR
-				|| entity instanceof LivingEntity || entity instanceof Projectile
+				|| entity instanceof Projectile
 				|| category == EntityCategory.CRITICAL || mem.safetyImportance >= 0.75D
 				|| mem.gameplayImportance >= 0.70D);
 	}
@@ -1865,22 +1845,40 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	private static void decayVisibility() {
-		var objIterator = objectMemory.long2ObjectEntrySet().fastIterator();
-		while (objIterator.hasNext()) {
-			var entry = objIterator.next();
-			ObjectMemory mem = entry.getValue();
-			if (mem.lastSeenFrame < frameIndex) {
-				mem.visibilityDecay *= 0.96D;
-				mem.continuousScore *= 0.98D;
+		if (!objectMemory.isEmpty()) {
+			if (objectMemoryKeys.size() != objectMemory.size()) {
+				objectMemoryKeys.clear();
+				objectMemoryKeys.addAll(objectMemory.keySet());
+			}
+			for (int i = 0; i < DECAY_OBJECTS_PER_FRAME && !objectMemoryKeys.isEmpty(); i++) {
+				if (objectMemoryDecayIndex >= objectMemoryKeys.size()) {
+					objectMemoryDecayIndex = 0;
+				}
+				long key = objectMemoryKeys.getLong(objectMemoryDecayIndex++);
+				ObjectMemory mem = objectMemory.get(key);
+				if (mem == null) continue;
+				if (mem.lastSeenFrame < frameIndex) {
+					mem.visibilityDecay *= 0.96D;
+					mem.continuousScore *= 0.98D;
+				}
 			}
 		}
-		var entIterator = entityMemory.int2ObjectEntrySet().fastIterator();
-		while (entIterator.hasNext()) {
-			var entry = entIterator.next();
-			EntityMemory mem = entry.getValue();
-			if (mem.lastSeenFrame < frameIndex) {
-				mem.visibilityDecay *= 0.96D;
-				mem.continuousScore *= 0.98D;
+		if (!entityMemory.isEmpty()) {
+			if (entityMemoryKeys.size() != entityMemory.size()) {
+				entityMemoryKeys.clear();
+				entityMemoryKeys.addAll(entityMemory.keySet());
+			}
+			for (int i = 0; i < DECAY_ENTITY_MEMORY_PER_FRAME && !entityMemoryKeys.isEmpty(); i++) {
+				if (entityMemoryDecayIndex >= entityMemoryKeys.size()) {
+					entityMemoryDecayIndex = 0;
+				}
+				int entityId = entityMemoryKeys.getInt(entityMemoryDecayIndex++);
+				EntityMemory mem = entityMemory.get(entityId);
+				if (mem == null) continue;
+				if (mem.lastSeenFrame < frameIndex) {
+					mem.visibilityDecay *= 0.96D;
+					mem.continuousScore *= 0.98D;
+				}
 			}
 		}
 	}

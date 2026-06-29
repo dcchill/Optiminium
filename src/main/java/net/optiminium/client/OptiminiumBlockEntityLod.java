@@ -23,7 +23,6 @@ import net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.phys.Vec3;
-import net.optiminium.OptiminiumMod;
 import net.optiminium.mixin.FrustumAccessor;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
@@ -110,6 +109,9 @@ public final class OptiminiumBlockEntityLod {
 		activeThisFrame.clear();
 		skippedThisFrame.clear();
 		visibleSectionsThisFrame.clear();
+		for (SectionBucket bucket : bucketsBySection.values()) {
+			bucket.dirty = true;
+		}
 		hasVisibleSectionData = false;
 		skippedRenderEstimatesThisFrame = 0L;
 		resetDebugCounters();
@@ -213,10 +215,6 @@ public final class OptiminiumBlockEntityLod {
 		return RENDER_TYPE;
 	}
 
-	public static String[] debugLines() {
-		return lastDebugSnapshot.lines();
-	}
-
 	public static String debugLine() {
 		return lastDebugSnapshot.compactLine();
 	}
@@ -305,7 +303,6 @@ public final class OptiminiumBlockEntityLod {
 			OptiminiumSettings.isEnabled(),
 			OptiminiumSettings.isBlockEntityCulling(),
 			OptiminiumSettings.isBlockEntityLodCubesEnabled(),
-			OptiminiumSettings.isBlockEntityLodDebugEnabled(),
 			entriesByPos.size(),
 			activeThisFrame.size(),
 			skippedThisFrame.size(),
@@ -350,9 +347,6 @@ public final class OptiminiumBlockEntityLod {
 			debugSourceInvalidRemoved,
 			debugTrimRemoved
 		);
-		if (lastDebugSnapshot.debugEnabled() && frameIndex > 0 && frameIndex % 60 == 0) {
-			OptiminiumMod.LOGGER.info("Optiminium block entity LOD debug: {}", lastDebugSnapshot.compactLine());
-		}
 	}
 
 	private static void resetDebugCounters() {
@@ -424,10 +418,10 @@ public final class OptiminiumBlockEntityLod {
 		return Math.max(configuredMinDistance, sourceViewDistance + 1.0D);
 	}
 
-	private static boolean shouldRenderBucket(SectionBucket bucket, Vec3 cameraPosition) {
-		debugRenderChecks += bucket.entries.size();
+	private static boolean shouldRenderBucket(SectionBucket bucket, Vec3 cameraPosition, int candidateCount) {
+		debugRenderChecks += candidateCount;
 		if (cameraPosition == null) {
-			debugRejectedNull += bucket.entries.size();
+			debugRejectedNull += candidateCount;
 			return false;
 		}
 		double distanceSqr = sectionDistanceSqr(bucket, cameraPosition);
@@ -439,24 +433,24 @@ public final class OptiminiumBlockEntityLod {
 			minDistance
 		);
 		if (distanceSqr < minDistance * minDistance) {
-			debugRejectedTooNear += bucket.entries.size();
+			debugRejectedTooNear += candidateCount;
 			return false;
 		}
 		if (distanceSqr > maxDistance * maxDistance) {
-			debugRejectedTooFar += bucket.entries.size();
+			debugRejectedTooFar += candidateCount;
 			return false;
 		}
-		debugEligibleChecks += bucket.entries.size();
+		debugEligibleChecks += candidateCount;
 		return true;
 	}
 
 	private static boolean prepareBucket(SectionBucket bucket, Vec3 cameraPosition, Frustum frustum) {
 		if (bucket.entries.isEmpty()) return false;
 		debugBucketsConsidered++;
-		int bucketCandidates = bucket.entries.size();
+		int bucketCandidates = skippedEntryCount(bucket);
 		debugCandidates += bucketCandidates;
 		if (bucketCandidates < MIN_BUCKET_ENTRIES_TO_DRAW) return false;
-		if (!shouldRenderBucket(bucket, cameraPosition)) return false;
+		if (!shouldRenderBucket(bucket, cameraPosition, bucketCandidates)) return false;
 		debugVisibilityRetested++;
 		if (!isSectionVisibleThisFrame(bucket, frustum)) {
 			debugSectionFrustumCulled += bucketCandidates;
@@ -481,6 +475,20 @@ public final class OptiminiumBlockEntityLod {
 			lodMinDistance = Math.max(lodMinDistance, entry.lodMinDistance);
 		}
 		bucket.lodMinDistance = lodMinDistance;
+	}
+
+	private static int skippedEntryCount(SectionBucket bucket) {
+		int count = 0;
+		for (Entry entry : bucket.entries) {
+			if (activeThisFrame.contains(entry.posKey)) {
+				debugRejectedActive++;
+			} else if (skippedThisFrame.contains(entry.posKey)) {
+				count++;
+			} else {
+				debugRejectedLoadedNotSkipped++;
+			}
+		}
+		return count;
 	}
 
 	private static double sectionDistanceSqr(SectionBucket bucket, Vec3 cameraPosition) {
@@ -568,14 +576,19 @@ public final class OptiminiumBlockEntityLod {
 		}
 		refreshBucketLodMinDistance(bucket);
 		int offset = 0;
+		int cachedEntryCount = 0;
 		for (Entry entry : bucket.entries) {
+			if (activeThisFrame.contains(entry.posKey) || !skippedThisFrame.contains(entry.posKey)) {
+				continue;
+			}
 			float x = (float)(entry.x - bucket.originX);
 			float y = (float)(entry.y - bucket.originY);
 			float z = (float)(entry.z - bucket.originZ);
 			offset = appendCube(bucket.mesh, offset, x, y, z, CUBE_HALF, entry.red, entry.green, entry.blue);
+			cachedEntryCount++;
 		}
 		bucket.meshLength = offset;
-		bucket.cachedEntryCount = bucket.entries.size();
+		bucket.cachedEntryCount = cachedEntryCount;
 		bucket.dirty = false;
 	}
 
@@ -706,7 +719,6 @@ public final class OptiminiumBlockEntityLod {
 		boolean optiminiumEnabled,
 		boolean cullingEnabled,
 		boolean cubesEnabled,
-		boolean debugEnabled,
 		int cachedEntries,
 		int activeEntries,
 		int skippedEntries,
@@ -751,24 +763,7 @@ public final class OptiminiumBlockEntityLod {
 		long sourceInvalidRemoved,
 		long trimRemoved
 	) {
-		private static final DebugSnapshot EMPTY = new DebugSnapshot(false, false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
-
-		String[] lines() {
-			return new String[] {
-				"Optiminium BE LOD Debug",
-				"enabled=" + optiminiumEnabled + " culling=" + cullingEnabled + " cubes=" + cubesEnabled,
-				"cache=" + cachedEntries + "/" + maxCachedEntries + " observed=" + observed + " new=" + created + " updated=" + updated,
-				"persistent cache hits=" + cacheHits + " refreshes=" + cacheRefreshes + " evictions=" + cacheEvictions,
-				"skipped=" + skippedEntries + " skippedCalls=" + skippedRecorded + " active=" + activeEntries,
-				"draw world=" + worldPassRendered + "/" + worldPassCalls + " bucketMeshes=" + drawBatches + " buckets=" + bucketsConsidered + " culled=" + bucketsFrustumCulled + "/" + bucketsOcclusionCulled + " rebuilt=" + bucketsRebuilt + " empty=" + worldPassEmpty,
-				"visibility retested=" + visibilityRetested + " visible=" + worldPassRendered + " culled section/frustum=" + sectionFrustumCulled + " section/occlusion=" + sectionOcclusionCulled + " entry/frustum=" + entryFrustumCulled,
-				"checks=" + renderChecks + " candidates=" + candidates + " eligible=" + eligibleChecks + " range=" + minDistance + "-" + maxDistance + " sourceMin=perBucket vanilla=" + vanillaRenderDistance,
-				"predict=" + predictedUnloadDistance + " margin=" + unloadMargin,
-				"reject active=" + rejectedActive + " liveTooEarly=" + rejectedLoadedNotSkipped + " liveLod=" + predictedLoaded,
-				"reject near=" + rejectedTooNear + " far=" + rejectedTooFar,
-				"reject stale=" + rejectedStale + " null=" + rejectedNull + " removed=" + cleanupRemoved + "+" + trimRemoved + " staleRemoved=" + staleRemoved + " sourceInvalidRemoved=" + sourceInvalidRemoved
-			};
-		}
+		private static final DebugSnapshot EMPTY = new DebugSnapshot(false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
 
 		String compactLine() {
 			return "enabled=" + optiminiumEnabled

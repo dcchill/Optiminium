@@ -55,7 +55,7 @@ public final class OptiminiumGpuTimer {
 	}
 
 	public static boolean isActive() {
-		return supported && OptiminiumSettings.isGpuTimerPacing();
+		return supported && OptiminiumSettings.isGpuOptimizer();
 	}
 
 	public static boolean hasTiming() {
@@ -89,7 +89,7 @@ public final class OptiminiumGpuTimer {
 		if (!supported) {
 			return "unsupported: " + unavailableReason;
 		}
-		return OptiminiumSettings.isGpuTimerPacing() ? "active" : "disabled";
+		return OptiminiumSettings.isGpuOptimizer() ? "active" : "disabled";
 	}
 
 	private static void initialize() {

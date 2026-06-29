@@ -23,8 +23,7 @@
 - Fixed dense-scene metric direction so raw scene complexity is intended to come from visible render sections before Optiminium culling.
 - Moved raw scene sampling onto `LevelRenderer.renderLevel` as well as compile-section pacing, so OFF/ON benchmarks are not dependent on chunk compilation activity.
 - Bumped the benchmark format marker to `scene-v3`. `build/libs/optiminium-1.0.jar` must emit `Optiminium benchmark scene-v3` and the `Optiminium benchmark scene OFF[...] ON[...]` line; `build/libs/modid-1.0.jar` is stale and should not be used for validation.
-- Started Temporal Significance Virtualization with default-off measurement only:
-  - `experimentalTemporalSignificance`
+- Started Temporal Significance Virtualization as benchmark-internal measurement only.
   - raw-visible block-entity significance band counters
   - `significanceBands=full/throttled/reused/proxy/culled` diagnostic output
 - Added a dedicated benchmark scene line that prints raw/significance metrics for OFF and ON without digging through diagnostics.

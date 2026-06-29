@@ -33,7 +33,6 @@ public final class OptiminiumBenchmark {
 	private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
 	private static boolean running;
 	private static boolean previousEnabled;
-	private static boolean previousExperimentalRendererFeatures;
 	private static boolean previousExperimentalTemporalSignificance;
 	private static boolean cameraStable;
 	private static int ticks;
@@ -64,6 +63,11 @@ public final class OptiminiumBenchmark {
 	private static final List<Long> offGpuFrames = new ArrayList<>();
 	private static final List<Long> onGpuFrames = new ArrayList<>();
 	private static final List<FrameBurstSample> onBurstFrames = new ArrayList<>();
+	private static List<BenchmarkCase> fullBenchmarkCases = Collections.emptyList();
+	private static final List<FullBenchmarkResult> fullBenchmarkResults = new ArrayList<>();
+	private static int fullBenchmarkIndex;
+	private static OptiminiumSettings.Snapshot fullBenchmarkSettings;
+	private static String activeBenchmarkName;
 
 	private OptiminiumBenchmark() {
 	}
@@ -72,14 +76,30 @@ public final class OptiminiumBenchmark {
 		if (running) {
 			return;
 		}
+		startBenchmark(null, true);
+	}
+
+	public static void startFull() {
+		if (running) {
+			return;
+		}
+		fullBenchmarkSettings = OptiminiumSettings.snapshot();
+		fullBenchmarkCases = fullBenchmarkCases();
+		fullBenchmarkResults.clear();
+		fullBenchmarkIndex = 0;
+		message("Optiminium full benchmark: " + fullBenchmarkCases.size() + " individual settings queued.");
+		startNextFullBenchmark();
+	}
+
+	private static void startBenchmark(String benchmarkName, boolean forceSignificanceMetrics) {
 		running = true;
+		activeBenchmarkName = benchmarkName;
 		previousEnabled = OptiminiumSettings.isEnabled();
-		previousExperimentalRendererFeatures = OptiminiumSettings.isExperimentalRendererFeatures();
 		previousExperimentalTemporalSignificance = OptiminiumSettings.isExperimentalTemporalSignificance();
-		// Force-enable significance engine for the entire benchmark lifecycle so that
-		// significance metrics are collected during both OFF and ON phases.
-		OptiminiumSettings.setExperimentalRendererFeatures(true);
-		OptiminiumSettings.setExperimentalTemporalSignificance(true);
+		if (forceSignificanceMetrics) {
+			// Force-enable significance metrics for the normal benchmark.
+			OptiminiumSettings.setExperimentalTemporalSignificance(true);
+		}
 		phase = Phase.OFF;
 		ticks = 0;
 		lastFrameNanos = 0L;
@@ -117,15 +137,7 @@ public final class OptiminiumBenchmark {
 		offSignificanceEnd = null;
 		onSignificanceStart = null;
 		onSignificanceEnd = null;
-		message("Optiminium benchmark: OFF pass started.");
-	}
-
-	/**
-	 * Full benchmark — delegates to start() which already runs both OFF and ON phases.
-	 * Exists for the settings GUI button binding.
-	 */
-	public static void startFull() {
-		start();
+		message(benchmarkPrefix() + ": OFF pass started.");
 	}
 
 	@SubscribeEvent
@@ -141,8 +153,7 @@ public final class OptiminiumBenchmark {
 			if (phase == Phase.ON) {
 				onBurstFrames.add(new FrameBurstSample(frameNanos,
 					OptiminiumVisualSignificance.frameBurstSnapshot(),
-					OptiminiumRenderProfiler.frameSnapshot(),
-					OptiminiumGpuUploadQueue.frameSnapshot()));
+					OptiminiumRenderProfiler.frameSnapshot()));
 			}
 		}
 		if (lastThreadCpuNanos != 0L && threadCpuNanos != 0L) {
@@ -188,7 +199,7 @@ public final class OptiminiumBenchmark {
 			OptiminiumVisualSignificance.reset();
 			onSignificanceStart = OptiminiumVisualSignificance.snapshot();
 			OptiminiumSettings.setEnabled(true);
-			message("Optiminium benchmark: ON pass started.");
+			message(benchmarkPrefix() + ": ON pass started.");
 			return;
 		}
 		running = false;
@@ -199,14 +210,67 @@ public final class OptiminiumBenchmark {
 		onScene = OptiminiumGpuOptimizer.sceneSnapshot();
 		onRenderProfile = OptiminiumRenderProfiler.snapshot();
 		onMetrics = delta(onMetricStart, OptiminiumMetrics.snapshot());
-		OptiminiumSettings.setExperimentalRendererFeatures(previousExperimentalRendererFeatures);
 		OptiminiumSettings.setExperimentalTemporalSignificance(previousExperimentalTemporalSignificance);
 		OptiminiumSettings.setEnabled(previousEnabled);
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
+		if (fullBenchmarkSettings != null) {
+			fullBenchmarkResults.add(fullBenchmarkResult(activeBenchmarkName, onMetrics, onProfile, onScene, onRenderProfile, onDiagnostics));
+		}
 		for (String line : report(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene, offRenderProfile, onRenderProfile, onDiagnostics)) {
 			message(line);
 		}
+		if (fullBenchmarkSettings != null) {
+			if (startNextFullBenchmark()) {
+				return;
+			}
+			OptiminiumSettings.restore(fullBenchmarkSettings);
+			Path fullReport = writeFullBenchmarkReport(fullBenchmarkResults);
+			fullBenchmarkSettings = null;
+			fullBenchmarkCases = Collections.emptyList();
+			fullBenchmarkResults.clear();
+			activeBenchmarkName = null;
+			if (fullReport != null) {
+				message("Optiminium full benchmark HTML report: " + fullReport);
+			}
+			message("Optiminium full benchmark: complete.");
+		}
+	}
+
+	private static boolean startNextFullBenchmark() {
+		if (fullBenchmarkIndex >= fullBenchmarkCases.size()) {
+			return false;
+		}
+		BenchmarkCase benchmarkCase = fullBenchmarkCases.get(fullBenchmarkIndex++);
+		OptiminiumSettings.restore(fullBenchmarkSettings);
+		OptiminiumSettings.disableBenchmarkFeatures();
+		OptiminiumSettings.setEnabled(true);
+		benchmarkCase.enable();
+		message("Optiminium full benchmark: running " + benchmarkCase.name() + ".");
+		startBenchmark(benchmarkCase.name(), false);
+		return true;
+	}
+
+	private static List<BenchmarkCase> fullBenchmarkCases() {
+		return List.of(
+			new BenchmarkCase("All settings off", () -> {
+			}),
+			new BenchmarkCase("Frame Pacing", () -> OptiminiumSettings.setFramePacing(true)),
+			new BenchmarkCase("Particle Limiter", () -> OptiminiumSettings.setParticleLimiter(true)),
+			new BenchmarkCase("Block Entity Culling", () -> OptiminiumSettings.setBlockEntityCulling(true)),
+			new BenchmarkCase("Block Entity LOD Cubes", () -> {
+				OptiminiumSettings.setBlockEntityCulling(true);
+				OptiminiumSettings.setBlockEntityLodCubes(true);
+			}),
+			new BenchmarkCase("Dense Scene Mode", () -> {
+				OptiminiumSettings.setFramePacing(true);
+				OptiminiumSettings.setDenseSceneAdaptiveMode(OptiminiumSettings.DenseSceneAdaptiveMode.BALANCED);
+			})
+		);
+	}
+
+	private static String benchmarkPrefix() {
+		return activeBenchmarkName == null ? "Optiminium benchmark" : "Optiminium full benchmark [" + activeBenchmarkName + "]";
 	}
 
 	private static List<String> report(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics, OptiminiumGpuOptimizer.ProfileSnapshot offProfile,
@@ -226,33 +290,36 @@ public final class OptiminiumBenchmark {
 		OptiminiumVisualSignificance.Snapshot onSignificanceDelta = onSignificanceEnd != null ? onSignificanceEnd : OptiminiumVisualSignificance.snapshot();
 		String recommendation = recommendation(onProfile, offRenderProfile, onRenderProfile, particlesPrevented, blockEntitiesPrevented, entitiesPrevented);
 		long totalPrevented = Math.max(0L, particlesPrevented) + Math.max(0L, blockEntitiesPrevented) + Math.max(0L, entitiesPrevented);
+		String prefix = benchmarkPrefix();
 		List<String> lines = new ArrayList<>();
-		lines.add("Optiminium benchmark " + FORMAT_VERSION + ": rendererCompatibilityMode=" + OptiminiumSodiumCompat.rendererModeString() + " OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
-		lines.add(String.format("Optiminium benchmark net: GPU savings=%.2f ms, CPU overhead=%.3f ms/frame, net frame gain=%.2f ms, FPS gain=%.1f", gpuSavingsMs, onProfile.totalOptiminiumCpuMs(), frameSavingsMs, fpsGain));
-		lines.add("Optiminium benchmark normalized OFF[" + normalizedCpuLine(offFrames, offThreadCpuFrames, offGpuFrames, offProfile) + "] ON[" + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, onProfile) + "]");
-		lines.add(String.format("Optiminium benchmark prevented: particles=%d, blockEntities=%d, entities=%d", particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
-		lines.add("Optiminium benchmark scene OFF[" + sceneLine(offScene) + "] ON[" + sceneLine(onScene) + "]");
-		lines.add("Optiminium benchmark significance OFF[" + significanceLine(offSignificanceDelta, offMetrics, offScene) + "] ON[" + significanceLine(onSignificanceDelta, onMetrics, onScene) + "]");
-		lines.add("Optiminium benchmark significance summary OFF[" + significanceSummary(offSignificanceDelta) + "] ON[" + significanceSummary(onSignificanceDelta) + "]");
-		lines.add(String.format("Optiminium benchmark FPS estimate: particleCulling=%.1f, blockEntityCulling=%.1f, entityCulling=%.1f, uploadManagement=not isolated, adaptiveQuality=not isolated", estimatedFpsGain(fpsGain, particlesPrevented, totalPrevented), estimatedFpsGain(fpsGain, blockEntitiesPrevented, totalPrevented), estimatedFpsGain(fpsGain, entitiesPrevented, totalPrevented)));
-		lines.add("Optiminium benchmark CPU OFF[" + profileLine(offProfile) + "]");
-		lines.add("Optiminium benchmark CPU ON[" + profileLine(onProfile) + "]");
-		lines.add("Optiminium benchmark render OFF[" + renderProfileLine(offRenderProfile, offFrames.size()) + "]");
-		lines.add("Optiminium benchmark render ON[" + renderProfileLine(onRenderProfile, onFrames.size()) + "]");
-		lines.add("Optiminium benchmark render delta: " + renderDeltaLine(offRenderProfile, onRenderProfile));
-		lines.add("Optiminium benchmark low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
-		lines.add("Optiminium benchmark recommendation: " + recommendation);
-		lines.add("Optiminium benchmark diagnostics: OFF" + offDiagnostics + " | ON" + onDiagnostics + ", cameraStable=" + cameraStable + ", phaseTicks=" + PHASE_TICKS);
+		lines.add(prefix + " " + FORMAT_VERSION + ": rendererCompatibilityMode=" + OptiminiumSodiumCompat.rendererModeString() + " OFF[" + stats(offFrames, offGpuFrames) + "] ON[" + stats(onFrames, onGpuFrames) + "]");
+		lines.add(String.format(prefix + " net: GPU savings=%.2f ms, CPU overhead=%.3f ms/frame, net frame gain=%.2f ms, FPS gain=%.1f", gpuSavingsMs, onProfile.totalOptiminiumCpuMs(), frameSavingsMs, fpsGain));
+		lines.add(prefix + " normalized OFF[" + normalizedCpuLine(offFrames, offThreadCpuFrames, offGpuFrames, offProfile) + "] ON[" + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, onProfile) + "]");
+		lines.add(String.format(prefix + " prevented: particles=%d, blockEntities=%d, entities=%d", particlesPrevented, blockEntitiesPrevented, entitiesPrevented));
+		lines.add(prefix + " scene OFF[" + sceneLine(offScene) + "] ON[" + sceneLine(onScene) + "]");
+		lines.add(prefix + " significance OFF[" + significanceLine(offSignificanceDelta, offMetrics, offScene) + "] ON[" + significanceLine(onSignificanceDelta, onMetrics, onScene) + "]");
+		lines.add(prefix + " significance summary OFF[" + significanceSummary(offSignificanceDelta) + "] ON[" + significanceSummary(onSignificanceDelta) + "]");
+		lines.add(String.format(prefix + " FPS estimate: particleCulling=%.1f, blockEntityCulling=%.1f, entityCulling=%.1f, adaptiveQuality=not isolated", estimatedFpsGain(fpsGain, particlesPrevented, totalPrevented), estimatedFpsGain(fpsGain, blockEntitiesPrevented, totalPrevented), estimatedFpsGain(fpsGain, entitiesPrevented, totalPrevented)));
+		lines.add(prefix + " CPU OFF[" + profileLine(offProfile) + "]");
+		lines.add(prefix + " CPU ON[" + profileLine(onProfile) + "]");
+		lines.add(prefix + " render OFF[" + renderProfileLine(offRenderProfile, offFrames.size()) + "]");
+		lines.add(prefix + " render ON[" + renderProfileLine(onRenderProfile, onFrames.size()) + "]");
+		lines.add(prefix + " render delta: " + renderDeltaLine(offRenderProfile, onRenderProfile));
+		lines.add(prefix + " low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
+		lines.add(prefix + " recommendation: " + recommendation);
+		lines.add(prefix + " diagnostics: OFF" + offDiagnostics + " | ON" + onDiagnostics + ", cameraStable=" + cameraStable + ", phaseTicks=" + PHASE_TICKS);
 		// Inactive metric detection: flag optimizations that show zero or negative delta
 		String inactiveMetrics = inactiveMetricDetection(offMetrics, onMetrics, offSignificanceDelta, onSignificanceDelta);
 		if (!inactiveMetrics.isEmpty()) {
-			lines.add("Optiminium benchmark inactive metrics: " + inactiveMetrics);
+			lines.add(prefix + " inactive metrics: " + inactiveMetrics);
 		}
-		Path htmlReport = writeHtmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
-			offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
-			offSignificanceDelta, onSignificanceDelta);
-		if (htmlReport != null) {
-			lines.add("Optiminium benchmark HTML report: " + htmlReport);
+		if (fullBenchmarkSettings == null) {
+			Path htmlReport = writeHtmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
+				offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
+				offSignificanceDelta, onSignificanceDelta);
+			if (htmlReport != null) {
+				lines.add(prefix + " HTML report: " + htmlReport);
+			}
 		}
 		return lines;
 	}
@@ -278,18 +345,16 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String profileLine(OptiminiumGpuOptimizer.ProfileSnapshot profile) {
-		return String.format("particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstUploadManagementMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f",
+		return String.format("particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f",
 			profile.particleCullingMs(),
 			profile.blockEntityCullingMs(),
 			profile.entityCullingMs(),
-			profile.uploadManagementMs(),
 			profile.adaptiveQualityMs(),
 			profile.visualSignificanceMs(),
 			profile.totalOptiminiumCpuMs(),
 			profile.worstParticleCullingMs(),
 			profile.worstBlockEntityCullingMs(),
 			profile.worstEntityCullingMs(),
-			profile.worstUploadManagementMs(),
 			profile.worstAdaptiveQualityMs(),
 			profile.worstVisualSignificanceMs(),
 			profile.worstOptiminiumCpuMs()
@@ -542,6 +607,96 @@ public final class OptiminiumBenchmark {
 			return "particle limiting remains the best next target";
 		}
 		return "entity render culling remains the best next target";
+	}
+
+	private static FullBenchmarkResult fullBenchmarkResult(String name, OptiminiumMetrics.Snapshot metrics,
+			OptiminiumGpuOptimizer.ProfileSnapshot profile, OptiminiumGpuOptimizer.SceneSnapshot scene,
+			OptiminiumRenderProfiler.Snapshot renderProfile, String diagnostics) {
+		OptiminiumVisualSignificance.Snapshot significance = onSignificanceEnd != null ? onSignificanceEnd : OptiminiumVisualSignificance.snapshot();
+		String raw = "stats: " + stats(onFrames, onGpuFrames)
+			+ "\nnormalized: " + normalizedCpuLine(onFrames, onThreadCpuFrames, onGpuFrames, profile)
+			+ "\nprevented: particles=" + metrics.hiddenParticles() + ", blockEntities=" + metrics.culledBlockEntityRenders() + ", entities=" + metrics.culledEntityRenders()
+			+ "\nscene: " + sceneLine(scene)
+			+ "\nsignificance: " + significanceLine(significance, metrics, scene)
+			+ "\nrender: " + renderProfileLine(renderProfile, onFrames.size())
+			+ "\ndiagnostics: " + diagnostics;
+		return new FullBenchmarkResult(name,
+			averageFps(onFrames),
+			onePercentLowOrZero(onFrames),
+			worstFrameFps(onFrames),
+			averageNanosOrZero(onGpuFrames) / 1_000_000.0D,
+			profile.totalOptiminiumCpuMs(),
+			raw);
+	}
+
+	private static Path writeFullBenchmarkReport(List<FullBenchmarkResult> results) {
+		if (results.isEmpty()) {
+			return null;
+		}
+		try {
+			Path directory = Minecraft.getInstance().gameDirectory.toPath().resolve("optiminium_reports");
+			Files.createDirectories(directory);
+			String mode = OptiminiumSodiumCompat.rendererModeString().replaceAll("[^A-Za-z0-9_-]", "_");
+			String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"));
+			Path report = directory.resolve("optiminium-full-benchmark-" + timestamp + "-" + mode + ".html");
+			Files.writeString(report, fullBenchmarkHtml(results), StandardCharsets.UTF_8);
+			return report;
+		} catch (IOException | RuntimeException exception) {
+			OptiminiumMod.LOGGER.warn("Failed to write Optiminium full benchmark HTML report", exception);
+			return null;
+		}
+	}
+
+	private static String fullBenchmarkHtml(List<FullBenchmarkResult> results) {
+		FullBenchmarkResult baseline = results.get(0);
+		StringBuilder html = new StringBuilder(24000);
+		html.append("<!doctype html><html><head><meta charset=\"utf-8\"><title>Optiminium Full Benchmark</title><style>");
+		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
+		html.append("<h1>Optiminium Full Benchmark</h1><p class=\"muted\">")
+			.append(escape(FORMAT_VERSION)).append(" | rendererCompatibilityMode=")
+			.append(escape(OptiminiumSodiumCompat.rendererModeString()))
+			.append(" | baseline=all mutable settings off</p>");
+		html.append("<h2>Summary</h2><div class=\"grid\">");
+		for (FullBenchmarkResult result : results) {
+			card(html, result.name() + " avg FPS", result.averageFps(), "fps", result.averageFps() >= baseline.averageFps());
+			card(html, result.name() + " vs baseline", result.averageFps() - baseline.averageFps(), "fps", result.averageFps() >= baseline.averageFps());
+		}
+		html.append("</div><h2>Charts</h2>");
+		html.append(barChart("Average FPS by setting", fullLabels(results), fullValues(results, FullBenchmarkMetric.AVG_FPS)));
+		html.append(barChart("1% low FPS by setting", fullLabels(results), fullValues(results, FullBenchmarkMetric.ONE_PERCENT_LOW)));
+		html.append(barChart("Worst-frame FPS by setting", fullLabels(results), fullValues(results, FullBenchmarkMetric.WORST_FPS)));
+		html.append(barChart("Average GPU ms by setting", fullLabels(results), fullValues(results, FullBenchmarkMetric.GPU_MS)));
+		html.append(barChart("Optiminium CPU ms/frame by setting", fullLabels(results), fullValues(results, FullBenchmarkMetric.OPTIMINIUM_CPU_MS)));
+		html.append("<h2>Per-setting Details</h2>");
+		for (FullBenchmarkResult result : results) {
+			html.append("<details><summary>").append(escape(result.name())).append("</summary><div class=\"raw\">")
+				.append(escape(result.raw())).append("</div></details>");
+		}
+		html.append("</main></body></html>");
+		return html.toString();
+	}
+
+	private static String[] fullLabels(List<FullBenchmarkResult> results) {
+		String[] labels = new String[results.size()];
+		for (int i = 0; i < results.size(); i++) {
+			labels[i] = results.get(i).name();
+		}
+		return labels;
+	}
+
+	private static double[] fullValues(List<FullBenchmarkResult> results, FullBenchmarkMetric metric) {
+		double[] values = new double[results.size()];
+		for (int i = 0; i < results.size(); i++) {
+			FullBenchmarkResult result = results.get(i);
+			values[i] = switch (metric) {
+				case AVG_FPS -> result.averageFps();
+				case ONE_PERCENT_LOW -> result.onePercentLowFps();
+				case WORST_FPS -> result.worstFrameFps();
+				case GPU_MS -> result.averageGpuMs();
+				case OPTIMINIUM_CPU_MS -> result.optiminiumCpuMs();
+			};
+		}
+		return values;
 	}
 
 	private static Path writeHtmlReport(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics,
@@ -1278,15 +1433,10 @@ public final class OptiminiumBenchmark {
 
 	private static OptiminiumMetrics.Snapshot delta(OptiminiumMetrics.Snapshot start, OptiminiumMetrics.Snapshot end) {
 		return new OptiminiumMetrics.Snapshot(
-			end.skippedEntityTicks() - start.skippedEntityTicks(),
-			end.virtualizedItems() - start.virtualizedItems(),
-			end.mergedXpOrbs() - start.mergedXpOrbs(),
-			end.mergedXpValue() - start.mergedXpValue(),
 			end.culledEntityRenders() - start.culledEntityRenders(),
 			end.culledBlockEntityRenders() - start.culledBlockEntityRenders(),
 			end.hiddenNameTags() - start.hiddenNameTags(),
 			end.hiddenParticles() - start.hiddenParticles(),
-			end.suppressedSounds() - start.suppressedSounds(),
 			end.blockEntityLodCachedEntries(),
 			end.blockEntityLodRendered() - start.blockEntityLodRendered(),
 			end.blockEntityLodEstimatedSkippedRenders() - start.blockEntityLodEstimatedSkippedRenders()
@@ -1294,11 +1444,11 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static OptiminiumMetrics.Snapshot emptyMetrics() {
-		return new OptiminiumMetrics.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+		return new OptiminiumMetrics.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L);
 	}
 
 	private static OptiminiumGpuOptimizer.ProfileSnapshot emptyProfile() {
-		return new OptiminiumGpuOptimizer.ProfileSnapshot(0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+		return new OptiminiumGpuOptimizer.ProfileSnapshot(0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D);
 	}
 
 	private static OptiminiumGpuOptimizer.SceneSnapshot emptyScene() {
@@ -1392,16 +1542,36 @@ public final class OptiminiumBenchmark {
 		ON
 	}
 
+	private record BenchmarkCase(String name, Runnable enable) {
+	}
+
+	private enum FullBenchmarkMetric {
+		AVG_FPS,
+		ONE_PERCENT_LOW,
+		WORST_FPS,
+		GPU_MS,
+		OPTIMINIUM_CPU_MS
+	}
+
+	private record FullBenchmarkResult(
+		String name,
+		double averageFps,
+		double onePercentLowFps,
+		double worstFrameFps,
+		double averageGpuMs,
+		double optiminiumCpuMs,
+		String raw
+	) {
+	}
+
 	private record FrameBurstSample(
 		long frameNanos,
 		OptiminiumVisualSignificance.FrameBurstSnapshot significance,
-		OptiminiumRenderProfiler.FrameSnapshot render,
-		OptiminiumGpuUploadQueue.FrameSnapshot uploads
+		OptiminiumRenderProfiler.FrameSnapshot render
 	) {
 		long deferredWork() {
 			return significance.scoreRecomputesDeferred()
-				+ significance.bandTransitionsDeferred()
-				+ uploads.deferred();
+				+ significance.bandTransitionsDeferred();
 		}
 	}
 

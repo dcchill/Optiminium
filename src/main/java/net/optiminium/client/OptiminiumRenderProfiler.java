@@ -1,10 +1,7 @@
 package net.optiminium.client;
 
-import net.optiminium.optimization.OptiminiumSettings;
-
 public final class OptiminiumRenderProfiler {
 	private static final long STALL_NANOS = 2_000_000L;
-	private static final int UPLOAD_PRESSURE_HOLD_FRAMES = 8;
 	private static boolean enabled;
 	private static boolean frameOpen;
 	private static long textureBindCount;
@@ -32,7 +29,6 @@ public final class OptiminiumRenderProfiler {
 	private static boolean frameHasTranslucentRender;
 	private static boolean frameHasParticleRender;
 	private static boolean frameHasTerrainRender;
-	private static int uploadPressureFrames;
 	private static FrameSnapshot lastFrameSnapshot = FrameSnapshot.EMPTY;
 
 	private OptiminiumRenderProfiler() {
@@ -98,7 +94,6 @@ public final class OptiminiumRenderProfiler {
 		frameHasTranslucentRender = false;
 		frameHasParticleRender = false;
 		frameHasTerrainRender = false;
-		uploadPressureFrames = 0;
 	}
 
 	public static void recordTextureBind(long startNanos) {
@@ -160,10 +155,6 @@ public final class OptiminiumRenderProfiler {
 		return isActive() ? System.nanoTime() : 0L;
 	}
 
-	public static boolean hasRecentUploadPressure() {
-		return OptiminiumSettings.isExperimentalUploadStallLimiter() && uploadPressureFrames > 0;
-	}
-
 	public static void recordBufferUpload(long startNanos) {
 		if (startNanos == 0L) {
 			return;
@@ -206,11 +197,6 @@ public final class OptiminiumRenderProfiler {
 		maxBufferUploadsPerFrame = Math.max(maxBufferUploadsPerFrame, frameBufferUploads);
 		maxRenderLayerSwitchesPerFrame = Math.max(maxRenderLayerSwitchesPerFrame, frameRenderLayerSwitches);
 		maxBufferUploadNanosPerFrame = Math.max(maxBufferUploadNanosPerFrame, frameBufferUploadNanos);
-		if (frameBufferUploadNanos >= STALL_NANOS) {
-			uploadPressureFrames = UPLOAD_PRESSURE_HOLD_FRAMES;
-		} else if (uploadPressureFrames > 0) {
-			uploadPressureFrames--;
-		}
 		if (frameHasTranslucentRender) {
 			translucentRenderFrames++;
 		}
@@ -233,7 +219,7 @@ public final class OptiminiumRenderProfiler {
 	}
 
 	private static boolean isActive() {
-		return enabled || OptiminiumSettings.isExperimentalUploadStallLimiter();
+		return enabled;
 	}
 
 	public static FrameSnapshot frameSnapshot() {

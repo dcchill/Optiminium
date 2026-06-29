@@ -13,15 +13,12 @@ public final class OptiminiumSettings {
 	private static final Path CONFIG_FILE = FMLPaths.CONFIGDIR.get().resolve("optiminium.properties");
 	private static volatile boolean enabled = true;
 	private static volatile boolean framePacing = true;
-	private static volatile boolean gpuTimerPacing = true;
 	private static volatile int gpuTargetFps = 60;
 	private static volatile int gpuMinRenderScalePercent = 60;
-	private static volatile int gpuUploadsPerFrame = 8;
 	private static volatile int entityAlwaysRenderDistanceBlocks = 50;
 	private static volatile boolean particleLimiter = true;
 	private static volatile int particleRenderDistanceBlocks = 64;
 	private static volatile int maxParticlesPerFrame = 96;
-	private static volatile boolean asyncResourceStreaming = true;
 	private static volatile boolean blockEntityCulling = true;
 	private static volatile int blockEntityDistanceScalePercent = 100;
 	private static volatile boolean blockEntityLodCubes = true;
@@ -30,18 +27,9 @@ public final class OptiminiumSettings {
 	private static volatile int blockEntityLodMaxCachedEntries = 4096;
 	private static volatile int blockEntityLodStaleTimeoutFrames = 600;
 	private static volatile int blockEntityLodUnloadMarginBlocks = 48;
-	private static volatile boolean blockEntityLodDebug = false;
 	private static volatile int denseBlockEntityThreshold = 512;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
-	private static volatile boolean shaderResourceCache = true;
-	private static volatile boolean experimentalRendererFeatures = false;
-	private static volatile boolean experimentalUploadStallLimiter = false;
 	private static volatile boolean experimentalTemporalSignificance = false;
-	private static volatile boolean adaptiveSimulationDistance = true;
-	private static volatile int adaptiveSimulationTargetMspt = 50;
-	private static volatile int adaptiveSimulationMinDistanceChunks = 4;
-	private static volatile boolean smartTickScheduler = true;
-	private static volatile boolean aiPathfindingOptimizer = true;
 
 	static {
 		load();
@@ -65,22 +53,40 @@ public final class OptiminiumSettings {
 		save();
 	}
 
+	public static Snapshot snapshot() {
+		return new Snapshot(enabled, framePacing, particleLimiter, blockEntityCulling,
+			blockEntityLodCubes, denseSceneAdaptiveMode);
+	}
+
+	public static void restore(Snapshot snapshot) {
+		enabled = snapshot.enabled;
+		framePacing = snapshot.framePacing;
+		particleLimiter = snapshot.particleLimiter;
+		blockEntityCulling = snapshot.blockEntityCulling;
+		blockEntityLodCubes = snapshot.blockEntityLodCubes;
+		denseSceneAdaptiveMode = snapshot.denseSceneAdaptiveMode;
+		save();
+	}
+
+	public static void disableBenchmarkFeatures() {
+		framePacing = false;
+		particleLimiter = false;
+		blockEntityCulling = false;
+		blockEntityLodCubes = false;
+		experimentalTemporalSignificance = false;
+		denseSceneAdaptiveMode = DenseSceneAdaptiveMode.OFF;
+		save();
+	}
+
 	public static void applyPreset(Preset preset) {
 		enabled = true;
 		framePacing = true;
-		gpuTimerPacing = true;
-		asyncResourceStreaming = true;
-		shaderResourceCache = true;
 		blockEntityCulling = true;
 		blockEntityLodCubes = true;
-		adaptiveSimulationDistance = true;
-		smartTickScheduler = true;
-		aiPathfindingOptimizer = true;
 		switch (preset) {
 			case HIGH_PERFORMANCE -> {
 				gpuTargetFps = 120;
 				gpuMinRenderScalePercent = 45;
-				gpuUploadsPerFrame = 4;
 				entityAlwaysRenderDistanceBlocks = 40;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 32;
@@ -92,13 +98,10 @@ public final class OptiminiumSettings {
 				blockEntityLodStaleTimeoutFrames = 450;
 				blockEntityLodUnloadMarginBlocks = 64;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.AGGRESSIVE;
-				adaptiveSimulationTargetMspt = 45;
-				adaptiveSimulationMinDistanceChunks = 3;
 			}
 			case MEDIUM -> {
 				gpuTargetFps = 75;
 				gpuMinRenderScalePercent = 60;
-				gpuUploadsPerFrame = 8;
 				entityAlwaysRenderDistanceBlocks = 50;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 64;
@@ -110,13 +113,10 @@ public final class OptiminiumSettings {
 				blockEntityLodStaleTimeoutFrames = 600;
 				blockEntityLodUnloadMarginBlocks = 48;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
-				adaptiveSimulationTargetMspt = 50;
-				adaptiveSimulationMinDistanceChunks = 4;
 			}
 			case QUALITY -> {
 				gpuTargetFps = 60;
 				gpuMinRenderScalePercent = 85;
-				gpuUploadsPerFrame = 16;
 				entityAlwaysRenderDistanceBlocks = 70;
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 128;
@@ -128,24 +128,9 @@ public final class OptiminiumSettings {
 				blockEntityLodStaleTimeoutFrames = 900;
 				blockEntityLodUnloadMarginBlocks = 32;
 				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.CONSERVATIVE;
-				adaptiveSimulationTargetMspt = 55;
-				adaptiveSimulationMinDistanceChunks = 6;
 			}
 		}
 		save();
-	}
-
-	public static int getGpuUploadsPerFrame() {
-		return gpuUploadsPerFrame;
-	}
-
-	public static void setGpuUploadsPerFrame(int uploadsPerFrame) {
-		gpuUploadsPerFrame = clamp(uploadsPerFrame, 1, 64);
-		save();
-	}
-
-	public static boolean isLightingDeduplication() {
-		return true;
 	}
 
 	public static boolean isGpuOptimizer() {
@@ -158,14 +143,9 @@ public final class OptiminiumSettings {
 		return framePacing;
 	}
 
-	public static boolean isGpuTimerPacing() {
-		return gpuTimerPacing;
-	}
-
-	public static boolean toggleGpuTimerPacing() {
-		gpuTimerPacing = !gpuTimerPacing;
+	public static void setFramePacing(boolean value) {
+		framePacing = value;
 		save();
-		return gpuTimerPacing;
 	}
 
 	public static int getGpuTargetFps() {
@@ -186,76 +166,12 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isGraphicsEffectCulling() {
-		return true;
-	}
-
-	public static boolean isAsyncResourceStreaming() {
-		return asyncResourceStreaming;
-	}
-
-	public static boolean toggleAsyncResourceStreaming() {
-		asyncResourceStreaming = !asyncResourceStreaming;
-		save();
-		return asyncResourceStreaming;
-	}
-
-	public static boolean isShaderResourceCache() {
-		return shaderResourceCache;
-	}
-
-	public static boolean toggleShaderResourceCache() {
-		shaderResourceCache = !shaderResourceCache;
-		save();
-		return shaderResourceCache;
-	}
-
-	public static boolean isExperimentalRendererFeatures() {
-		return experimentalRendererFeatures;
-	}
-
-	public static boolean toggleExperimentalRendererFeatures() {
-		experimentalRendererFeatures = !experimentalRendererFeatures;
-		save();
-		return experimentalRendererFeatures;
-	}
-
-	public static boolean isExperimentalUploadStallLimiter() {
-		return experimentalRendererFeatures && experimentalUploadStallLimiter;
-	}
-
-	public static boolean toggleExperimentalUploadStallLimiter() {
-		experimentalUploadStallLimiter = !experimentalUploadStallLimiter;
-		save();
-		return experimentalUploadStallLimiter;
-	}
-
 	public static boolean isExperimentalTemporalSignificance() {
-		return experimentalRendererFeatures && experimentalTemporalSignificance;
-	}
-
-	public static boolean toggleExperimentalTemporalSignificance() {
-		experimentalTemporalSignificance = !experimentalTemporalSignificance;
-		save();
 		return experimentalTemporalSignificance;
-	}
-
-	public static void setExperimentalRendererFeatures(boolean value) {
-		experimentalRendererFeatures = value;
-		save();
 	}
 
 	public static void setExperimentalTemporalSignificance(boolean value) {
 		experimentalTemporalSignificance = value;
-		save();
-	}
-
-	public static boolean isClientRenderCulling() {
-		return true;
-	}
-
-	public static int getEntityRenderDistanceScalePercent() {
-		return 100;
 	}
 
 	public static int getEntityAlwaysRenderDistanceBlocks() {
@@ -277,6 +193,11 @@ public final class OptiminiumSettings {
 		return blockEntityCulling;
 	}
 
+	public static void setBlockEntityCulling(boolean value) {
+		blockEntityCulling = value;
+		save();
+	}
+
 	public static boolean isBlockEntityLodCubesEnabled() {
 		return blockEntityLodCubes;
 	}
@@ -285,6 +206,11 @@ public final class OptiminiumSettings {
 		blockEntityLodCubes = !blockEntityLodCubes;
 		save();
 		return blockEntityLodCubes;
+	}
+
+	public static void setBlockEntityLodCubes(boolean value) {
+		blockEntityLodCubes = value;
+		save();
 	}
 
 	public static int getBlockEntityDistanceScalePercent() {
@@ -347,16 +273,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isBlockEntityLodDebugEnabled() {
-		return blockEntityLodDebug;
-	}
-
-	public static boolean toggleBlockEntityLodDebug() {
-		blockEntityLodDebug = !blockEntityLodDebug;
-		save();
-		return blockEntityLodDebug;
-	}
-
 	public static int getDenseBlockEntityThreshold() {
 		return denseBlockEntityThreshold;
 	}
@@ -377,12 +293,9 @@ public final class OptiminiumSettings {
 		return denseSceneAdaptiveMode;
 	}
 
-	public static boolean isCrowdCulling() {
-		return true;
-	}
-
-	public static int getCrowdRenderBudgetPercent() {
-		return 100;
+	public static void setDenseSceneAdaptiveMode(DenseSceneAdaptiveMode mode) {
+		denseSceneAdaptiveMode = mode;
+		save();
 	}
 
 	public static boolean isParticleLimiter() {
@@ -393,6 +306,11 @@ public final class OptiminiumSettings {
 		particleLimiter = !particleLimiter;
 		save();
 		return particleLimiter;
+	}
+
+	public static void setParticleLimiter(boolean value) {
+		particleLimiter = value;
+		save();
 	}
 
 	public static int getParticleRenderDistanceBlocks() {
@@ -413,118 +331,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isAmbientSoundLimiter() {
-		return true;
-	}
-
-	public static int getAmbientSoundBudget() {
-		return 32;
-	}
-
-	public static boolean isServerEntityTickThrottling() {
-		return smartTickScheduler;
-	}
-
-	public static boolean isSmartTickScheduler() {
-		return smartTickScheduler;
-	}
-
-	public static boolean toggleSmartTickScheduler() {
-		smartTickScheduler = !smartTickScheduler;
-		save();
-		return smartTickScheduler;
-	}
-
-	public static boolean isAiPathfindingOptimizer() {
-		return aiPathfindingOptimizer;
-	}
-
-	public static boolean toggleAiPathfindingOptimizer() {
-		aiPathfindingOptimizer = !aiPathfindingOptimizer;
-		save();
-		return aiPathfindingOptimizer;
-	}
-
-	public static int getFarEntityTickInterval() {
-		return 40;
-	}
-
-	public static int getMaxFarEntityTickInterval() {
-		return 100;
-	}
-
-	public static boolean isAdaptiveOptimizer() {
-		return true;
-	}
-
-	public static boolean isAdaptiveSimulationDistance() {
-		return adaptiveSimulationDistance;
-	}
-
-	public static boolean toggleAdaptiveSimulationDistance() {
-		adaptiveSimulationDistance = !adaptiveSimulationDistance;
-		save();
-		return adaptiveSimulationDistance;
-	}
-
-	public static int getAdaptiveSimulationTargetMspt() {
-		return adaptiveSimulationTargetMspt;
-	}
-
-	public static void setAdaptiveSimulationTargetMspt(int targetMspt) {
-		adaptiveSimulationTargetMspt = clamp(targetMspt, 35, 80);
-		save();
-	}
-
-	public static int getAdaptiveSimulationMinDistanceChunks() {
-		return adaptiveSimulationMinDistanceChunks;
-	}
-
-	public static void setAdaptiveSimulationMinDistanceChunks(int distanceChunks) {
-		adaptiveSimulationMinDistanceChunks = clamp(distanceChunks, 2, 12);
-		save();
-	}
-
-	public static boolean isItemVirtualization() {
-		return true;
-	}
-
-	public static int getItemClusterThreshold() {
-		return 24;
-	}
-
-	public static boolean isXpOrbMerging() {
-		return true;
-	}
-
-	public static int getXpMergeThreshold() {
-		return 8;
-	}
-
-	public static boolean isRedstoneDeduplication() {
-		return true;
-	}
-
-	public static boolean isBlockEntityUpdateThrottling() {
-		return true;
-	}
-
-	public static int getBlockEntitySleepAfterTicks() {
-		return 20 * 10;
-	}
-
-	public static int getBlockEntityWakeRadiusBlocks() {
-		return 48;
-	}
-
-	public static int getSleepingBlockEntityTicksPerTick() {
-		return 8;
-	}
-
-	public static int getSleepingBlockEntityTickInterval() {
-		return 20 * 10;
-	}
-
 	private static void load() {
 		if (!Files.isRegularFile(CONFIG_FILE)) {
 			return;
@@ -534,15 +340,12 @@ public final class OptiminiumSettings {
 			properties.load(input);
 			enabled = Boolean.parseBoolean(properties.getProperty("enabled", Boolean.toString(enabled)));
 			framePacing = Boolean.parseBoolean(properties.getProperty("framePacing", Boolean.toString(framePacing)));
-			gpuTimerPacing = Boolean.parseBoolean(properties.getProperty("gpuTimerPacing", Boolean.toString(gpuTimerPacing)));
 			gpuTargetFps = clamp(Integer.parseInt(properties.getProperty("gpuTargetFps", Integer.toString(gpuTargetFps))), 30, 240);
 			gpuMinRenderScalePercent = clamp(Integer.parseInt(properties.getProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent))), 35, 100);
-			gpuUploadsPerFrame = clamp(Integer.parseInt(properties.getProperty("gpuUploadsPerFrame", properties.getProperty("chunkUploadsPerFrame", Integer.toString(gpuUploadsPerFrame)))), 1, 64);
 			entityAlwaysRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks))), 10, 200);
 			particleLimiter = Boolean.parseBoolean(properties.getProperty("particleLimiter", Boolean.toString(particleLimiter)));
 			particleRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks))), 16, 160);
 			maxParticlesPerFrame = clamp(Integer.parseInt(properties.getProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame))), 16, 512);
-			asyncResourceStreaming = Boolean.parseBoolean(properties.getProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming)));
 			blockEntityCulling = Boolean.parseBoolean(properties.getProperty("blockEntityCulling", Boolean.toString(blockEntityCulling)));
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
 			blockEntityLodCubes = Boolean.parseBoolean(properties.getProperty("blockEntityLodCubes", Boolean.toString(blockEntityLodCubes)));
@@ -551,18 +354,8 @@ public final class OptiminiumSettings {
 			blockEntityLodMaxCachedEntries = clamp(Integer.parseInt(properties.getProperty("blockEntityLodMaxCachedEntries", Integer.toString(blockEntityLodMaxCachedEntries))), 0, 32768);
 			blockEntityLodStaleTimeoutFrames = clamp(Integer.parseInt(properties.getProperty("blockEntityLodStaleTimeoutFrames", Integer.toString(blockEntityLodStaleTimeoutFrames))), 1, 7200);
 			blockEntityLodUnloadMarginBlocks = clamp(Integer.parseInt(properties.getProperty("blockEntityLodUnloadMarginBlocks", Integer.toString(blockEntityLodUnloadMarginBlocks))), 0, 256);
-			blockEntityLodDebug = Boolean.parseBoolean(properties.getProperty("blockEntityLodDebug", Boolean.toString(blockEntityLodDebug)));
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
-			shaderResourceCache = Boolean.parseBoolean(properties.getProperty("shaderResourceCache", Boolean.toString(shaderResourceCache)));
-			experimentalRendererFeatures = Boolean.parseBoolean(properties.getProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures)));
-			experimentalUploadStallLimiter = Boolean.parseBoolean(properties.getProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter)));
-			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("experimentalTemporalSignificance", Boolean.toString(experimentalTemporalSignificance)));
-			adaptiveSimulationDistance = Boolean.parseBoolean(properties.getProperty("adaptiveSimulationDistance", Boolean.toString(adaptiveSimulationDistance)));
-			adaptiveSimulationTargetMspt = clamp(Integer.parseInt(properties.getProperty("adaptiveSimulationTargetMspt", Integer.toString(adaptiveSimulationTargetMspt))), 35, 80);
-			adaptiveSimulationMinDistanceChunks = clamp(Integer.parseInt(properties.getProperty("adaptiveSimulationMinDistanceChunks", Integer.toString(adaptiveSimulationMinDistanceChunks))), 2, 12);
-			smartTickScheduler = Boolean.parseBoolean(properties.getProperty("smartTickScheduler", Boolean.toString(smartTickScheduler)));
-			aiPathfindingOptimizer = Boolean.parseBoolean(properties.getProperty("aiPathfindingOptimizer", Boolean.toString(aiPathfindingOptimizer)));
 		} catch (IOException | NumberFormatException ignored) {
 		}
 	}
@@ -571,15 +364,12 @@ public final class OptiminiumSettings {
 		Properties properties = new Properties();
 		properties.setProperty("enabled", Boolean.toString(enabled));
 		properties.setProperty("framePacing", Boolean.toString(framePacing));
-		properties.setProperty("gpuTimerPacing", Boolean.toString(gpuTimerPacing));
 		properties.setProperty("gpuTargetFps", Integer.toString(gpuTargetFps));
 		properties.setProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent));
-		properties.setProperty("gpuUploadsPerFrame", Integer.toString(gpuUploadsPerFrame));
 		properties.setProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks));
 		properties.setProperty("particleLimiter", Boolean.toString(particleLimiter));
 		properties.setProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks));
 		properties.setProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame));
-		properties.setProperty("asyncResourceStreaming", Boolean.toString(asyncResourceStreaming));
 		properties.setProperty("blockEntityCulling", Boolean.toString(blockEntityCulling));
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
 		properties.setProperty("blockEntityLodCubes", Boolean.toString(blockEntityLodCubes));
@@ -588,18 +378,8 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityLodMaxCachedEntries", Integer.toString(blockEntityLodMaxCachedEntries));
 		properties.setProperty("blockEntityLodStaleTimeoutFrames", Integer.toString(blockEntityLodStaleTimeoutFrames));
 		properties.setProperty("blockEntityLodUnloadMarginBlocks", Integer.toString(blockEntityLodUnloadMarginBlocks));
-		properties.setProperty("blockEntityLodDebug", Boolean.toString(blockEntityLodDebug));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
-		properties.setProperty("shaderResourceCache", Boolean.toString(shaderResourceCache));
-		properties.setProperty("experimentalRendererFeatures", Boolean.toString(experimentalRendererFeatures));
-		properties.setProperty("experimentalUploadStallLimiter", Boolean.toString(experimentalUploadStallLimiter));
-		properties.setProperty("experimentalTemporalSignificance", Boolean.toString(experimentalTemporalSignificance));
-		properties.setProperty("adaptiveSimulationDistance", Boolean.toString(adaptiveSimulationDistance));
-		properties.setProperty("adaptiveSimulationTargetMspt", Integer.toString(adaptiveSimulationTargetMspt));
-		properties.setProperty("adaptiveSimulationMinDistanceChunks", Integer.toString(adaptiveSimulationMinDistanceChunks));
-		properties.setProperty("smartTickScheduler", Boolean.toString(smartTickScheduler));
-		properties.setProperty("aiPathfindingOptimizer", Boolean.toString(aiPathfindingOptimizer));
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {
@@ -632,5 +412,10 @@ public final class OptiminiumSettings {
 		HIGH_PERFORMANCE,
 		MEDIUM,
 		QUALITY
+	}
+
+	public record Snapshot(boolean enabled, boolean framePacing, boolean particleLimiter,
+			boolean blockEntityCulling, boolean blockEntityLodCubes,
+			DenseSceneAdaptiveMode denseSceneAdaptiveMode) {
 	}
 }

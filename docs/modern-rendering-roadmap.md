@@ -4,7 +4,7 @@
 
 Optiminium should avoid replacing Minecraft's renderer. The compatible path is to optimize work around the renderer: upload pacing, rebuild priority, block/entity/particle decisions, and Optiminium-owned draw work. Anything that caches global OpenGL state or rewrites terrain/chunk submission should stay experimental or abandoned unless the mod owns the whole state boundary.
 
-Current evidence points to culling and dense-scene block-entity control as the active FPS source. Render-pipeline profiling now measures layer switches, binds, uploads, translucent frames, particle frames, terrain frames, suspected stalls, and profiling overhead. The first renderer-side prototype is upload-stall-aware chunk upload pacing, disabled by default.
+Current evidence points to culling and dense-scene block-entity control as the active FPS source. Render-pipeline profiling now measures layer switches, binds, uploads, translucent frames, particle frames, terrain frames, suspected stalls, and profiling overhead. Upload-stall-aware chunk upload pacing remains an internal prototype, not a public setting.
 
 References checked:
 
@@ -14,12 +14,12 @@ References checked:
 
 ## Ranked Techniques
 
-1. Experimental upload-stall-aware chunk upload pacing
+1. Internal upload-stall-aware chunk upload pacing
    - Expected benefit: Low to medium average FPS, medium 1% low improvement in scenes where uploads cause stalls.
    - Difficulty: Low.
    - Compatibility risk: Low. It only changes Optiminium-managed upload budgets and does not cache or skip raw GL state changes.
    - Required hooks: Existing `GlStateManager._glBufferData` profiling, `RenderFrameEvent.Pre`, `LevelRenderer`/upload queue budget calls.
-   - Status: Experimental prototype. Default off behind `experimentalRendererFeatures` and `experimentalUploadStallLimiter`.
+   - Status: Internal prototype. Not exposed until a benchmark shows nonzero activation and measurable benefit.
 
 2. Render-profile-driven tuning recommendations
    - Expected benefit: Indirect. It identifies whether low-gain scenes are terrain, translucent, particles, binds, uploads, stalls, or overdraw dominated.
@@ -93,12 +93,11 @@ References checked:
 
 ## Prototype Behavior
 
-`experimentalUploadStallLimiter` watches measured buffer upload time through the render profiler. If a frame spends at least 2 ms inside profiled buffer upload work, Optiminium holds an upload-pressure signal for eight frames. While the signal is active, Optiminium-managed chunk upload budgets are clamped to one upload per frame.
+The upload-stall prototype watches measured buffer upload time through the render profiler. If a frame spends at least 2 ms inside profiled buffer upload work, Optiminium can hold an upload-pressure signal for eight frames and clamp Optiminium-managed chunk upload budgets to one upload per frame.
 
 The prototype is intentionally narrow:
 
 - It is off by default.
-- It requires `experimentalRendererFeatures=true`.
 - It does not alter vanilla/Sodium/Embeddium/Iris/Oculus GL state caching.
 - It does not reorder render layers.
 - It only affects Optiminium upload budgets that already existed.

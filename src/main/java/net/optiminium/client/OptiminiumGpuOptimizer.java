@@ -31,10 +31,9 @@ public final class OptiminiumGpuOptimizer {
 	private static final int PROFILE_PARTICLE_CULLING = 0;
 	private static final int PROFILE_BLOCK_ENTITY_CULLING = 1;
 	private static final int PROFILE_ENTITY_CULLING = 2;
-	private static final int PROFILE_UPLOAD_MANAGEMENT = 3;
-	private static final int PROFILE_ADAPTIVE_QUALITY = 4;
-	private static final int PROFILE_VISUAL_SIGNIFICANCE = 5;
-	private static final int PROFILE_COUNT = 6;
+	private static final int PROFILE_ADAPTIVE_QUALITY = 3;
+	private static final int PROFILE_VISUAL_SIGNIFICANCE = 4;
+	private static final int PROFILE_COUNT = 5;
 
 	private static int particlesThisFrame;
 	private static int lowPriorityParticlesThisFrame;
@@ -66,7 +65,6 @@ public final class OptiminiumGpuOptimizer {
 	private static double particleWorkScale = 1.0D;
 	private static double blockEntityWorkScale = 1.0D;
 	private static double rebuildWorkScale = 1.0D;
-	private static double uploadWorkScale = 1.0D;
 	private static double minParticleScale = 1.0D;
 	private static double minBlockEntityScale = 1.0D;
 	private static long lastFrameNanos;
@@ -79,7 +77,6 @@ public final class OptiminiumGpuOptimizer {
 	private static boolean countedDenseParticleBudgetFrame;
 	private static boolean countedDenseBlockEntityBudgetFrame;
 	private static boolean countedDenseRebuildBudgetFrame;
-	private static boolean countedDenseUploadBudgetFrame;
 	private static boolean lastRawSpike;
 	private static boolean lastPacingSpike;
 	private static boolean lastDenseSceneTrigger;
@@ -91,13 +88,10 @@ public final class OptiminiumGpuOptimizer {
 	private static long denseParticleBudgetFrames;
 	private static long denseBlockEntityBudgetFrames;
 	private static long denseRebuildBudgetFrames;
-	private static long denseUploadBudgetFrames;
-	private static long experimentalUploadStallLimitedFrames;
 	private static long adaptiveActivationAttempts;
 	private static long adaptiveActivationSuccesses;
 	private static long adaptiveBlockEntityFrames;
 	private static long adaptiveParticleFrames;
-	private static long adaptiveUploadFrames;
 	private static long rawSpikeTriggerFrames;
 	private static long pacingSpikeTriggerFrames;
 	private static long lastAdaptiveDebugNanos;
@@ -130,7 +124,6 @@ public final class OptiminiumGpuOptimizer {
 		countedDenseParticleBudgetFrame = false;
 		countedDenseBlockEntityBudgetFrame = false;
 		countedDenseRebuildBudgetFrame = false;
-		countedDenseUploadBudgetFrame = false;
 		boolean enabled = OptiminiumSettings.isEnabled();
 		updateDenseSceneState(enabled);
 		updateGpuWorkScale(enabled);
@@ -267,7 +260,7 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, uploadManagementMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstUploadManagementMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, adaptiveUploadFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, denseUploadBudgetFrames=%d, experimentalUploadStallLimitedFrames=%d, blockEntityLodCached=%d, blockEntityLodRendered=%d, blockEntityLodEstimatedSkipped=%d, blockEntityLodDebug=\"%s\", %s, adaptiveReason=\"%s\", pendingGpuUploads=%d, uploadsSkippedBecauseLowSignificance=%d, uploadsDeduplicated=%d, uploadsDeferredBySignificance=%d, uploadsPromotedBecauseNear=%d, redundantUploadSchedulingPrevented=%d",
+			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, blockEntityLodCached=%d, blockEntityLodRendered=%d, blockEntityLodEstimatedSkipped=%d, blockEntityLod=\"%s\", %s, adaptiveReason=\"%s\"",
 			OptiminiumSodiumCompat.rendererModeString(),
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
@@ -280,14 +273,12 @@ public final class OptiminiumGpuOptimizer {
 			profile.particleCullingMs(),
 			profile.blockEntityCullingMs(),
 			profile.entityCullingMs(),
-			profile.uploadManagementMs(),
 			profile.adaptiveQualityMs(),
 			profile.visualSignificanceMs(),
 			profile.totalOptiminiumCpuMs(),
 			profile.worstParticleCullingMs(),
 			profile.worstBlockEntityCullingMs(),
 			profile.worstEntityCullingMs(),
-			profile.worstUploadManagementMs(),
 			profile.worstAdaptiveQualityMs(),
 			profile.worstVisualSignificanceMs(),
 			profile.worstOptiminiumCpuMs(),
@@ -306,26 +297,17 @@ public final class OptiminiumGpuOptimizer {
 			adaptiveActivationSuccesses,
 			adaptiveBlockEntityFrames,
 			adaptiveParticleFrames,
-			adaptiveUploadFrames,
 			rawSpikeTriggerFrames,
 			pacingSpikeTriggerFrames,
 			denseParticleBudgetFrames,
 			denseBlockEntityBudgetFrames,
 			denseRebuildBudgetFrames,
-			denseUploadBudgetFrames,
-			experimentalUploadStallLimitedFrames,
 			OptiminiumBlockEntityLod.cachedEntries(),
 			OptiminiumMetrics.snapshot().blockEntityLodRendered(),
 			OptiminiumBlockEntityLod.skippedRenderEstimatesThisFrame(),
 			OptiminiumBlockEntityLod.debugLine(),
 			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()),
-			lastAdaptiveReason,
-			OptiminiumGpuUploadQueue.pendingUploads(),
-			OptiminiumGpuUploadQueue.uploadsSkippedBecauseLowSignificance(),
-			OptiminiumGpuUploadQueue.uploadsDeduplicated(),
-			OptiminiumGpuUploadQueue.uploadsDeferredBySignificance(),
-			OptiminiumGpuUploadQueue.uploadsPromotedBecauseNear(),
-			OptiminiumGpuUploadQueue.redundantUploadSchedulingPrevented()
+			lastAdaptiveReason
 		);
 	}
 
@@ -341,93 +323,6 @@ public final class OptiminiumGpuOptimizer {
 			reportedDenseSceneFrames(),
 			OptiminiumVisualSignificance.snapshot(reportedRawVisibleBlockEntities())
 		);
-	}
-
-	// ---- Renderer upload guard state ----
-	// Tracks whether a non-vanilla renderer owns terrain upload scheduling.
-	private static boolean sodiumOwnsUploadScheduling;
-
-	/**
-	 * Mark current frame as Sodium-owned upload scheduling (called when
-	 * Sodium is detected and has its own mesh upload pipeline).
-	 */
-	public static void setSodiumOwnsUploadScheduling(boolean sodiumOwns) {
-		sodiumOwnsUploadScheduling = sodiumOwns;
-	}
-
-	public static boolean isSodiumOwnsUploadScheduling() {
-		return sodiumOwnsUploadScheduling;
-	}
-
-	// ---- Generic upload diagnostics ----
-	private static long optiminiumManagedUploadRequests;
-	private static long uniqueOptiminiumUploadRequests;
-	private static long duplicateOptiminiumUploadRequests;
-	private static long uploadRequestsIgnoredBecauseAlreadyPending;
-	private static long uploadRequestsIgnoredBecauseSectionUnchanged;
-	private static long uploadRequestsIgnoredBecauseSodiumOwnsIt;
-	private static long uploadRequestsFromRenderer;
-	private static long uploadRequestsFromFadeOrOverlay;
-	private static long uploadRequestsPerFrame;
-	private static double duplicateUploadRate;
-
-	public static void recordUploadRequest(String source) {
-		optiminiumManagedUploadRequests++;
-		uniqueOptiminiumUploadRequests++;
-		uploadRequestsPerFrame++;
-		switch (source) {
-			case "renderer" -> uploadRequestsFromRenderer++;
-			case "fadeOrOverlay" -> uploadRequestsFromFadeOrOverlay++;
-		}
-	}
-
-	public static void recordDuplicateUploadRequest(String reason) {
-		duplicateOptiminiumUploadRequests++;
-		duplicateUploadRate = (double) duplicateOptiminiumUploadRequests
-			/ Math.max(1, optiminiumManagedUploadRequests);
-		switch (reason) {
-			case "alreadyPending" -> uploadRequestsIgnoredBecauseAlreadyPending++;
-			case "sectionUnchanged" -> uploadRequestsIgnoredBecauseSectionUnchanged++;
-			case "sodiumOwnsIt" -> uploadRequestsIgnoredBecauseSodiumOwnsIt++;
-		}
-	}
-
-	private static void resetUploadSchedulingDiagnostics() {
-		optiminiumManagedUploadRequests = 0L;
-		uniqueOptiminiumUploadRequests = 0L;
-		duplicateOptiminiumUploadRequests = 0L;
-		uploadRequestsIgnoredBecauseAlreadyPending = 0L;
-		uploadRequestsIgnoredBecauseSectionUnchanged = 0L;
-		uploadRequestsIgnoredBecauseSodiumOwnsIt = 0L;
-		uploadRequestsFromRenderer = 0L;
-		uploadRequestsFromFadeOrOverlay = 0L;
-		uploadRequestsPerFrame = 0L;
-		duplicateUploadRate = 0.0D;
-	}
-
-	public static int scaledGpuUploadBudget(int configuredBudget) {
-		ensureFrameState();
-		// When Sodium owns upload scheduling, skip the budget calculation
-		// entirely to avoid profiling overhead. Sodium manages its own
-		// upload pipeline — we should not interfere.
-		if (sodiumOwnsUploadScheduling) {
-			return 0;
-		}
-		long profileStart = profileStart();
-		try {
-			int budget = Math.max(1, (int)Math.floor(configuredBudget * uploadWorkScale));
-			if (denseSceneActive && budget < configuredBudget && !countedDenseUploadBudgetFrame) {
-				denseUploadBudgetFrames++;
-				countedDenseUploadBudgetFrame = true;
-			}
-			if (OptiminiumRenderProfiler.hasRecentUploadPressure() && budget > 1) {
-				budget = 1;
-				experimentalUploadStallLimitedFrames++;
-			}
-			return budget;
-		} finally {
-			recordProfileNanos(PROFILE_UPLOAD_MANAGEMENT, profileStart);
-		}
 	}
 
 	public static boolean shouldSkipClouds() {
@@ -475,13 +370,10 @@ public final class OptiminiumGpuOptimizer {
 		denseParticleBudgetFrames = 0L;
 		denseBlockEntityBudgetFrames = 0L;
 		denseRebuildBudgetFrames = 0L;
-		denseUploadBudgetFrames = 0L;
-		experimentalUploadStallLimitedFrames = 0L;
 		adaptiveActivationAttempts = 0L;
 		adaptiveActivationSuccesses = 0L;
 		adaptiveBlockEntityFrames = 0L;
 		adaptiveParticleFrames = 0L;
-		adaptiveUploadFrames = 0L;
 		rawSpikeTriggerFrames = 0L;
 		pacingSpikeTriggerFrames = 0L;
 		sustainedFramePressure = false;
@@ -501,7 +393,6 @@ public final class OptiminiumGpuOptimizer {
 		consecutiveDenseSceneFrames = 0;
 		denseSceneHoldFrames = 0;
 		lastAdaptiveReason = "reset";
-		resetUploadSchedulingDiagnostics();
 	}
 
 	public static void flushPendingMetrics() {
@@ -521,10 +412,6 @@ public final class OptiminiumGpuOptimizer {
 		recordProfileNanos(PROFILE_BLOCK_ENTITY_CULLING, startNanos);
 	}
 
-	public static void recordUploadManagementProfileNanos(long startNanos) {
-		recordProfileNanos(PROFILE_UPLOAD_MANAGEMENT, startNanos);
-	}
-
 	public static void recordVisualSignificanceProfileNanos(long startNanos) {
 		recordProfileNanos(PROFILE_VISUAL_SIGNIFICANCE, startNanos);
 	}
@@ -535,14 +422,12 @@ public final class OptiminiumGpuOptimizer {
 			averageProfileMs(PROFILE_PARTICLE_CULLING),
 			averageProfileMs(PROFILE_BLOCK_ENTITY_CULLING),
 			averageProfileMs(PROFILE_ENTITY_CULLING),
-			averageProfileMs(PROFILE_UPLOAD_MANAGEMENT),
 			averageProfileMs(PROFILE_ADAPTIVE_QUALITY),
 			averageProfileMs(PROFILE_VISUAL_SIGNIFICANCE),
 			totalOptiminiumCpuMs(),
 			worstProfileMs(PROFILE_PARTICLE_CULLING),
 			worstProfileMs(PROFILE_BLOCK_ENTITY_CULLING),
 			worstProfileMs(PROFILE_ENTITY_CULLING),
-			worstProfileMs(PROFILE_UPLOAD_MANAGEMENT),
 			worstProfileMs(PROFILE_ADAPTIVE_QUALITY),
 			worstProfileMs(PROFILE_VISUAL_SIGNIFICANCE),
 			worstOptiminiumCpuMs()
@@ -578,7 +463,7 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	private static boolean shouldCullGraphicsEffects() {
-		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isGpuOptimizer() && OptiminiumSettings.isGraphicsEffectCulling();
+		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isGpuOptimizer();
 	}
 
 	private static boolean shouldDeferBlockEntityRender(BlockEntity blockEntity, double distanceSqr) {
@@ -661,8 +546,7 @@ public final class OptiminiumGpuOptimizer {
 				particleWorkScale = 1.0D;
 				blockEntityWorkScale = 1.0D;
 				rebuildWorkScale = 1.0D;
-				uploadWorkScale = 1.0D;
-				lastAdaptiveReason = adaptiveReason(false, false, false, false);
+				lastAdaptiveReason = adaptiveReason(false, false, false);
 				logAdaptiveReason();
 				return;
 			}
@@ -709,7 +593,6 @@ public final class OptiminiumGpuOptimizer {
 			particleWorkScale = Math.min(gpuWorkScale, budgetParticleScale);
 			blockEntityWorkScale = Math.min(gpuWorkScale, budgetBlockEntityScale);
 			rebuildWorkScale = Math.min(gpuWorkScale, budgetAllScale);
-			uploadWorkScale = Math.min(gpuWorkScale, budgetAllScale);
 			lastAdaptiveReason = reason;
 			logAdaptiveReason();
 			recordAdaptiveActivation();
@@ -782,11 +665,10 @@ public final class OptiminiumGpuOptimizer {
 		boolean attempted = sustainedFramePressure || lastDenseSceneTrigger;
 		boolean particleActive = particleWorkScale < 1.0D;
 		boolean blockEntityActive = blockEntityWorkScale < 1.0D;
-		boolean uploadActive = uploadWorkScale < 1.0D;
 		if (attempted) {
 			adaptiveActivationAttempts++;
 		}
-		if (attempted && (particleActive || blockEntityActive || rebuildWorkScale < 1.0D || uploadActive)) {
+		if (attempted && (particleActive || blockEntityActive || rebuildWorkScale < 1.0D)) {
 			adaptiveActivationSuccesses++;
 		}
 		if (particleActive) {
@@ -795,21 +677,18 @@ public final class OptiminiumGpuOptimizer {
 		if (blockEntityActive) {
 			adaptiveBlockEntityFrames++;
 		}
-		if (uploadActive) {
-			adaptiveUploadFrames++;
-		}
-		lastAdaptiveReason = adaptiveReason(attempted, particleActive, blockEntityActive, uploadActive);
+		lastAdaptiveReason = adaptiveReason(attempted, particleActive, blockEntityActive);
 		logAdaptiveReason();
 	}
 
-	private static String adaptiveReason(boolean attempted, boolean particleActive, boolean blockEntityActive, boolean uploadActive) {
+	private static String adaptiveReason(boolean attempted, boolean particleActive, boolean blockEntityActive) {
 		if (!OptiminiumSettings.isEnabled()) {
 			return "disabled";
 		}
 		if (!OptiminiumSettings.isGpuOptimizer()) {
 			return "gpu optimizer off";
 		}
-		if (attempted && (particleActive || blockEntityActive || uploadActive || rebuildWorkScale < 1.0D)) {
+		if (attempted && (particleActive || blockEntityActive || rebuildWorkScale < 1.0D)) {
 			return "active: sustainedPressure=" + sustainedFramePressure + ", denseScene=" + lastDenseSceneTrigger;
 		}
 		return "inactive: sustainedPressure=" + sustainedFramePressure + ", rawSpike=" + lastRawSpike + ", pacingSpike=" + lastPacingSpike + ", denseScene=" + lastDenseSceneTrigger
@@ -919,26 +798,24 @@ public final class OptiminiumGpuOptimizer {
 		double particleCullingMs,
 		double blockEntityCullingMs,
 		double entityCullingMs,
-		double uploadManagementMs,
 		double adaptiveQualityMs,
 		double visualSignificanceMs,
 		double totalOptiminiumCpuMs,
 		double worstParticleCullingMs,
 		double worstBlockEntityCullingMs,
 		double worstEntityCullingMs,
-		double worstUploadManagementMs,
 		double worstAdaptiveQualityMs,
 		double worstVisualSignificanceMs,
 		double worstOptiminiumCpuMs
 	) {
 		public ProfileSnapshot(double particleCullingMs, double blockEntityCullingMs, double entityCullingMs,
-				double uploadManagementMs, double adaptiveQualityMs, double totalOptiminiumCpuMs,
+				double adaptiveQualityMs, double totalOptiminiumCpuMs,
 				double worstParticleCullingMs, double worstBlockEntityCullingMs, double worstEntityCullingMs,
 				double worstOptiminiumCpuMs) {
-			this(particleCullingMs, blockEntityCullingMs, entityCullingMs, uploadManagementMs, adaptiveQualityMs,
+			this(particleCullingMs, blockEntityCullingMs, entityCullingMs, adaptiveQualityMs,
 				0.0D, totalOptiminiumCpuMs,
 				worstParticleCullingMs, worstBlockEntityCullingMs, worstEntityCullingMs,
-				0.0D, 0.0D, 0.0D, worstOptiminiumCpuMs);
+				0.0D, 0.0D, worstOptiminiumCpuMs);
 		}
 	}
 

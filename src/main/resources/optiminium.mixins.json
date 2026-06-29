@@ -2,10 +2,7 @@
   "required": true,
   "minVersion": "0.8",
   "package": "net.optiminium.mixin",
-  "mixins": [
-    "LevelBlockEntityTickMixin",
-    "LevelLightEngineMixin"
-  ],
+  "mixins": [],
   "client": [
     "BlockEntityRenderDispatcherMixin",
     "FrustumAccessor",

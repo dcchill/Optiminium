@@ -51,11 +51,8 @@ public abstract class LevelRendererMixin {
 		// Sodium manages visible sections differently, so Optiminium skips
 		// vanilla visible-section sampling in non-vanilla renderers.
 		if (OptiminiumSodiumCompat.isNonVanillaRenderer()) {
-			OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(true);
 			return;
 		}
-		// Non-Sodium path: proceed with vanilla block entity tracking.
-		OptiminiumGpuOptimizer.setSodiumOwnsUploadScheduling(false);
 		optiminium$recordRawVisibleBlockEntities(camera.getPosition());
 	}
 
