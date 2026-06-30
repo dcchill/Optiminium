@@ -91,18 +91,15 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(blockEntityCullingLabel(), button -> button.setMessage(Component.literal("Block Entity Culling: " + (OptiminiumSettings.toggleBlockEntityCulling() ? "ON" : "OFF"))))
 			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(blockEntityLodCubesLabel(), button -> button.setMessage(Component.literal("Block Entity LOD Cubes: " + (OptiminiumSettings.toggleBlockEntityLodCubes() ? "ON" : "OFF"))))
-			.bounds(x, y + 112, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 138, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 112, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
 		this.addRenderableWidget(Button.builder(denseSceneAdaptiveLabel(), button -> button.setMessage(denseSceneAdaptiveLabel(OptiminiumSettings.cycleDenseSceneAdaptiveMode())))
-			.bounds(x, y + 164, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 138, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
-			.bounds(x, y + 198, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 172, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
-			.bounds(x, y + 224, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 198, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
@@ -151,10 +148,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component blockEntityCullingLabel() {
 		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
-	}
-
-	private static Component blockEntityLodCubesLabel() {
-		return Component.literal("Block Entity LOD Cubes: " + (OptiminiumSettings.isBlockEntityLodCubesEnabled() ? "ON" : "OFF"));
 	}
 
 	private static Component denseSceneAdaptiveLabel() {

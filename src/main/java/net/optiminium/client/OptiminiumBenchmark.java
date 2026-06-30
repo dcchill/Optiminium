@@ -258,10 +258,6 @@ public final class OptiminiumBenchmark {
 			new BenchmarkCase("Frame Pacing", () -> OptiminiumSettings.setFramePacing(true)),
 			new BenchmarkCase("Particle Limiter", () -> OptiminiumSettings.setParticleLimiter(true)),
 			new BenchmarkCase("Block Entity Culling", () -> OptiminiumSettings.setBlockEntityCulling(true)),
-			new BenchmarkCase("Block Entity LOD Cubes", () -> {
-				OptiminiumSettings.setBlockEntityCulling(true);
-				OptiminiumSettings.setBlockEntityLodCubes(true);
-			}),
 			new BenchmarkCase("Dense Scene Mode", () -> {
 				OptiminiumSettings.setFramePacing(true);
 				OptiminiumSettings.setDenseSceneAdaptiveMode(OptiminiumSettings.DenseSceneAdaptiveMode.BALANCED);
@@ -417,7 +413,7 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String significanceLine(OptiminiumVisualSignificance.Snapshot bands, OptiminiumMetrics.Snapshot metrics, OptiminiumGpuOptimizer.SceneSnapshot scene) {
-		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, avgConfidence=%.4f, minConfidence=%.4f, maxConfidence=%.4f, avgWeightedAttentionScore=%.4f, avgWeightedAttentionFull=%.4f, avgWeightedAttentionThrottled=%.4f, avgWeightedAttentionReused=%.4f, avgWeightedAttentionProxy=%.4f, avgWeightedAttentionCulled=%.4f, confidenceBuckets=[%d,%d,%d,%d,%d], avgPopRisk=%.4f, avgVisualImportance=%.4f, avgGameplayImportance=%.4f, avgSafetyImportance=%.4f, lowConfidenceDemotionBlocks=%d, highPopRiskDemotionBlocks=%d, recentlyVisibleProtections=%d, recentlyLookedAtProtections=%d, recentlyInteractedProtections=%d, recentlyChangedProtections=%d, recentlyMovedProtections=%d, recentlyEnteredViewProtections=%d, fastCameraDemotionBlocks=%d, promotionsBecauseLowConfidence=%d, demotionsAllowedBecauseHighConfidence=%d, importantButCulled=%d, averageBandLifetime=%.2f, averageTicksInBand=%.2f, demotionsPerFrame=%.4f, promotionsPerFrame=%.4f, avgImportanceDebt=%.4f, importanceDebtPromotions=%d, decisionBecauseWeightedScore=%d, decisionBecausePopRiskVeto=%d, decisionBecauseConfidenceVeto=%d, decisionBecauseSafetyOverride=%d, decisionBecauseRecentlyVisible=%d, decisionBecauseImportanceDebt=%d, decisionBecauseHysteresis=%d, decisionBecauseNearbyOverride=%d, decisionBecauseGameplayOverride=%d, topTransitionPairs=%s, dirtyObjectsThisFrame=%d, dirtyObjectsTotal=%d, skippedStableObjects=%d, scoreCacheHits=%d, scoreRecomputes=%d, bandTransitionBudgetUsed=%d, bandTransitionBudgetUsedThisFrame=%d, bandTransitionsDeferred=%d, periodicRechecks=%d, transitionsFromDirtyObjects=%d, transitionsFromStableObjects=%d, dirtyReasons=%s, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityLodCached=%d, blockEntityLodRendered=%d, blockEntityLodEstimatedSkipped=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
+		return String.format("full=%d, throttled=%d, reused=%d, proxy=%d, culled=%d, significanceCpuMs=%.4f, worstSignificanceCpuMs=%.4f, avgConfidence=%.4f, minConfidence=%.4f, maxConfidence=%.4f, avgWeightedAttentionScore=%.4f, avgWeightedAttentionFull=%.4f, avgWeightedAttentionThrottled=%.4f, avgWeightedAttentionReused=%.4f, avgWeightedAttentionProxy=%.4f, avgWeightedAttentionCulled=%.4f, confidenceBuckets=[%d,%d,%d,%d,%d], avgPopRisk=%.4f, avgVisualImportance=%.4f, avgGameplayImportance=%.4f, avgSafetyImportance=%.4f, lowConfidenceDemotionBlocks=%d, highPopRiskDemotionBlocks=%d, recentlyVisibleProtections=%d, recentlyLookedAtProtections=%d, recentlyInteractedProtections=%d, recentlyChangedProtections=%d, recentlyMovedProtections=%d, recentlyEnteredViewProtections=%d, fastCameraDemotionBlocks=%d, promotionsBecauseLowConfidence=%d, demotionsAllowedBecauseHighConfidence=%d, importantButCulled=%d, averageBandLifetime=%.2f, averageTicksInBand=%.2f, demotionsPerFrame=%.4f, promotionsPerFrame=%.4f, avgImportanceDebt=%.4f, importanceDebtPromotions=%d, decisionBecauseWeightedScore=%d, decisionBecausePopRiskVeto=%d, decisionBecauseConfidenceVeto=%d, decisionBecauseSafetyOverride=%d, decisionBecauseRecentlyVisible=%d, decisionBecauseImportanceDebt=%d, decisionBecauseHysteresis=%d, decisionBecauseNearbyOverride=%d, decisionBecauseGameplayOverride=%d, topTransitionPairs=%s, dirtyObjectsThisFrame=%d, dirtyObjectsTotal=%d, skippedStableObjects=%d, scoreCacheHits=%d, scoreRecomputes=%d, bandTransitionBudgetUsed=%d, bandTransitionBudgetUsedThisFrame=%d, bandTransitionsDeferred=%d, periodicRechecks=%d, transitionsFromDirtyObjects=%d, transitionsFromStableObjects=%d, dirtyReasons=%s, estimatedSavedBlockEntityRenders=%d, estimatedSavedParticleRenders=%d, estimatedSavedEntityRenders=%d, blockEntityCullPreventedByVisibility=%d, blockEntityCullPreventedByRecentlyVisible=%d, blockEntityCullPreventedByLookedAt=%d, blockEntityDowngradedToReusedInsteadOfCulled=%d, blockEntityVisibleCullEvents=%d, moddedBlockEntities=%d, moddedLivingEntities=%d, moddedNonLivingEntities=%d, moddedDynamicEntityCulls=%d, firstDynamicMod=%s, lastDynamicMod=%s, mostCommonSignificanceReason=%s",
 			bands.full(),
 			bands.throttled(),
 			bands.reused(),
@@ -486,9 +482,6 @@ public final class OptiminiumBenchmark {
 			scene.culledBlockEntitiesThisRun(),
 			metrics.hiddenParticles(),
 			metrics.culledEntityRenders(),
-			metrics.blockEntityLodCachedEntries(),
-			metrics.blockEntityLodRendered(),
-			metrics.blockEntityLodEstimatedSkippedRenders(),
 			bands.blockEntityCullPreventedByVisibility(),
 			bands.blockEntityCullPreventedByRecentlyVisible(),
 			bands.blockEntityCullPreventedByLookedAt(),
@@ -1436,15 +1429,12 @@ public final class OptiminiumBenchmark {
 			end.culledEntityRenders() - start.culledEntityRenders(),
 			end.culledBlockEntityRenders() - start.culledBlockEntityRenders(),
 			end.hiddenNameTags() - start.hiddenNameTags(),
-			end.hiddenParticles() - start.hiddenParticles(),
-			end.blockEntityLodCachedEntries(),
-			end.blockEntityLodRendered() - start.blockEntityLodRendered(),
-			end.blockEntityLodEstimatedSkippedRenders() - start.blockEntityLodEstimatedSkippedRenders()
+			end.hiddenParticles() - start.hiddenParticles()
 		);
 	}
 
 	private static OptiminiumMetrics.Snapshot emptyMetrics() {
-		return new OptiminiumMetrics.Snapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L);
+		return new OptiminiumMetrics.Snapshot(0L, 0L, 0L, 0L);
 	}
 
 	private static OptiminiumGpuOptimizer.ProfileSnapshot emptyProfile() {
