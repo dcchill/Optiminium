@@ -552,27 +552,57 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String glTrackerLine(OptiminiumGlStateTracker.DiagnosticSnapshot tracker) {
-		return String.format("mode=%s, compatibilitySkipDisabled=%s, texReq=%d, texPotentialSkip=%d, texSkip=%d, texAct=%d, texPotentialSkipPct=%d, texSkipPct=%d, shReq=%d, shPotentialSkip=%d, shSkip=%d, shAct=%d, shPotentialSkipPct=%d, shSkipPct=%d, inval=%d, topInval=%s, activeUnitMiss=%d, targetMiss=%d, texIdMiss=%d, shaderIdMiss=%d",
+		return String.format("enableOpenGlTweaks=%s, mode=%s, compatibilitySkipDisabled=%s, autoDisabled=%s, topAutoDisableReason=%s, texReq=%d, texPotentialSkip=%d, texRelaxedPotentialSkip=%d, texSkip=%d, texAct=%d, texPotentialSkipPct=%d, texSkipPct=%d, shReq=%d, shPotentialSkip=%d, shRelaxedPotentialSkip=%d, shSkip=%d, shAct=%d, shPotentialSkipPct=%d, shSkipPct=%d, conservativePotentialSkips=%d, relaxedPotentialSkips=%d, actualSkips=%d, skipRate=%d, inval=%d, topInval=%s, framebufferInvalidations=%d, resourceReloadInvalidations=%d, worldUnloadInvalidations=%d, unknownExternalInvalidations=%d, invalidationsPerFrame=%.2f, textureRequestsPerFrame=%.2f, shaderRequestsPerFrame=%.2f, hookOrder=%s, prevTex=%d, reqTex=%d, prevShader=%d, reqShader=%d, topNoSkip=%s, activeUnitMiss=%d, targetMiss=%d, texIdMiss=%d, shaderIdMiss=%d, noSkipBecauseDifferentTextureId=%d, noSkipBecauseDifferentShaderId=%d, noSkipBecauseDifferentTarget=%d, noSkipBecauseDifferentActiveUnit=%d, noSkipBecauseStateInvalidated=%d, noSkipBecauseModeDisabled=%d, noSkipBecauseCompatibilityMode=%d, glErrorsDetected=%d",
+			tracker.openGlTweaksEnabled(),
 			tracker.mode(),
 			tracker.compatibilitySkipDisabled(),
+			tracker.glAutoDisabled(),
+			tracker.glAutoDisableReason(),
 			tracker.textureBindRequests(),
 			tracker.textureBindPotentialSkipped(),
+			tracker.textureRelaxedPotentialSkipped(),
 			tracker.textureBindSkipped(),
 			tracker.textureBindActual(),
 			tracker.textureBindPotentialSkippedPercent(),
 			tracker.textureBindSkippedPercent(),
 			tracker.shaderBindRequests(),
 			tracker.shaderBindPotentialSkipped(),
+			tracker.shaderRelaxedPotentialSkipped(),
 			tracker.shaderBindSkipped(),
 			tracker.shaderBindActual(),
 			tracker.shaderBindPotentialSkippedPercent(),
 			tracker.shaderBindSkippedPercent(),
+			tracker.conservativePotentialSkips(),
+			tracker.relaxedPotentialSkips(),
+			tracker.actualSkips(),
+			tracker.skipRatePercent(),
 			tracker.trackerInvalidations(),
 			tracker.topInvalidationReason(),
+			tracker.framebufferInvalidations(),
+			tracker.resourceReloadInvalidations(),
+			tracker.worldUnloadInvalidations(),
+			tracker.unknownExternalInvalidations(),
+			tracker.trackerInvalidations() / Math.max(1.0D, onFrames.size()),
+			tracker.textureBindRequests() / Math.max(1.0D, onFrames.size()),
+			tracker.shaderBindRequests() / Math.max(1.0D, onFrames.size()),
+			tracker.hookOrder(),
+			tracker.observedPreviousTextureId(),
+			tracker.requestedTextureId(),
+			tracker.observedPreviousShaderId(),
+			tracker.requestedShaderId(),
+			tracker.topNoSkipReason(),
 			tracker.activeTextureUnitMismatches(),
 			tracker.textureTargetMismatches(),
 			tracker.textureIdMismatches(),
-			tracker.shaderIdMismatches());
+			tracker.shaderIdMismatches(),
+			tracker.noSkipBecauseDifferentTextureId(),
+			tracker.noSkipBecauseDifferentShaderId(),
+			tracker.noSkipBecauseDifferentTarget(),
+			tracker.noSkipBecauseDifferentActiveUnit(),
+			tracker.noSkipBecauseStateInvalidated(),
+			tracker.noSkipBecauseModeDisabled(),
+			tracker.noSkipBecauseCompatibilityMode(),
+			tracker.glErrorsDetected());
 	}
 
 	private static String lowGainDominance(double fpsGain, OptiminiumRenderProfiler.Snapshot offProfile, OptiminiumRenderProfiler.Snapshot onProfile) {
@@ -811,7 +841,7 @@ public final class OptiminiumBenchmark {
 		html.append("<h2>Block Entity Cache</h2><div class=\"grid\">");
 		appendBeCacheCards(html, onDiagnostics);
 		html.append("</div>");
-		html.append("<h2>GL State Tracker</h2><div class=\"grid\">");
+		html.append("<h2>OpenGL Tweaks</h2><div class=\"grid\">");
 		appendGlTrackerCards(html, offGlTracker, onGlTracker);
 		html.append("</div>");
 		html.append("<h2>Decision Engine</h2>");
@@ -1251,26 +1281,56 @@ public final class OptiminiumBenchmark {
 	private static void appendGlTrackerCards(StringBuilder html,
 			OptiminiumGlStateTracker.DiagnosticSnapshot offTracker,
 			OptiminiumGlStateTracker.DiagnosticSnapshot onTracker) {
+		html.append("<div class=\"card\"><div class=\"muted\">OpenGL tweaks</div><div class=\"value\">")
+			.append(onTracker.openGlTweaksEnabled() ? "ON" : "OFF")
+			.append("</div><div class=\"muted\">mode=")
+			.append(escape(onTracker.mode())).append("</div></div>");
+		html.append("<div class=\"card\"><div class=\"muted\">Auto disabled</div><div class=\"value\">")
+			.append(onTracker.glAutoDisabled() ? "YES" : "NO")
+			.append("</div><div class=\"muted\">")
+			.append(escape(onTracker.glAutoDisableReason())).append("</div></div>");
 		card(html, "Texture bind requests", (double)onTracker.textureBindRequests(), "requests", false);
 		card(html, "Texture potential skips", (double)onTracker.textureBindPotentialSkipped(), "potential", onTracker.textureBindPotentialSkipped() > 0L);
+		card(html, "Texture relaxed potential skips", (double)onTracker.textureRelaxedPotentialSkipped(), "potential", onTracker.textureRelaxedPotentialSkipped() > onTracker.textureBindPotentialSkipped());
 		card(html, "Texture actual skips", (double)onTracker.textureBindSkipped(), "skipped", onTracker.textureBindSkipped() > 0L);
 		card(html, "Texture potential skip rate", (double)onTracker.textureBindPotentialSkippedPercent(), "%", onTracker.textureBindPotentialSkippedPercent() > 0L);
 		card(html, "Texture actual skip rate", (double)onTracker.textureBindSkippedPercent(), "%", onTracker.textureBindSkippedPercent() > 0L);
 		card(html, "Shader bind requests", (double)onTracker.shaderBindRequests(), "requests", false);
 		card(html, "Shader potential skips", (double)onTracker.shaderBindPotentialSkipped(), "potential", onTracker.shaderBindPotentialSkipped() > 0L);
+		card(html, "Shader relaxed potential skips", (double)onTracker.shaderRelaxedPotentialSkipped(), "potential", onTracker.shaderRelaxedPotentialSkipped() > onTracker.shaderBindPotentialSkipped());
 		card(html, "Shader actual skips", (double)onTracker.shaderBindSkipped(), "skipped", onTracker.shaderBindSkipped() > 0L);
 		card(html, "Shader potential skip rate", (double)onTracker.shaderBindPotentialSkippedPercent(), "%", onTracker.shaderBindPotentialSkippedPercent() > 0L);
 		card(html, "Shader actual skip rate", (double)onTracker.shaderBindSkippedPercent(), "%", onTracker.shaderBindSkippedPercent() > 0L);
+		card(html, "Conservative potential skips", (double)onTracker.conservativePotentialSkips(), "potential", onTracker.conservativePotentialSkips() > 0L);
+		card(html, "Relaxed potential skips", (double)onTracker.relaxedPotentialSkips(), "potential", onTracker.relaxedPotentialSkips() > onTracker.conservativePotentialSkips());
+		card(html, "Actual skips", (double)onTracker.actualSkips(), "skipped", onTracker.actualSkips() > 0L);
+		card(html, "Combined skip rate", (double)onTracker.skipRatePercent(), "%", onTracker.skipRatePercent() > 0L);
 		card(html, "Tracker invalidations", (double)onTracker.trackerInvalidations(), "invalidations", false);
+		card(html, "Framebuffer invalidations", (double)onTracker.framebufferInvalidations(), "invalidations", false);
+		card(html, "Resource reload invalidations", (double)onTracker.resourceReloadInvalidations(), "invalidations", onTracker.resourceReloadInvalidations() == 0L);
+		card(html, "World unload invalidations", (double)onTracker.worldUnloadInvalidations(), "invalidations", onTracker.worldUnloadInvalidations() == 0L);
+		card(html, "Unknown external invalidations", (double)onTracker.unknownExternalInvalidations(), "invalidations", onTracker.unknownExternalInvalidations() == 0L);
 		card(html, "Active texture unit misses", (double)onTracker.activeTextureUnitMismatches(), "misses", onTracker.activeTextureUnitMismatches() == 0L);
 		card(html, "Texture target misses", (double)onTracker.textureTargetMismatches(), "misses", onTracker.textureTargetMismatches() == 0L);
 		card(html, "Texture id misses", (double)onTracker.textureIdMismatches(), "misses", onTracker.textureIdMismatches() == 0L);
 		card(html, "Shader id misses", (double)onTracker.shaderIdMismatches(), "misses", onTracker.shaderIdMismatches() == 0L);
+		card(html, "GL errors detected", (double)onTracker.glErrorsDetected(), "errors", onTracker.glErrorsDetected() == 0L);
+		html.append("<div class=\"card\"><div class=\"muted\">Hook order</div><div class=\"value\">")
+			.append(escape(onTracker.hookOrder())).append("</div><div class=\"muted\">prevTex=")
+			.append(onTracker.observedPreviousTextureId()).append(", reqTex=").append(onTracker.requestedTextureId())
+			.append(", prevShader=").append(onTracker.observedPreviousShaderId()).append(", reqShader=")
+			.append(onTracker.requestedShaderId()).append("</div></div>");
 		html.append("<div class=\"card\"><div class=\"muted\">Top invalidation reason</div><div class=\"warn\" style=\"font-size:14px;word-break:break-all\">")
 			.append(escape(onTracker.topInvalidationReason())).append("</div></div>");
-		html.append("<div class=\"card\"><div class=\"muted\">Skipping mode</div><div class=\"value\">")
-			.append(escape(onTracker.mode())).append("</div><div class=\"muted\">compat disabled=")
+		html.append("<div class=\"card\"><div class=\"muted\">Top no-skip reason</div><div class=\"warn\" style=\"font-size:14px;word-break:break-all\">")
+			.append(escape(onTracker.topNoSkipReason())).append("</div></div>");
+		html.append("<div class=\"card\"><div class=\"muted\">Compatibility skip disabled</div><div class=\"value\">")
 			.append(onTracker.compatibilitySkipDisabled()).append("</div></div>");
+		if (onTracker.relaxedPotentialSkips() > onTracker.conservativePotentialSkips()) {
+			html.append("<div class=\"card\"><strong class=\"warn\">Framebuffer invalidation suppresses possible skips</strong><p class=\"muted\">relaxedPotentialSkips=")
+				.append(onTracker.relaxedPotentialSkips()).append(", conservativePotentialSkips=")
+				.append(onTracker.conservativePotentialSkips()).append("</p></div>");
+		}
 		// Delta vs OFF
 		long deltaTexSkip = onTracker.textureBindSkipped() - offTracker.textureBindSkipped();
 		long deltaShSkip = onTracker.shaderBindSkipped() - offTracker.shaderBindSkipped();

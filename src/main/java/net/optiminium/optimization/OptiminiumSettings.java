@@ -27,7 +27,8 @@ public final class OptiminiumSettings {
 	private static volatile boolean blockEntityRenderCacheDebug = false;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean experimentalTemporalSignificance = false;
-	private static volatile GlStateTrackerMode glStateTrackerMode = GlStateTrackerMode.MEASURE_ONLY;
+	private static volatile boolean enableOpenGlTweaks = true;
+	private static volatile OpenGlOptimizationMode openGlOptimizationMode = OpenGlOptimizationMode.MEASURE_ONLY;
 
 	static {
 		load();
@@ -150,19 +151,28 @@ public final class OptiminiumSettings {
 		return experimentalTemporalSignificance;
 	}
 
-	public static GlStateTrackerMode getGlStateTrackerMode() {
-		return glStateTrackerMode;
+	public static boolean isOpenGlTweaksEnabled() {
+		return enableOpenGlTweaks;
 	}
 
-	public static GlStateTrackerMode cycleGlStateTrackerMode() {
-		GlStateTrackerMode[] modes = GlStateTrackerMode.values();
-		glStateTrackerMode = modes[(glStateTrackerMode.ordinal() + 1) % modes.length];
+	public static void setOpenGlTweaksEnabled(boolean value) {
+		enableOpenGlTweaks = value;
 		save();
-		return glStateTrackerMode;
 	}
 
-	public static void setGlStateTrackerMode(GlStateTrackerMode mode) {
-		glStateTrackerMode = mode;
+	public static OpenGlOptimizationMode getOpenGlOptimizationMode() {
+		return enableOpenGlTweaks ? openGlOptimizationMode : OpenGlOptimizationMode.OFF;
+	}
+
+	public static OpenGlOptimizationMode cycleOpenGlOptimizationMode() {
+		OpenGlOptimizationMode[] modes = OpenGlOptimizationMode.values();
+		openGlOptimizationMode = modes[(openGlOptimizationMode.ordinal() + 1) % modes.length];
+		save();
+		return openGlOptimizationMode;
+	}
+
+	public static void setOpenGlOptimizationMode(OpenGlOptimizationMode mode) {
+		openGlOptimizationMode = mode;
 		save();
 	}
 
@@ -330,7 +340,9 @@ public final class OptiminiumSettings {
 			blockEntityRenderCacheDebug = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug)));
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
 			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance)));
-			glStateTrackerMode = GlStateTrackerMode.parse(properties.getProperty("glStateTrackerMode", glStateTrackerMode.name()));
+			enableOpenGlTweaks = Boolean.parseBoolean(properties.getProperty("enableOpenGlTweaks", Boolean.toString(enableOpenGlTweaks)));
+			openGlOptimizationMode = OpenGlOptimizationMode.parse(properties.getProperty("openGlOptimizationMode",
+				properties.getProperty("glStateTrackerMode", openGlOptimizationMode.name())));
 		} catch (IOException | NumberFormatException ignored) {
 		}
 	}
@@ -353,7 +365,8 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
 		properties.setProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance));
-		properties.setProperty("glStateTrackerMode", glStateTrackerMode.name());
+		properties.setProperty("enableOpenGlTweaks", Boolean.toString(enableOpenGlTweaks));
+		properties.setProperty("openGlOptimizationMode", openGlOptimizationMode.name());
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {
@@ -382,14 +395,19 @@ public final class OptiminiumSettings {
 		}
 	}
 
-	public enum GlStateTrackerMode {
+	public enum OpenGlOptimizationMode {
 		OFF,
+		DIAGNOSTIC_ONLY,
 		MEASURE_ONLY,
-		SAFE_SKIP;
+		SAFE_OPTIMIZE;
 
-		private static GlStateTrackerMode parse(String value) {
+		private static OpenGlOptimizationMode parse(String value) {
 			try {
-				return GlStateTrackerMode.valueOf(value.toUpperCase());
+				String normalized = value.toUpperCase();
+				if ("SAFE_SKIP".equals(normalized)) {
+					return SAFE_OPTIMIZE;
+				}
+				return OpenGlOptimizationMode.valueOf(normalized);
 			} catch (IllegalArgumentException exception) {
 				return MEASURE_ONLY;
 			}

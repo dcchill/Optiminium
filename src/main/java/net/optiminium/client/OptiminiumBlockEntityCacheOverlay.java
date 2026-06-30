@@ -60,26 +60,32 @@ public final class OptiminiumBlockEntityCacheOverlay {
 		lineY += 14;
 
 		// GL State Tracker section
-		graphics.drawString(font, "--- GL State Tracker ---", X + 10, lineY, 0x88FF88, false);
+		graphics.drawString(font, "--- OpenGL Tweaks ---", X + 10, lineY, 0x88FF88, false);
 		lineY += 12;
+		drawLine(graphics, font, lineY, "Mode: " + tracker.mode() + " | Enabled: " + tracker.openGlTweaksEnabled()
+			+ " | AutoOff: " + tracker.glAutoDisabled());
+		lineY += 11;
 		drawLine(graphics, font, lineY, "Textures: " + format(frameDiag.textureBindRequests()) + " req, "
+			+ format(frameDiag.textureBindPotentialSkipped()) + " potential, "
 			+ format(frameDiag.textureBindSkipped()) + " skip, "
 			+ format(frameDiag.textureBindActual()) + " bind"
 			+ " (" + frameDiag.textureSkippedPercent() + "%)");
 		lineY += 11;
 		drawLine(graphics, font, lineY, "Shaders:  " + format(frameDiag.shaderBindRequests()) + " req, "
+			+ format(frameDiag.shaderBindPotentialSkipped()) + " potential, "
 			+ format(frameDiag.shaderBindSkipped()) + " skip, "
 			+ format(frameDiag.shaderBindActual()) + " bind"
 			+ " (" + frameDiag.shaderSkippedPercent() + "%)");
 		lineY += 11;
-		drawLine(graphics, font, lineY, "Invalidations: " + format(frameDiag.trackerInvalidations()));
+		drawLine(graphics, font, lineY, "Invalidations: " + format(frameDiag.trackerInvalidations())
+			+ " | Top no-skip: " + tracker.topNoSkipReason());
 		lineY += 14;
 
 		// Cumulative totals
 		drawLine(graphics, font, lineY, "Cumulative: tex=" + format(tracker.textureBindRequests())
-			+ " req / " + format(tracker.textureBindSkipped()) + " skip"
+			+ " req / " + format(tracker.textureBindPotentialSkipped()) + " pot / " + format(tracker.textureBindSkipped()) + " skip"
 			+ " | shader=" + format(tracker.shaderBindRequests())
-			+ " req / " + format(tracker.shaderBindSkipped()) + " skip"
+			+ " req / " + format(tracker.shaderBindPotentialSkipped()) + " pot / " + format(tracker.shaderBindSkipped()) + " skip"
 			+ " | inval=" + format(tracker.trackerInvalidations()));
 
 		// Per-type stats (first line only, may be truncated)
