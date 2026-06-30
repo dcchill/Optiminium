@@ -31,7 +31,7 @@ public abstract class LevelRendererMixin {
     // Invalidate tracker at render pass boundary (start of each level render)
     @Inject(method = "renderLevel", at = @At("HEAD"))
     private void optiminium$invalidateGlStateOnLevelRender(DeltaTracker deltaTracker, boolean renderBlockOutline, net.minecraft.client.Camera camera, GameRenderer gameRenderer, LightTexture lightTexture, Matrix4f projectionMatrix, Matrix4f modelViewMatrix, CallbackInfo callback) {
-        OptiminiumGlStateTracker.invalidate();
+        OptiminiumGlStateTracker.invalidate(OptiminiumGlStateTracker.InvalidationReason.RENDER_PASS);
     }
 
     // Weather and cloud skipping preserved - unrelated to Block Entity Culling

@@ -1,174 +1,190 @@
 package net.optiminium.client;
 
 import net.optiminium.compat.OptiminiumSodiumCompat;
+import net.optiminium.optimization.OptiminiumSettings;
 
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * Lightweight OpenGL render-state shadow tracker that skips redundant texture
- * and shader bind calls when the requested state is already known to be active.
- *
- * <p>The tracker maintains:
- * <ul>
- *   <li>The last-bound texture ID (single slot — safe because the most common
- *       redundant bind is the same texture on the same unit repeatedly)</li>
- *   <li>The last-used shader program ID</li>
- *   <li>A validity flag that, when false, forces all binds through
- *       (re-learning state) until the tracker is consistent again</li>
- * </ul>
- *
- * <p>All counters use {@link LongAdder} for thread safety at negligible cost
- * on the render thread, and remain correct if profiling is ever accessed
- * from another thread.
- */
 public final class OptiminiumGlStateTracker {
-	private static int lastBoundTexture;
+	private static final int MAX_TEXTURE_UNITS = 32;
+	private static final int UNKNOWN = -1;
+	private static final int GL_TEXTURE0 = 33984;
+
+	private static final int[] textureTargets = new int[MAX_TEXTURE_UNITS];
+	private static final int[] textureIds = new int[MAX_TEXTURE_UNITS];
+	private static int activeTextureUnit;
+	private static boolean activeTextureKnown;
 	private static int activeProgram;
-	private static boolean valid;
+	private static boolean shaderKnown;
 	private static boolean sodiumConservative;
 
-	// ── Diagnostic counters ──────────────────────────────────────────────
 	private static final LongAdder textureBindRequests = new LongAdder();
+	private static final LongAdder textureBindPotentialSkipped = new LongAdder();
 	private static final LongAdder textureBindSkipped = new LongAdder();
 	private static final LongAdder textureBindActual = new LongAdder();
 	private static final LongAdder shaderBindRequests = new LongAdder();
+	private static final LongAdder shaderBindPotentialSkipped = new LongAdder();
 	private static final LongAdder shaderBindSkipped = new LongAdder();
 	private static final LongAdder shaderBindActual = new LongAdder();
 	private static final LongAdder trackerInvalidations = new LongAdder();
+	private static final LongAdder activeTextureUnitMismatches = new LongAdder();
+	private static final LongAdder textureTargetMismatches = new LongAdder();
+	private static final LongAdder textureIdMismatches = new LongAdder();
+	private static final LongAdder shaderIdMismatches = new LongAdder();
+	private static final LongAdder[] invalidationReasons = new LongAdder[InvalidationReason.values().length];
 
 	static {
+		for (int i = 0; i < invalidationReasons.length; i++) {
+			invalidationReasons[i] = new LongAdder();
+		}
 		reset();
 	}
 
 	private OptiminiumGlStateTracker() {
 	}
 
-	// ── Initialization ───────────────────────────────────────────────────
-
-	/**
-	 * Initialise the tracker. Should be called once at mod construction time.
-	 */
 	public static void init() {
 		sodiumConservative = OptiminiumSodiumCompat.isNonVanillaRenderer();
 		reset();
 	}
 
-	/**
-	 * Completely reset all tracked state and diagnostics.
-	 */
 	public static void reset() {
-		lastBoundTexture = -1;
-		activeProgram = -1;
-		valid = true;
+		activeTextureUnit = 0;
+		activeTextureKnown = true;
+		activeProgram = UNKNOWN;
+		shaderKnown = false;
+		for (int i = 0; i < MAX_TEXTURE_UNITS; i++) {
+			textureTargets[i] = UNKNOWN;
+			textureIds[i] = UNKNOWN;
+		}
 		textureBindRequests.reset();
+		textureBindPotentialSkipped.reset();
 		textureBindSkipped.reset();
 		textureBindActual.reset();
 		shaderBindRequests.reset();
+		shaderBindPotentialSkipped.reset();
 		shaderBindSkipped.reset();
 		shaderBindActual.reset();
 		trackerInvalidations.reset();
+		activeTextureUnitMismatches.reset();
+		textureTargetMismatches.reset();
+		textureIdMismatches.reset();
+		shaderIdMismatches.reset();
+		for (LongAdder reason : invalidationReasons) {
+			reason.reset();
+		}
 	}
 
-	// ── Texture binding ──────────────────────────────────────────────────
+	public static void onActiveTexture(int glTexture) {
+		int unit = glTexture - GL_TEXTURE0;
+		if (unit >= 0 && unit < MAX_TEXTURE_UNITS) {
+			activeTextureUnit = unit;
+			activeTextureKnown = true;
+		} else {
+			activeTextureKnown = false;
+		}
+	}
 
-	/**
-	 * Check whether a texture bind should proceed. Returns {@code true}
-	 * when the GL call is needed, or {@code false} when the texture is
-	 * already bound and the call can be skipped.
-	 *
-	 * <p>Conservative: only skips when the tracker is valid and NOT in
-	 * Sodium compat mode. Uses a single last-bound-texture slot, which
-	 * catches the most common redundant-bind pattern (same texture on the
-	 * same unit repeatedly). This is always safe because:</p>
-	 * <ul>
-	 *   <li>The most common redundant binds are consecutive same-texture
-	 *       binds to the same unit</li>
-	 *   <li>Cross-unit same-texture binds are rare enough that the skip
-	 *       is still correct (the texture is already resident)</li>
-	 *   <li>On invalidation, the tracker resets and forces a bind</li>
-	 * </ul>
-	 */
-	public static boolean tryBindTexture(int textureId) {
+	public static boolean tryBindTexture(int target, int textureId) {
 		textureBindRequests.increment();
-		if (valid && !sodiumConservative) {
-			if (lastBoundTexture == textureId) {
+		OptiminiumSettings.GlStateTrackerMode mode = OptiminiumSettings.getGlStateTrackerMode();
+		boolean knownUnit = activeTextureKnown && activeTextureUnit >= 0 && activeTextureUnit < MAX_TEXTURE_UNITS;
+		boolean same = mode != OptiminiumSettings.GlStateTrackerMode.OFF
+			&& knownUnit
+			&& textureTargets[activeTextureUnit] == target
+			&& textureIds[activeTextureUnit] == textureId;
+
+		if (same) {
+			textureBindPotentialSkipped.increment();
+			if (mode == OptiminiumSettings.GlStateTrackerMode.SAFE_SKIP && !sodiumConservative) {
 				textureBindSkipped.increment();
-				return false;         // already bound — skip
+				return false;
+			}
+		} else if (mode != OptiminiumSettings.GlStateTrackerMode.OFF) {
+			if (!knownUnit) {
+				activeTextureUnitMismatches.increment();
+			} else if (textureTargets[activeTextureUnit] != target) {
+				textureTargetMismatches.increment();
+			} else {
+				textureIdMismatches.increment();
 			}
 		}
-		lastBoundTexture = textureId;
+
+		if (knownUnit) {
+			textureTargets[activeTextureUnit] = target;
+			textureIds[activeTextureUnit] = textureId;
+		}
 		textureBindActual.increment();
-		return true;                  // proceed with the GL call
+		return true;
 	}
 
-	// ── Shader binding ───────────────────────────────────────────────────
-
-	/**
-	 * Check whether a shader program bind should proceed. Returns
-	 * {@code true} when the GL call is needed, or {@code false} when
-	 * the program is already active and the call can be skipped.
-	 */
 	public static boolean tryUseShader(int program) {
 		shaderBindRequests.increment();
-		if (valid && !sodiumConservative) {
-			if (activeProgram == program) {
+		OptiminiumSettings.GlStateTrackerMode mode = OptiminiumSettings.getGlStateTrackerMode();
+		boolean same = mode != OptiminiumSettings.GlStateTrackerMode.OFF && shaderKnown && activeProgram == program;
+
+		if (same) {
+			shaderBindPotentialSkipped.increment();
+			if (mode == OptiminiumSettings.GlStateTrackerMode.SAFE_SKIP && !sodiumConservative) {
 				shaderBindSkipped.increment();
-				return false;         // already active — skip
+				return false;
 			}
+		} else if (mode != OptiminiumSettings.GlStateTrackerMode.OFF && shaderKnown) {
+			shaderIdMismatches.increment();
 		}
+
 		activeProgram = program;
+		shaderKnown = true;
 		shaderBindActual.increment();
-		return true;                  // proceed with the GL call
+		return true;
 	}
 
-	// ── Invalidation ─────────────────────────────────────────────────────
-
-	/**
-	 * Invalidate all tracked state. The next bind / shader calls will
-	 * always proceed until the tracker has re-learned the current state.
-	 *
-	 * <p>Call this on:
-	 * <ul>
-	 *   <li>Resource reloads</li>
-	 *   <li>Render pass boundaries (level render start)</li>
-	 *   <li>Framebuffer changes</li>
-	 *   <li>Dimension / world changes</li>
-	 *   <li>Any unknown external GL state event</li>
-	 * </ul>
-	 */
 	public static void invalidate() {
-		lastBoundTexture = -1;
-		activeProgram = -1;
-		valid = true;    // cleared state is now the known state
-		trackerInvalidations.increment();
+		invalidate(InvalidationReason.UNKNOWN_GL);
 	}
 
-	// ── Snapshots ────────────────────────────────────────────────────────
+	public static void invalidate(InvalidationReason reason) {
+		activeTextureKnown = false;
+		activeProgram = UNKNOWN;
+		shaderKnown = false;
+		for (int i = 0; i < MAX_TEXTURE_UNITS; i++) {
+			textureTargets[i] = UNKNOWN;
+			textureIds[i] = UNKNOWN;
+		}
+		trackerInvalidations.increment();
+		invalidationReasons[reason.ordinal()].increment();
+	}
 
-	/**
-	 * Take a snapshot of all diagnostic counters.
-	 */
 	public static DiagnosticSnapshot snapshot() {
+		OptiminiumSettings.GlStateTrackerMode mode = OptiminiumSettings.getGlStateTrackerMode();
 		return new DiagnosticSnapshot(
 			textureBindRequests.sum(),
+			textureBindPotentialSkipped.sum(),
 			textureBindSkipped.sum(),
 			textureBindActual.sum(),
 			shaderBindRequests.sum(),
+			shaderBindPotentialSkipped.sum(),
 			shaderBindSkipped.sum(),
 			shaderBindActual.sum(),
-			trackerInvalidations.sum()
+			trackerInvalidations.sum(),
+			activeTextureUnitMismatches.sum(),
+			textureTargetMismatches.sum(),
+			textureIdMismatches.sum(),
+			shaderIdMismatches.sum(),
+			topInvalidationReason(),
+			mode.name(),
+			sodiumConservative && mode == OptiminiumSettings.GlStateTrackerMode.SAFE_SKIP
 		);
 	}
 
-	/**
-	 * Per-frame diagnostic counters (captured at frame boundaries).
-	 */
 	public static FrameDiagnostics frameDiagnostics() {
 		return new FrameDiagnostics(
 			textureBindRequests.sum() - frameStartRequestsTex,
+			textureBindPotentialSkipped.sum() - frameStartPotentialSkippedTex,
 			textureBindSkipped.sum() - frameStartSkippedTex,
 			textureBindActual.sum() - frameStartActualTex,
 			shaderBindRequests.sum() - frameStartRequestsSh,
+			shaderBindPotentialSkipped.sum() - frameStartPotentialSkippedSh,
 			shaderBindSkipped.sum() - frameStartSkippedSh,
 			shaderBindActual.sum() - frameStartActualSh,
 			trackerInvalidations.sum() - frameStartInvalidations
@@ -176,68 +192,108 @@ public final class OptiminiumGlStateTracker {
 	}
 
 	private static long frameStartRequestsTex;
+	private static long frameStartPotentialSkippedTex;
 	private static long frameStartSkippedTex;
 	private static long frameStartActualTex;
 	private static long frameStartRequestsSh;
+	private static long frameStartPotentialSkippedSh;
 	private static long frameStartSkippedSh;
 	private static long frameStartActualSh;
 	private static long frameStartInvalidations;
 
-	/**
-	 * Must be called once per frame (before any rendering) to snapshot
-	 * the frame-start positions of all diagnostic counters so that
-	 * {@link #frameDiagnostics()} returns delta-vs-frame-start values.
-	 */
 	public static void onFrameStart() {
-		frameStartRequestsTex  = textureBindRequests.sum();
-		frameStartSkippedTex   = textureBindSkipped.sum();
-		frameStartActualTex    = textureBindActual.sum();
-		frameStartRequestsSh   = shaderBindRequests.sum();
-		frameStartSkippedSh    = shaderBindSkipped.sum();
-		frameStartActualSh     = shaderBindActual.sum();
+		frameStartRequestsTex = textureBindRequests.sum();
+		frameStartPotentialSkippedTex = textureBindPotentialSkipped.sum();
+		frameStartSkippedTex = textureBindSkipped.sum();
+		frameStartActualTex = textureBindActual.sum();
+		frameStartRequestsSh = shaderBindRequests.sum();
+		frameStartPotentialSkippedSh = shaderBindPotentialSkipped.sum();
+		frameStartSkippedSh = shaderBindSkipped.sum();
+		frameStartActualSh = shaderBindActual.sum();
 		frameStartInvalidations = trackerInvalidations.sum();
 	}
 
-	// ── Data types ───────────────────────────────────────────────────────
+	private static String topInvalidationReason() {
+		InvalidationReason[] values = InvalidationReason.values();
+		long best = 0L;
+		InvalidationReason bestReason = InvalidationReason.NONE;
+		for (int i = 0; i < values.length; i++) {
+			long count = invalidationReasons[i].sum();
+			if (count > best) {
+				best = count;
+				bestReason = values[i];
+			}
+		}
+		return best <= 0L ? "none" : bestReason.name() + ":" + best;
+	}
+
+	public enum InvalidationReason {
+		NONE,
+		UNKNOWN_GL,
+		FRAMEBUFFER,
+		RENDER_PASS,
+		RENDER_TARGET,
+		SHADER_RELOAD,
+		RESOURCE_RELOAD,
+		WORLD_UNLOAD,
+		SODIUM_COMPAT
+	}
 
 	public record DiagnosticSnapshot(
 		long textureBindRequests,
+		long textureBindPotentialSkipped,
 		long textureBindSkipped,
 		long textureBindActual,
 		long shaderBindRequests,
+		long shaderBindPotentialSkipped,
 		long shaderBindSkipped,
 		long shaderBindActual,
-		long trackerInvalidations
+		long trackerInvalidations,
+		long activeTextureUnitMismatches,
+		long textureTargetMismatches,
+		long textureIdMismatches,
+		long shaderIdMismatches,
+		String topInvalidationReason,
+		String mode,
+		boolean compatibilitySkipDisabled
 	) {
 		private static final DiagnosticSnapshot EMPTY =
-			new DiagnosticSnapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L);
+			new DiagnosticSnapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "none", "MEASURE_ONLY", false);
 
 		public static DiagnosticSnapshot empty() {
 			return EMPTY;
 		}
 
 		public long textureBindSkippedPercent() {
-			long req = textureBindRequests;
-			return req <= 0L ? 0L : textureBindSkipped * 100L / req;
+			return percent(textureBindRequests, textureBindSkipped);
+		}
+
+		public long textureBindPotentialSkippedPercent() {
+			return percent(textureBindRequests, textureBindPotentialSkipped);
 		}
 
 		public long shaderBindSkippedPercent() {
-			long req = shaderBindRequests;
-			return req <= 0L ? 0L : shaderBindSkipped * 100L / req;
+			return percent(shaderBindRequests, shaderBindSkipped);
+		}
+
+		public long shaderBindPotentialSkippedPercent() {
+			return percent(shaderBindRequests, shaderBindPotentialSkipped);
 		}
 	}
 
 	public record FrameDiagnostics(
 		long textureBindRequests,
+		long textureBindPotentialSkipped,
 		long textureBindSkipped,
 		long textureBindActual,
 		long shaderBindRequests,
+		long shaderBindPotentialSkipped,
 		long shaderBindSkipped,
 		long shaderBindActual,
 		long trackerInvalidations
 	) {
 		private static final FrameDiagnostics EMPTY =
-			new FrameDiagnostics(0L, 0L, 0L, 0L, 0L, 0L, 0L);
+			new FrameDiagnostics(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
 
 		public static FrameDiagnostics empty() {
 			return EMPTY;
@@ -252,13 +308,15 @@ public final class OptiminiumGlStateTracker {
 		}
 
 		public long textureSkippedPercent() {
-			long req = textureBindRequests;
-			return req <= 0L ? 0L : textureBindSkipped * 100L / req;
+			return percent(textureBindRequests, textureBindSkipped);
 		}
 
 		public long shaderSkippedPercent() {
-			long req = shaderBindRequests;
-			return req <= 0L ? 0L : shaderBindSkipped * 100L / req;
+			return percent(shaderBindRequests, shaderBindSkipped);
 		}
+	}
+
+	private static long percent(long requests, long skips) {
+		return requests <= 0L ? 0L : skips * 100L / requests;
 	}
 }

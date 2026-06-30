@@ -30,7 +30,7 @@ public abstract class GlStateManagerMixin {
 
 	@Redirect(method = "_bindTexture", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL11;glBindTexture(II)V"))
 	private static void optiminium$redirectTextureBind(int glTarget, int textureId) {
-		if (!OptiminiumGlStateTracker.tryBindTexture(textureId)) {
+		if (!OptiminiumGlStateTracker.tryBindTexture(glTarget, textureId)) {
 			// Texture already bound — skip the GL call entirely.
 			// GlStateManager's own internal state has already been updated
 			// before this redirect fires; the caller only needs the GL state.
@@ -40,6 +40,11 @@ public abstract class GlStateManagerMixin {
 		long start = OptiminiumRenderProfiler.start();
 		GL11.glBindTexture(glTarget, textureId);
 		OptiminiumRenderProfiler.recordTextureBind(start);
+	}
+
+	@Inject(method = "_activeTexture", at = @At("HEAD"), require = 0)
+	private static void optiminium$trackActiveTexture(int texture, CallbackInfo callback) {
+		OptiminiumGlStateTracker.onActiveTexture(texture);
 	}
 
 	// ── Shader program deduplication ─────────────────────────────────────
@@ -62,7 +67,7 @@ public abstract class GlStateManagerMixin {
 	private static void optiminium$redirectFramebufferBind(int target, int framebuffer) {
 		// Framebuffer change may cause external GL state modification from
 		// vanilla/Sodium code that we cannot see — invalidate the tracker.
-		OptiminiumGlStateTracker.invalidate();
+		OptiminiumGlStateTracker.invalidate(OptiminiumGlStateTracker.InvalidationReason.FRAMEBUFFER);
 		long start = OptiminiumRenderProfiler.start();
 		GL30.glBindFramebuffer(target, framebuffer);
 		OptiminiumRenderProfiler.recordFramebufferBind(start);

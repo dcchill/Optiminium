@@ -27,6 +27,7 @@ public final class OptiminiumSettings {
 	private static volatile boolean blockEntityRenderCacheDebug = false;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean experimentalTemporalSignificance = false;
+	private static volatile GlStateTrackerMode glStateTrackerMode = GlStateTrackerMode.MEASURE_ONLY;
 
 	static {
 		load();
@@ -147,6 +148,22 @@ public final class OptiminiumSettings {
 
 	public static boolean isExperimentalTemporalSignificance() {
 		return experimentalTemporalSignificance;
+	}
+
+	public static GlStateTrackerMode getGlStateTrackerMode() {
+		return glStateTrackerMode;
+	}
+
+	public static GlStateTrackerMode cycleGlStateTrackerMode() {
+		GlStateTrackerMode[] modes = GlStateTrackerMode.values();
+		glStateTrackerMode = modes[(glStateTrackerMode.ordinal() + 1) % modes.length];
+		save();
+		return glStateTrackerMode;
+	}
+
+	public static void setGlStateTrackerMode(GlStateTrackerMode mode) {
+		glStateTrackerMode = mode;
+		save();
 	}
 
 	public static boolean toggleExperimentalTemporalSignificance() {
@@ -313,6 +330,7 @@ public final class OptiminiumSettings {
 			blockEntityRenderCacheDebug = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug)));
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
 			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance)));
+			glStateTrackerMode = GlStateTrackerMode.parse(properties.getProperty("glStateTrackerMode", glStateTrackerMode.name()));
 		} catch (IOException | NumberFormatException ignored) {
 		}
 	}
@@ -335,6 +353,7 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
 		properties.setProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance));
+		properties.setProperty("glStateTrackerMode", glStateTrackerMode.name());
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {
@@ -359,6 +378,20 @@ public final class OptiminiumSettings {
 				return DenseSceneAdaptiveMode.valueOf(value.toUpperCase());
 			} catch (IllegalArgumentException exception) {
 				return BALANCED;
+			}
+		}
+	}
+
+	public enum GlStateTrackerMode {
+		OFF,
+		MEASURE_ONLY,
+		SAFE_SKIP;
+
+		private static GlStateTrackerMode parse(String value) {
+			try {
+				return GlStateTrackerMode.valueOf(value.toUpperCase());
+			} catch (IllegalArgumentException exception) {
+				return MEASURE_ONLY;
 			}
 		}
 	}

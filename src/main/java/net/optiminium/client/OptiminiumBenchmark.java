@@ -552,16 +552,27 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static String glTrackerLine(OptiminiumGlStateTracker.DiagnosticSnapshot tracker) {
-		return String.format("texReq=%d, texSkip=%d, texAct=%d, texSkipPct=%d, shReq=%d, shSkip=%d, shAct=%d, shSkipPct=%d, inval=%d",
+		return String.format("mode=%s, compatibilitySkipDisabled=%s, texReq=%d, texPotentialSkip=%d, texSkip=%d, texAct=%d, texPotentialSkipPct=%d, texSkipPct=%d, shReq=%d, shPotentialSkip=%d, shSkip=%d, shAct=%d, shPotentialSkipPct=%d, shSkipPct=%d, inval=%d, topInval=%s, activeUnitMiss=%d, targetMiss=%d, texIdMiss=%d, shaderIdMiss=%d",
+			tracker.mode(),
+			tracker.compatibilitySkipDisabled(),
 			tracker.textureBindRequests(),
+			tracker.textureBindPotentialSkipped(),
 			tracker.textureBindSkipped(),
 			tracker.textureBindActual(),
+			tracker.textureBindPotentialSkippedPercent(),
 			tracker.textureBindSkippedPercent(),
 			tracker.shaderBindRequests(),
+			tracker.shaderBindPotentialSkipped(),
 			tracker.shaderBindSkipped(),
 			tracker.shaderBindActual(),
+			tracker.shaderBindPotentialSkippedPercent(),
 			tracker.shaderBindSkippedPercent(),
-			tracker.trackerInvalidations());
+			tracker.trackerInvalidations(),
+			tracker.topInvalidationReason(),
+			tracker.activeTextureUnitMismatches(),
+			tracker.textureTargetMismatches(),
+			tracker.textureIdMismatches(),
+			tracker.shaderIdMismatches());
 	}
 
 	private static String lowGainDominance(double fpsGain, OptiminiumRenderProfiler.Snapshot offProfile, OptiminiumRenderProfiler.Snapshot onProfile) {
@@ -795,7 +806,7 @@ public final class OptiminiumBenchmark {
 		html.append(barChart("Confidence distribution", new String[]{"0.00-0.20","0.20-0.40","0.40-0.60","0.60-0.80","0.80-1.00"}, new double[]{onBands.confidenceBucketVeryLow(), onBands.confidenceBucketLow(), onBands.confidenceBucketMedium(), onBands.confidenceBucketHigh(), onBands.confidenceBucketVeryHigh()}));
 		html.append(barChart("Pop-risk / confidence / importance averages", new String[]{"Pop risk","Confidence","Visual","Gameplay","Safety"}, new double[]{onBands.averagePopRisk(), onBands.averageConfidence(), onBands.averageVisualImportance(), onBands.averageGameplayImportance(), onBands.averageSafetyImportance()}));
 		html.append(barChart("Render stats", new String[]{"Uploads","Texture binds","Shader binds","Layer switches"}, new double[]{onRenderProfile.bufferUploadCount(), onRenderProfile.textureBindCount(), onRenderProfile.shaderBindCount(), onRenderProfile.renderLayerSwitchCount()}));
-		html.append(barChart("GL State Tracker", new String[]{"Tex skip%","Sh skip%","Tex actual","Sh actual","Invalidations"}, new double[]{(double)onGlTracker.textureBindSkippedPercent(), (double)onGlTracker.shaderBindSkippedPercent(), (double)onGlTracker.textureBindActual(), (double)onGlTracker.shaderBindActual(), (double)onGlTracker.trackerInvalidations()}));
+		html.append(barChart("GL State Tracker", new String[]{"Tex potential%","Tex actual%","Sh potential%","Sh actual%","Invalidations"}, new double[]{(double)onGlTracker.textureBindPotentialSkippedPercent(), (double)onGlTracker.textureBindSkippedPercent(), (double)onGlTracker.shaderBindPotentialSkippedPercent(), (double)onGlTracker.shaderBindSkippedPercent(), (double)onGlTracker.trackerInvalidations()}));
 		html.append(barChart("Protection counters", new String[]{"Pop-risk blocks","Confidence blocks","Recently visible","Hysteresis"}, new double[]{onBands.highPopRiskDemotionBlocks(), onBands.lowConfidenceDemotionBlocks(), onBands.recentlyVisibleProtections(), onBands.demotionsPreventedByHysteresis()}));
 		html.append("<h2>Block Entity Cache</h2><div class=\"grid\">");
 		appendBeCacheCards(html, onDiagnostics);
@@ -1241,12 +1252,25 @@ public final class OptiminiumBenchmark {
 			OptiminiumGlStateTracker.DiagnosticSnapshot offTracker,
 			OptiminiumGlStateTracker.DiagnosticSnapshot onTracker) {
 		card(html, "Texture bind requests", (double)onTracker.textureBindRequests(), "requests", false);
-		card(html, "Texture binds skipped", (double)onTracker.textureBindSkipped(), "skipped", onTracker.textureBindSkipped() > 0L);
-		card(html, "Texture skip rate", (double)onTracker.textureBindSkippedPercent(), "%", onTracker.textureBindSkippedPercent() > 0L);
+		card(html, "Texture potential skips", (double)onTracker.textureBindPotentialSkipped(), "potential", onTracker.textureBindPotentialSkipped() > 0L);
+		card(html, "Texture actual skips", (double)onTracker.textureBindSkipped(), "skipped", onTracker.textureBindSkipped() > 0L);
+		card(html, "Texture potential skip rate", (double)onTracker.textureBindPotentialSkippedPercent(), "%", onTracker.textureBindPotentialSkippedPercent() > 0L);
+		card(html, "Texture actual skip rate", (double)onTracker.textureBindSkippedPercent(), "%", onTracker.textureBindSkippedPercent() > 0L);
 		card(html, "Shader bind requests", (double)onTracker.shaderBindRequests(), "requests", false);
-		card(html, "Shader binds skipped", (double)onTracker.shaderBindSkipped(), "skipped", onTracker.shaderBindSkipped() > 0L);
-		card(html, "Shader skip rate", (double)onTracker.shaderBindSkippedPercent(), "%", onTracker.shaderBindSkippedPercent() > 0L);
+		card(html, "Shader potential skips", (double)onTracker.shaderBindPotentialSkipped(), "potential", onTracker.shaderBindPotentialSkipped() > 0L);
+		card(html, "Shader actual skips", (double)onTracker.shaderBindSkipped(), "skipped", onTracker.shaderBindSkipped() > 0L);
+		card(html, "Shader potential skip rate", (double)onTracker.shaderBindPotentialSkippedPercent(), "%", onTracker.shaderBindPotentialSkippedPercent() > 0L);
+		card(html, "Shader actual skip rate", (double)onTracker.shaderBindSkippedPercent(), "%", onTracker.shaderBindSkippedPercent() > 0L);
 		card(html, "Tracker invalidations", (double)onTracker.trackerInvalidations(), "invalidations", false);
+		card(html, "Active texture unit misses", (double)onTracker.activeTextureUnitMismatches(), "misses", onTracker.activeTextureUnitMismatches() == 0L);
+		card(html, "Texture target misses", (double)onTracker.textureTargetMismatches(), "misses", onTracker.textureTargetMismatches() == 0L);
+		card(html, "Texture id misses", (double)onTracker.textureIdMismatches(), "misses", onTracker.textureIdMismatches() == 0L);
+		card(html, "Shader id misses", (double)onTracker.shaderIdMismatches(), "misses", onTracker.shaderIdMismatches() == 0L);
+		html.append("<div class=\"card\"><div class=\"muted\">Top invalidation reason</div><div class=\"warn\" style=\"font-size:14px;word-break:break-all\">")
+			.append(escape(onTracker.topInvalidationReason())).append("</div></div>");
+		html.append("<div class=\"card\"><div class=\"muted\">Skipping mode</div><div class=\"value\">")
+			.append(escape(onTracker.mode())).append("</div><div class=\"muted\">compat disabled=")
+			.append(onTracker.compatibilitySkipDisabled()).append("</div></div>");
 		// Delta vs OFF
 		long deltaTexSkip = onTracker.textureBindSkipped() - offTracker.textureBindSkipped();
 		long deltaShSkip = onTracker.shaderBindSkipped() - offTracker.shaderBindSkipped();
