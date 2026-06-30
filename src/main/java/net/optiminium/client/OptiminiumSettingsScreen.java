@@ -81,6 +81,9 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 78, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
+		this.addRenderableWidget(Button.builder(visualSignificanceLabel(), button -> button.setMessage(Component.literal("Visual Significance: " + (OptiminiumSettings.toggleExperimentalTemporalSignificance() ? "ON" : "OFF"))))
+			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -148,6 +151,10 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component blockEntityCullingLabel() {
 		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
+	}
+
+	private static Component visualSignificanceLabel() {
+		return Component.literal("Visual Significance: " + (OptiminiumSettings.isExperimentalTemporalSignificance() ? "ON" : "OFF"));
 	}
 
 	private static Component denseSceneAdaptiveLabel() {

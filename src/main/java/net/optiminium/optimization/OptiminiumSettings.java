@@ -146,8 +146,15 @@ public final class OptiminiumSettings {
 		return experimentalTemporalSignificance;
 	}
 
+	public static boolean toggleExperimentalTemporalSignificance() {
+		experimentalTemporalSignificance = !experimentalTemporalSignificance;
+		save();
+		return experimentalTemporalSignificance;
+	}
+
 	public static void setExperimentalTemporalSignificance(boolean value) {
 		experimentalTemporalSignificance = value;
+		save();
 	}
 
 	public static int getEntityAlwaysRenderDistanceBlocks() {
@@ -260,6 +267,7 @@ public final class OptiminiumSettings {
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
+			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance)));
 		} catch (IOException | NumberFormatException ignored) {
 		}
 	}
@@ -278,6 +286,7 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
+		properties.setProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance));
 		try {
 			Files.createDirectories(CONFIG_FILE.getParent());
 			try (OutputStream output = Files.newOutputStream(CONFIG_FILE)) {

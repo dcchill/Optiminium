@@ -151,6 +151,8 @@ public final class OptiminiumVisualSignificance {
 	private static final int DEFERRED_TRANSITIONS_PROCESS_PER_FRAME = 32;
 	private static final int DEFERRED_QUEUE_MAX_SIZE = 512;
 	private static final int SCORE_RECOMPUTE_BUDGET_PER_FRAME = 192;
+	private static final int MAX_VISIBLE_DEMOTIONS_PER_FRAME = 12;
+	private static final double CENTER_DEMOTION_HOLD_PRESENCE = 0.55D;
 
 	private static final int DIRTY_ENTERED_VIEW = 1;
 	private static final int DIRTY_LEFT_VIEW = 1 << 1;
@@ -364,6 +366,7 @@ public final class OptiminiumVisualSignificance {
 	private static int proxyDestructionsThisFrame;
 	private static int visibilityChangesThisFrame;
 	private static int importanceDebtPromotionsThisFrame;
+	private static int visibleDemotionsThisFrame;
 	private static FrameBurstSnapshot lastFrameBurst = FrameBurstSnapshot.EMPTY;
 
 	// ---- Deferred transition queue (non-urgent transitions exceeding budget) ----
@@ -828,7 +831,8 @@ public final class OptiminiumVisualSignificance {
 			pressured, mem.lastScore, renderCost, category, mem, entityWasRendered);
 	}
 
-	private static byte applyTransitionBudget(byte previous, byte desired, boolean urgentPromotion, long key) {
+	private static byte applyTransitionBudget(byte previous, byte desired, boolean urgentPromotion,
+			long key, double centerPresence, boolean inFront) {
 		if (previous == UNKNOWN || desired == UNKNOWN || previous == desired) return desired;
 		// Urgent promotions (nearby, looked-at, important, recent, safety-critical, etc.)
 		// must never be deferred. Count them for diagnostics.
@@ -838,6 +842,15 @@ public final class OptiminiumVisualSignificance {
 			bandTransitionBudgetUsedThisFrame++;
 			bandTransitionBudgetUsed++;
 			return desired;
+		}
+		if (desired > previous && shouldDelayVisibleDemotion(previous, desired, key, centerPresence, inFront)) {
+			nonUrgentTransitionsDelayed++;
+			bandTransitionsDeferred++;
+			bandTransitionsDeferredThisFrame++;
+			if (deferredTransitionKeys.size() < DEFERRED_QUEUE_MAX_SIZE) {
+				deferredTransitionKeys.addLast(key);
+			}
+			return previous;
 		}
 		// Non-urgent transitions: strict per-frame cap
 		if (bandTransitionBudgetUsedThisFrame >= BAND_TRANSITION_BUDGET_PER_FRAME) {
@@ -852,7 +865,19 @@ public final class OptiminiumVisualSignificance {
 		}
 		bandTransitionBudgetUsedThisFrame++;
 		bandTransitionBudgetUsed++;
+		if (desired > previous && inFront) {
+			visibleDemotionsThisFrame++;
+		}
 		return desired;
+	}
+
+	private static boolean shouldDelayVisibleDemotion(byte previous, byte desired, long key,
+			double centerPresence, boolean inFront) {
+		if (!inFront) return false;
+		// ponytail: tiny temporal jitter; replace with a priority queue only if diagnostics show this cap still bursts.
+		if (Math.floorMod((int)(frameIndex + key), 3) != 0) return true;
+		if (centerPresence >= CENTER_DEMOTION_HOLD_PRESENCE && desired > REUSED) return true;
+		return visibleDemotionsThisFrame >= MAX_VISIBLE_DEMOTIONS_PER_FRAME;
 	}
 
 	private static boolean tryStartScoreRecompute(boolean urgent) {
@@ -989,7 +1014,8 @@ public final class OptiminiumVisualSignificance {
 			distanceSqr, inFront, lookedAt, important, recent, pressured);
 		classification = applyImportanceDebt(mem, classification);
 		classification = applyTransitionBudget(previousClassification, classification,
-			isUrgentBlockPromotion(previousClassification, classification, distanceSqr, lookedAt, important, recent, mem), key);
+			isUrgentBlockPromotion(previousClassification, classification, distanceSqr, lookedAt, important, recent, mem),
+			key, centerPresence, inFront);
 
 		beClassifications.put(key, classification);
 		recordBandTransition(previousClassification, classification, mem.lastChangedFrame, dirtyReasons != 0);
@@ -1098,7 +1124,8 @@ public final class OptiminiumVisualSignificance {
 		classification = applyImportanceDebt(mem, classification);
 		byte previousClassification = mem.lastClassification;
 		classification = applyTransitionBudget(previousClassification, classification,
-			isUrgentEntityPromotion(previousClassification, classification, distanceSqr, lookedAt, important, category, entity, mem), ~entityId);
+			isUrgentEntityPromotion(previousClassification, classification, distanceSqr, lookedAt, important, category, entity, mem),
+			~entityId, centerPresence, inFront);
 
 		recordBandTransition(previousClassification, classification, mem.lastChangedFrame, dirtyReasons != 0);
 		updateEntityConfidence(mem, classification, distanceSqr, centerPresence);
@@ -2919,6 +2946,7 @@ public final class OptiminiumVisualSignificance {
 		visibilityChangesThisFrame = 0;
 		importanceDebtPromotionsThisFrame = 0;
 		urgentTransitionsThisFrame = 0;
+		visibleDemotionsThisFrame = 0;
 	}
 	
 	private static void processDeferredTransitions() {
