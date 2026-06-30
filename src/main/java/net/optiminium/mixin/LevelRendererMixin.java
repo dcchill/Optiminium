@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
+import net.optiminium.client.OptiminiumGlStateTracker;
 import net.optiminium.client.OptiminiumGpuOptimizer;
 import net.optiminium.client.OptiminiumRenderProfiler;
 import org.joml.Matrix4f;
@@ -26,6 +27,12 @@ public abstract class LevelRendererMixin {
     @Shadow
     @Final
     private ObjectArrayList<SectionRenderDispatcher.RenderSection> visibleSections;
+
+    // Invalidate tracker at render pass boundary (start of each level render)
+    @Inject(method = "renderLevel", at = @At("HEAD"))
+    private void optiminium$invalidateGlStateOnLevelRender(DeltaTracker deltaTracker, boolean renderBlockOutline, net.minecraft.client.Camera camera, GameRenderer gameRenderer, LightTexture lightTexture, Matrix4f projectionMatrix, Matrix4f modelViewMatrix, CallbackInfo callback) {
+        OptiminiumGlStateTracker.invalidate();
+    }
 
     // Weather and cloud skipping preserved - unrelated to Block Entity Culling
     @Inject(method = "renderSnowAndRain", at = @At("HEAD"), cancellable = true)

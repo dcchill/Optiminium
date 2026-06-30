@@ -21,5 +21,11 @@ public final class OptiminiumKeyInput {
 				Minecraft.getInstance().player.displayClientMessage(Component.literal("Optiminium: " + (enabled ? "ON" : "OFF")), true);
 			}
 		}
+		while (OptiminiumKeyBindings.TOGGLE_BLOCK_ENTITY_CACHE_DEBUG.consumeClick()) {
+			boolean enabled = OptiminiumSettings.toggleBlockEntityRenderCacheDebug();
+			if (Minecraft.getInstance().player != null) {
+				Minecraft.getInstance().player.displayClientMessage(Component.literal("Block Entity Cache: " + (enabled ? "shown" : "hidden")), true);
+			}
+		}
 	}
 }

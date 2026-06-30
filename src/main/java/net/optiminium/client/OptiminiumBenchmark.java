@@ -47,6 +47,8 @@ public final class OptiminiumBenchmark {
 	private static OptiminiumGpuOptimizer.SceneSnapshot onScene = emptyScene();
 	private static OptiminiumRenderProfiler.Snapshot offRenderProfile = emptyRenderProfile();
 	private static OptiminiumRenderProfiler.Snapshot onRenderProfile = emptyRenderProfile();
+	private static OptiminiumGlStateTracker.DiagnosticSnapshot offGlTracker = OptiminiumGlStateTracker.DiagnosticSnapshot.empty();
+	private static OptiminiumGlStateTracker.DiagnosticSnapshot onGlTracker = OptiminiumGlStateTracker.DiagnosticSnapshot.empty();
 	private static OptiminiumMetrics.Snapshot offMetricStart = emptyMetrics();
 	private static OptiminiumMetrics.Snapshot onMetricStart = emptyMetrics();
 	private static OptiminiumMetrics.Snapshot offMetrics = emptyMetrics();
@@ -113,6 +115,8 @@ public final class OptiminiumBenchmark {
 		onScene = emptyScene();
 		offRenderProfile = emptyRenderProfile();
 		onRenderProfile = emptyRenderProfile();
+		offGlTracker = OptiminiumGlStateTracker.DiagnosticSnapshot.empty();
+		onGlTracker = OptiminiumGlStateTracker.DiagnosticSnapshot.empty();
 		offMetricStart = OptiminiumMetrics.snapshot();
 		onMetricStart = emptyMetrics();
 		offMetrics = emptyMetrics();
@@ -185,6 +189,7 @@ public final class OptiminiumBenchmark {
 			offProfile = OptiminiumGpuOptimizer.profileSnapshot();
 			offScene = OptiminiumGpuOptimizer.sceneSnapshot();
 			offRenderProfile = OptiminiumRenderProfiler.snapshot();
+			offGlTracker = OptiminiumGlStateTracker.snapshot();
 			offMetrics = delta(offMetricStart, OptiminiumMetrics.snapshot());
 			offCameraSnapshot = offCameraSnapshot.finish();
 			phase = Phase.ON;
@@ -209,6 +214,7 @@ public final class OptiminiumBenchmark {
 		onProfile = OptiminiumGpuOptimizer.profileSnapshot();
 		onScene = OptiminiumGpuOptimizer.sceneSnapshot();
 		onRenderProfile = OptiminiumRenderProfiler.snapshot();
+		onGlTracker = OptiminiumGlStateTracker.snapshot();
 		onMetrics = delta(onMetricStart, OptiminiumMetrics.snapshot());
 		OptiminiumSettings.setExperimentalTemporalSignificance(previousExperimentalTemporalSignificance);
 		OptiminiumSettings.setEnabled(previousEnabled);
@@ -217,7 +223,7 @@ public final class OptiminiumBenchmark {
 		if (fullBenchmarkSettings != null) {
 			fullBenchmarkResults.add(fullBenchmarkResult(activeBenchmarkName, onMetrics, onProfile, onScene, onRenderProfile, onDiagnostics));
 		}
-		for (String line : report(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene, offRenderProfile, onRenderProfile, onDiagnostics)) {
+		for (String line : report(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene, offRenderProfile, onRenderProfile, offGlTracker, onGlTracker, onDiagnostics)) {
 			message(line);
 		}
 		if (fullBenchmarkSettings != null) {
@@ -258,6 +264,7 @@ public final class OptiminiumBenchmark {
 			new BenchmarkCase("Frame Pacing", () -> OptiminiumSettings.setFramePacing(true)),
 			new BenchmarkCase("Particle Limiter", () -> OptiminiumSettings.setParticleLimiter(true)),
 			new BenchmarkCase("Block Entity Culling", () -> OptiminiumSettings.setBlockEntityCulling(true)),
+			new BenchmarkCase("Block Entity Cache", () -> OptiminiumSettings.setBlockEntityRenderCache(true)),
 			new BenchmarkCase("Dense Scene Mode", () -> {
 				OptiminiumSettings.setFramePacing(true);
 				OptiminiumSettings.setDenseSceneAdaptiveMode(OptiminiumSettings.DenseSceneAdaptiveMode.BALANCED);
@@ -271,7 +278,8 @@ public final class OptiminiumBenchmark {
 
 	private static List<String> report(OptiminiumMetrics.Snapshot offMetrics, OptiminiumMetrics.Snapshot onMetrics, OptiminiumGpuOptimizer.ProfileSnapshot offProfile,
 			OptiminiumGpuOptimizer.ProfileSnapshot onProfile, OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
-			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile, String onDiagnostics) {
+			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
+			OptiminiumGlStateTracker.DiagnosticSnapshot offGlTracker, OptiminiumGlStateTracker.DiagnosticSnapshot onGlTracker, String onDiagnostics) {
 		double offFps = averageFps(offFrames);
 		double onFps = averageFps(onFrames);
 		double fpsGain = onFps - offFps;
@@ -301,6 +309,8 @@ public final class OptiminiumBenchmark {
 		lines.add(prefix + " render OFF[" + renderProfileLine(offRenderProfile, offFrames.size()) + "]");
 		lines.add(prefix + " render ON[" + renderProfileLine(onRenderProfile, onFrames.size()) + "]");
 		lines.add(prefix + " render delta: " + renderDeltaLine(offRenderProfile, onRenderProfile));
+		lines.add(prefix + " gl tracker OFF[" + glTrackerLine(offGlTracker) + "]");
+		lines.add(prefix + " gl tracker ON[" + glTrackerLine(onGlTracker) + "]");
 		lines.add(prefix + " low-gain profile: dominatedBy=" + lowGainDominance(fpsGain, offRenderProfile, onRenderProfile));
 		lines.add(prefix + " recommendation: " + recommendation);
 		lines.add(prefix + " diagnostics: OFF" + offDiagnostics + " | ON" + onDiagnostics + ", cameraStable=" + cameraStable + ", phaseTicks=" + PHASE_TICKS);
@@ -311,7 +321,7 @@ public final class OptiminiumBenchmark {
 		}
 		if (fullBenchmarkSettings == null) {
 			Path htmlReport = writeHtmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
-				offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
+				offRenderProfile, onRenderProfile, offGlTracker, onGlTracker, onDiagnostics, recommendation,
 				offSignificanceDelta, onSignificanceDelta);
 			if (htmlReport != null) {
 				lines.add(prefix + " HTML report: " + htmlReport);
@@ -541,6 +551,19 @@ public final class OptiminiumBenchmark {
 			+ ", suspected GL stalls " + deltaWord(offProfile.suspectedGlStallFrames(), onProfile.suspectedGlStallFrames());
 	}
 
+	private static String glTrackerLine(OptiminiumGlStateTracker.DiagnosticSnapshot tracker) {
+		return String.format("texReq=%d, texSkip=%d, texAct=%d, texSkipPct=%d, shReq=%d, shSkip=%d, shAct=%d, shSkipPct=%d, inval=%d",
+			tracker.textureBindRequests(),
+			tracker.textureBindSkipped(),
+			tracker.textureBindActual(),
+			tracker.textureBindSkippedPercent(),
+			tracker.shaderBindRequests(),
+			tracker.shaderBindSkipped(),
+			tracker.shaderBindActual(),
+			tracker.shaderBindSkippedPercent(),
+			tracker.trackerInvalidations());
+	}
+
 	private static String lowGainDominance(double fpsGain, OptiminiumRenderProfiler.Snapshot offProfile, OptiminiumRenderProfiler.Snapshot onProfile) {
 		if (fpsGain > 3.0D) {
 			return "not low-gain";
@@ -612,6 +635,7 @@ public final class OptiminiumBenchmark {
 			+ "\nscene: " + sceneLine(scene)
 			+ "\nsignificance: " + significanceLine(significance, metrics, scene)
 			+ "\nrender: " + renderProfileLine(renderProfile, onFrames.size())
+			+ "\ngl tracker: " + glTrackerLine(onGlTracker)
 			+ "\ndiagnostics: " + diagnostics;
 		return new FullBenchmarkResult(name,
 			averageFps(onFrames),
@@ -696,6 +720,8 @@ public final class OptiminiumBenchmark {
 			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
 			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
 			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
+			OptiminiumGlStateTracker.DiagnosticSnapshot offGlTracker,
+			OptiminiumGlStateTracker.DiagnosticSnapshot onGlTracker,
 			String onDiagnostics, String recommendation,
 			OptiminiumVisualSignificance.Snapshot offSignificanceDelta,
 			OptiminiumVisualSignificance.Snapshot onSignificanceDelta) {
@@ -706,7 +732,7 @@ public final class OptiminiumBenchmark {
 			String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"));
 			Path report = directory.resolve("optiminium-benchmark-" + timestamp + "-" + mode + ".html");
 			Files.writeString(report, htmlReport(offMetrics, onMetrics, offProfile, onProfile, offScene, onScene,
-				offRenderProfile, onRenderProfile, onDiagnostics, recommendation,
+				offRenderProfile, onRenderProfile, offGlTracker, onGlTracker, onDiagnostics, recommendation,
 				offSignificanceDelta, onSignificanceDelta), StandardCharsets.UTF_8);
 			return report;
 		} catch (IOException | RuntimeException exception) {
@@ -719,6 +745,8 @@ public final class OptiminiumBenchmark {
 			OptiminiumGpuOptimizer.ProfileSnapshot offProfile, OptiminiumGpuOptimizer.ProfileSnapshot onProfile,
 			OptiminiumGpuOptimizer.SceneSnapshot offScene, OptiminiumGpuOptimizer.SceneSnapshot onScene,
 			OptiminiumRenderProfiler.Snapshot offRenderProfile, OptiminiumRenderProfiler.Snapshot onRenderProfile,
+			OptiminiumGlStateTracker.DiagnosticSnapshot offGlTracker,
+			OptiminiumGlStateTracker.DiagnosticSnapshot onGlTracker,
 			String onDiagnostics, String recommendation,
 			OptiminiumVisualSignificance.Snapshot offSignificanceDelta,
 			OptiminiumVisualSignificance.Snapshot onSignificanceDelta) {
@@ -767,7 +795,14 @@ public final class OptiminiumBenchmark {
 		html.append(barChart("Confidence distribution", new String[]{"0.00-0.20","0.20-0.40","0.40-0.60","0.60-0.80","0.80-1.00"}, new double[]{onBands.confidenceBucketVeryLow(), onBands.confidenceBucketLow(), onBands.confidenceBucketMedium(), onBands.confidenceBucketHigh(), onBands.confidenceBucketVeryHigh()}));
 		html.append(barChart("Pop-risk / confidence / importance averages", new String[]{"Pop risk","Confidence","Visual","Gameplay","Safety"}, new double[]{onBands.averagePopRisk(), onBands.averageConfidence(), onBands.averageVisualImportance(), onBands.averageGameplayImportance(), onBands.averageSafetyImportance()}));
 		html.append(barChart("Render stats", new String[]{"Uploads","Texture binds","Shader binds","Layer switches"}, new double[]{onRenderProfile.bufferUploadCount(), onRenderProfile.textureBindCount(), onRenderProfile.shaderBindCount(), onRenderProfile.renderLayerSwitchCount()}));
+		html.append(barChart("GL State Tracker", new String[]{"Tex skip%","Sh skip%","Tex actual","Sh actual","Invalidations"}, new double[]{(double)onGlTracker.textureBindSkippedPercent(), (double)onGlTracker.shaderBindSkippedPercent(), (double)onGlTracker.textureBindActual(), (double)onGlTracker.shaderBindActual(), (double)onGlTracker.trackerInvalidations()}));
 		html.append(barChart("Protection counters", new String[]{"Pop-risk blocks","Confidence blocks","Recently visible","Hysteresis"}, new double[]{onBands.highPopRiskDemotionBlocks(), onBands.lowConfidenceDemotionBlocks(), onBands.recentlyVisibleProtections(), onBands.demotionsPreventedByHysteresis()}));
+		html.append("<h2>Block Entity Cache</h2><div class=\"grid\">");
+		appendBeCacheCards(html, onDiagnostics);
+		html.append("</div>");
+		html.append("<h2>GL State Tracker</h2><div class=\"grid\">");
+		appendGlTrackerCards(html, offGlTracker, onGlTracker);
+		html.append("</div>");
 		html.append("<h2>Decision Engine</h2>");
 		html.append(barChart("Weighted attention score averages", new String[]{"All","Full","Throttled","Reused","Proxy","Culled"}, new double[]{onBands.averageWeightedAttentionScore(), onBands.averageWeightedAttentionFull(), onBands.averageWeightedAttentionThrottled(), onBands.averageWeightedAttentionReused(), onBands.averageWeightedAttentionProxy(), onBands.averageWeightedAttentionCulled()}));
 		html.append(barChart("Dominant decision reasons", new String[]{"Weighted score","Pop-risk veto","Confidence veto","Safety override","Recently visible","Importance debt","Hysteresis","Nearby","Gameplay"}, new double[]{onBands.decisionBecauseWeightedScore(), onBands.decisionBecausePopRiskVeto(), onBands.decisionBecauseConfidenceVeto(), onBands.decisionBecauseSafetyOverride(), onBands.decisionBecauseRecentlyVisible(), onBands.decisionBecauseImportanceDebt(), onBands.decisionBecauseHysteresis(), onBands.decisionBecauseNearbyOverride(), onBands.decisionBecauseGameplayOverride()}));
@@ -816,6 +851,8 @@ public final class OptiminiumBenchmark {
 				+ "\nOFF render: " + renderProfileLine(offRenderProfile, offFrames.size())
 				+ "\nON render: " + renderProfileLine(onRenderProfile, onFrames.size())
 				+ "\nRender delta: " + renderDeltaLine(offRenderProfile, onRenderProfile)
+				+ "\nOFF gl tracker: " + glTrackerLine(offGlTracker)
+				+ "\nON gl tracker: " + glTrackerLine(onGlTracker)
 				+ "\nON diagnostics: " + onDiagnostics))
 			.append("</div></details>");
 		html.append("</main></body></html>");
@@ -1167,6 +1204,83 @@ public final class OptiminiumBenchmark {
 			html.append("<div class=\"card\"><strong>No ranked fix priorities</strong><p class=\"muted\">No automatic tuning issue crossed the configured thresholds.</p></div>");
 		}
 		html.append("</div>");
+	}
+
+	private static void appendBeCacheCards(StringBuilder html, String onDiagnostics) {
+		if (onDiagnostics == null || onDiagnostics.isEmpty()) return;
+		// Parse cache stats from the embedded diagnostic line
+		int startIdx = onDiagnostics.indexOf("blockEntityRenderCache=");
+		if (startIdx < 0) return;
+		String cacheDiag = onDiagnostics.substring(startIdx);
+		// Extract values using simple parsing
+		int cacheSize = (int)tryParseDiagLong(cacheDiag, "beCacheSize=");
+		double hitRate = tryParseDiagDouble(cacheDiag, "beCacheHitRate=");
+		long hits = tryParseDiagLong(cacheDiag, "beCacheHits=");
+		long misses = tryParseDiagLong(cacheDiag, "beCacheMisses=");
+		long invalidations = tryParseDiagLong(cacheDiag, "beCacheInvalidations=");
+		double avgLifetime = tryParseDiagDouble(cacheDiag, "beAvgLifetimeFrames=");
+		double avgReuses = tryParseDiagDouble(cacheDiag, "beAvgReuses=");
+		String topInval = extractDiagValue(cacheDiag, "beTopInvalidation=");
+		int unstableTypes = (int)tryParseDiagLong(cacheDiag, "beUnstableTypes=");
+
+		card(html, "BE Cache Hit Rate", hitRate, "%", hitRate > 80.0D);
+		card(html, "BE Cache Size", cacheSize, "entries", false);
+		card(html, "BE Cache Hits", (double)hits, "hits", false);
+		card(html, "BE Cache Misses", (double)misses, "misses", misses < hits);
+		card(html, "BE Cache Invalidations", (double)invalidations, "invalidations", invalidations < misses / 2L);
+		card(html, "BE Avg Entry Lifetime", avgLifetime, "frames", avgLifetime >= 10.0D);
+		card(html, "BE Avg Reuses/Entry", avgReuses, "reuses", avgReuses >= 2.0D);
+		if (!"none".equals(topInval) && !topInval.isEmpty()) {
+			html.append("<div class=\"card\"><div class=\"muted\">Top Invalidation Reason</div><div class=\"warn\" style=\"font-size:14px;word-break:break-all\">")
+				.append(escape(topInval)).append("</div></div>");
+		}
+		card(html, "Unstable BE Types", unstableTypes, "types", unstableTypes <= 0);
+	}
+
+	private static void appendGlTrackerCards(StringBuilder html,
+			OptiminiumGlStateTracker.DiagnosticSnapshot offTracker,
+			OptiminiumGlStateTracker.DiagnosticSnapshot onTracker) {
+		card(html, "Texture bind requests", (double)onTracker.textureBindRequests(), "requests", false);
+		card(html, "Texture binds skipped", (double)onTracker.textureBindSkipped(), "skipped", onTracker.textureBindSkipped() > 0L);
+		card(html, "Texture skip rate", (double)onTracker.textureBindSkippedPercent(), "%", onTracker.textureBindSkippedPercent() > 0L);
+		card(html, "Shader bind requests", (double)onTracker.shaderBindRequests(), "requests", false);
+		card(html, "Shader binds skipped", (double)onTracker.shaderBindSkipped(), "skipped", onTracker.shaderBindSkipped() > 0L);
+		card(html, "Shader skip rate", (double)onTracker.shaderBindSkippedPercent(), "%", onTracker.shaderBindSkippedPercent() > 0L);
+		card(html, "Tracker invalidations", (double)onTracker.trackerInvalidations(), "invalidations", false);
+		// Delta vs OFF
+		long deltaTexSkip = onTracker.textureBindSkipped() - offTracker.textureBindSkipped();
+		long deltaShSkip = onTracker.shaderBindSkipped() - offTracker.shaderBindSkipped();
+		card(html, "Texture skip delta (ON-OFF)", (double)deltaTexSkip, "skipped", deltaTexSkip >= 0L);
+		card(html, "Shader skip delta (ON-OFF)", (double)deltaShSkip, "skipped", deltaShSkip >= 0L);
+	}
+
+	private static String extractDiagValue(String diag, String prefix) {
+		int start = diag.indexOf(prefix);
+		if (start < 0) return "";
+		start += prefix.length();
+		int end = diag.indexOf(',', start);
+		if (end < 0) return diag.substring(start).trim();
+		String raw = diag.substring(start, end).trim();
+		if (raw.endsWith("%")) raw = raw.substring(0, raw.length() - 1);
+		return raw;
+	}
+
+	private static long tryParseDiagLong(String diag, String prefix) {
+		String raw = extractDiagValue(diag, prefix);
+		try {
+			return Long.parseLong(raw);
+		} catch (NumberFormatException e) {
+			return 0L;
+		}
+	}
+
+	private static double tryParseDiagDouble(String diag, String prefix) {
+		String raw = extractDiagValue(diag, prefix);
+		try {
+			return Double.parseDouble(raw);
+		} catch (NumberFormatException e) {
+			return 0.0D;
+		}
 	}
 
 	private static void appendSelfValidation(StringBuilder html, double offFps, double onFps,

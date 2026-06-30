@@ -84,6 +84,10 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(visualSignificanceLabel(), button -> button.setMessage(Component.literal("Visual Significance: " + (OptiminiumSettings.toggleExperimentalTemporalSignificance() ? "ON" : "OFF"))))
 			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
+		this.addRenderableWidget(Button.builder(beRenderCacheLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCache(); button.setMessage(beRenderCacheLabel()); })
+			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 182, OptiminiumSettings::getBlockEntityRenderCacheMaxEntries, OptiminiumSettings::setBlockEntityRenderCacheMaxEntries, 256, 65536, "BE Cache Max Entries"));
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -92,17 +96,20 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(new SettingsSlider(x, y + 26, OptiminiumSettings::getParticleRenderDistanceBlocks, OptiminiumSettings::setParticleRenderDistanceBlocks, 16, 160, "Particle Distance"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getMaxParticlesPerFrame, OptiminiumSettings::setMaxParticlesPerFrame, 16, 512, "Particles/Frame"));
 		this.addRenderableWidget(Button.builder(blockEntityCullingLabel(), button -> button.setMessage(Component.literal("Block Entity Culling: " + (OptiminiumSettings.toggleBlockEntityCulling() ? "ON" : "OFF"))))
-			.bounds(x, y + 86, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 78, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 112, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
 		this.addRenderableWidget(Button.builder(denseSceneAdaptiveLabel(), button -> button.setMessage(denseSceneAdaptiveLabel(OptiminiumSettings.cycleDenseSceneAdaptiveMode())))
-			.bounds(x, y + 138, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(beRenderCacheDebugLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCacheDebug(); button.setMessage(beRenderCacheDebugLabel()); })
+			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
-			.bounds(x, y + 172, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
-			.bounds(x, y + 198, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 208, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
@@ -151,6 +158,16 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component blockEntityCullingLabel() {
 		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
+	}
+
+	private static Component beRenderCacheLabel() {
+		boolean enabled = OptiminiumSettings.isBlockEntityRenderCache();
+		return Component.literal("BE Render Cache: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component beRenderCacheDebugLabel() {
+		boolean enabled = OptiminiumSettings.isBlockEntityRenderCacheDebug();
+		return Component.literal("BE Cache Debug (F9): " + (enabled ? "ON" : "OFF"));
 	}
 
 	private static Component visualSignificanceLabel() {

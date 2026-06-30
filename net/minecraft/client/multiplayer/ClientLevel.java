@@ -89,6 +89,7 @@ import net.minecraft.world.ticks.BlackholeTickAccess;
 import net.minecraft.world.ticks.LevelTickAccess;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import net.optiminium.client.OptiminiumBlockEntityRenderCache;
 import org.slf4j.Logger;
 
 @OnlyIn(Dist.CLIENT)
@@ -318,6 +319,7 @@ public class ClientLevel extends Level {
     }
 
     public void unload(LevelChunk p_104666_) {
+        OptiminiumBlockEntityRenderCache.invalidateChunk(this.dimension(), p_104666_.getPos().x, p_104666_.getPos().z);
         p_104666_.clearAllBlockEntities();
         this.chunkSource.getLightEngine().setLightEnabled(p_104666_.getPos(), false);
         this.entityStorage.stopTicking(p_104666_.getPos());

@@ -110,6 +110,7 @@ public final class OptiminiumGpuOptimizer {
 	public static void onFrameStart() {
 		finishProfileFrame();
 		flushMetrics();
+		OptiminiumBlockEntityRenderCache.onFrameStart();
 		particlesThisFrame = 0;
 		lowPriorityParticlesThisFrame = 0;
 		distantBlockEntityRendersThisFrame = 0;
@@ -298,7 +299,7 @@ public final class OptiminiumGpuOptimizer {
 			denseParticleBudgetFrames,
 			denseBlockEntityBudgetFrames,
 			denseRebuildBudgetFrames,
-			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()),
+			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()) + ", " + OptiminiumBlockEntityRenderCache.diagnosticLine(),
 			lastAdaptiveReason
 		);
 	}

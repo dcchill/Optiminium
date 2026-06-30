@@ -22,6 +22,9 @@ public final class OptiminiumSettings {
 	private static volatile boolean blockEntityCulling = true;
 	private static volatile int blockEntityDistanceScalePercent = 100;
 	private static volatile int denseBlockEntityThreshold = 512;
+	private static volatile boolean blockEntityRenderCache = true;
+	private static volatile int blockEntityRenderCacheMaxEntries = 4096;
+	private static volatile boolean blockEntityRenderCacheDebug = false;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean experimentalTemporalSignificance = false;
 
@@ -199,6 +202,45 @@ public final class OptiminiumSettings {
 		save();
 	}
 
+	public static boolean isBlockEntityRenderCache() {
+		return blockEntityRenderCache;
+	}
+
+	public static boolean toggleBlockEntityRenderCache() {
+		blockEntityRenderCache = !blockEntityRenderCache;
+		save();
+		return blockEntityRenderCache;
+	}
+
+	public static void setBlockEntityRenderCache(boolean value) {
+		blockEntityRenderCache = value;
+		save();
+	}
+
+	public static int getBlockEntityRenderCacheMaxEntries() {
+		return blockEntityRenderCacheMaxEntries;
+	}
+
+	public static void setBlockEntityRenderCacheMaxEntries(int maxEntries) {
+		blockEntityRenderCacheMaxEntries = clamp(maxEntries, 256, 65536);
+		save();
+	}
+
+	public static boolean isBlockEntityRenderCacheDebug() {
+		return blockEntityRenderCacheDebug;
+	}
+
+	public static boolean toggleBlockEntityRenderCacheDebug() {
+		blockEntityRenderCacheDebug = !blockEntityRenderCacheDebug;
+		save();
+		return blockEntityRenderCacheDebug;
+	}
+
+	public static void setBlockEntityRenderCacheDebug(boolean value) {
+		blockEntityRenderCacheDebug = value;
+		save();
+	}
+
 	public static DenseSceneAdaptiveMode getDenseSceneAdaptiveMode() {
 		return denseSceneAdaptiveMode;
 	}
@@ -266,6 +308,9 @@ public final class OptiminiumSettings {
 			blockEntityCulling = Boolean.parseBoolean(properties.getProperty("blockEntityCulling", Boolean.toString(blockEntityCulling)));
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
+			blockEntityRenderCache = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache)));
+			blockEntityRenderCacheMaxEntries = clamp(Integer.parseInt(properties.getProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries))), 256, 65536);
+			blockEntityRenderCacheDebug = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug)));
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
 			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance)));
 		} catch (IOException | NumberFormatException ignored) {
@@ -285,6 +330,9 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityCulling", Boolean.toString(blockEntityCulling));
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
+		properties.setProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache));
+		properties.setProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries));
+		properties.setProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
 		properties.setProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance));
 		try {

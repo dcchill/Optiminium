@@ -16,6 +16,12 @@ public final class OptiminiumKeyBindings {
 		GLFW.GLFW_KEY_F8,
 		"key.categories.optiminium"
 	);
+	static final KeyMapping TOGGLE_BLOCK_ENTITY_CACHE_DEBUG = new KeyMapping(
+		"key.optiminium.block_entity_cache_debug",
+		InputConstants.Type.KEYSYM,
+		GLFW.GLFW_KEY_F9,
+		"key.categories.optiminium"
+	);
 
 	private OptiminiumKeyBindings() {
 	}
@@ -23,5 +29,6 @@ public final class OptiminiumKeyBindings {
 	@SubscribeEvent
 	public static void registerKeyMappings(RegisterKeyMappingsEvent event) {
 		event.register(TOGGLE_OPTIMINIUM);
+		event.register(TOGGLE_BLOCK_ENTITY_CACHE_DEBUG);
 	}
 }

@@ -135,6 +135,8 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import net.optiminium.client.OptiminiumBlockEntityRenderCache;
+import net.optiminium.client.OptiminiumGpuOptimizer;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 import org.joml.Quaternionf;
@@ -493,6 +495,7 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
 
     @Override
     public void onResourceManagerReload(ResourceManager p_109513_) {
+        OptiminiumBlockEntityRenderCache.clear();
         this.initOutline();
         if (Minecraft.useShaderTransparency()) {
             this.initTransparency();
@@ -734,6 +737,7 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
             synchronized (this.globalBlockEntities) {
                 this.globalBlockEntities.clear();
             }
+            OptiminiumBlockEntityRenderCache.clear();
 
             this.viewArea = new ViewArea(this.sectionRenderDispatcher, this.level, this.minecraft.options.getEffectiveRenderDistance(), this);
             this.sectionOcclusionGraph.waitAndReset(this.viewArea);
@@ -1044,12 +1048,15 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
         multibuffersource$buffersource.endBatch(RenderType.entitySmoothCutout(TextureAtlas.LOCATION_BLOCKS));
         net.neoforged.neoforge.client.ClientHooks.dispatchRenderStage(net.neoforged.neoforge.client.event.RenderLevelStageEvent.Stage.AFTER_ENTITIES, this, posestack, p_254120_, p_323920_, this.ticks, p_109604_, frustum);
         profilerfiller.popPush("blockentities");
+        int optiminium$blockEntityViewDistance = this.minecraft.options.getEffectiveRenderDistance() * 16;
 
         for (SectionRenderDispatcher.RenderSection sectionrenderdispatcher$rendersection : this.visibleSections) {
             List<BlockEntity> list = sectionrenderdispatcher$rendersection.getCompiled().getRenderableBlockEntities();
             if (!list.isEmpty()) {
                 for (BlockEntity blockentity1 : list) {
                     if (!net.neoforged.neoforge.client.ClientHooks.isBlockEntityRendererVisible(blockEntityRenderDispatcher, blockentity1, frustum)) continue;
+                    if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockentity1, optiminium$blockEntityViewDistance)) continue;
+                    OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
                     BlockPos blockpos4 = blockentity1.getBlockPos();
                     MultiBufferSource multibuffersource1 = multibuffersource$buffersource;
                     posestack.pushPose();
@@ -1081,6 +1088,8 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
         synchronized (this.globalBlockEntities) {
             for (BlockEntity blockentity : this.globalBlockEntities) {
                 if (!net.neoforged.neoforge.client.ClientHooks.isBlockEntityRendererVisible(blockEntityRenderDispatcher, blockentity, frustum)) continue;
+                if (!OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockentity, optiminium$blockEntityViewDistance)) continue;
+                OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
                 BlockPos blockpos3 = blockentity.getBlockPos();
                 posestack.pushPose();
                 posestack.translate((double)blockpos3.getX() - d0, (double)blockpos3.getY() - d1, (double)blockpos3.getZ() - d2);
@@ -2487,6 +2496,9 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
     }
 
     public void blockChanged(BlockGetter p_109545_, BlockPos p_109546_, BlockState p_109547_, BlockState p_109548_, int p_109549_) {
+        if (this.level != null) {
+            OptiminiumBlockEntityRenderCache.invalidatePosition(this.level.dimension(), p_109546_);
+        }
         this.setBlockDirty(p_109546_, (p_109549_ & 8) != 0);
     }
 
@@ -2511,6 +2523,9 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
     }
 
     public void setBlockDirty(BlockPos p_109722_, BlockState p_109723_, BlockState p_109724_) {
+        if (this.level != null) {
+            OptiminiumBlockEntityRenderCache.invalidatePosition(this.level.dimension(), p_109722_);
+        }
         if (this.minecraft.getModelManager().requiresRender(p_109723_, p_109724_)) {
             this.setBlocksDirty(p_109722_.getX(), p_109722_.getY(), p_109722_.getZ(), p_109722_.getX(), p_109722_.getY(), p_109722_.getZ());
         }
@@ -2531,6 +2546,9 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
     }
 
     private void setSectionDirty(int p_109502_, int p_109503_, int p_109504_, boolean p_109505_) {
+        if (this.level != null) {
+            OptiminiumBlockEntityRenderCache.invalidateSection(this.level.dimension(), p_109502_, p_109503_, p_109504_);
+        }
         this.viewArea.setDirty(p_109502_, p_109503_, p_109504_, p_109505_);
     }
 
@@ -2690,6 +2708,7 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
     }
 
     public void clear() {
+        OptiminiumBlockEntityRenderCache.clear();
     }
 
     public void globalLevelEvent(int p_109507_, BlockPos p_109508_, int p_109509_) {
@@ -3553,6 +3572,11 @@ public class LevelRenderer implements ResourceManagerReloadListener, AutoCloseab
         synchronized (this.globalBlockEntities) {
             this.globalBlockEntities.removeAll(p_109763_);
             this.globalBlockEntities.addAll(p_109764_);
+        }
+        if (this.level != null) {
+            for (BlockEntity blockEntity : p_109763_) {
+                OptiminiumBlockEntityRenderCache.invalidatePosition(this.level.dimension(), blockEntity.getBlockPos());
+            }
         }
     }
 

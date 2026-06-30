@@ -21,6 +21,7 @@ public final class OptiminiumFpsOptimizer {
 
 	@SubscribeEvent
 	public static void onFrameStart(RenderFrameEvent.Pre event) {
+		OptiminiumGlStateTracker.onFrameStart();
 		OptiminiumGpuOptimizer.onFrameStart();
 		OptiminiumRenderProfiler.onFrameStart();
 		OptiminiumVisualSignificance.onFrameStart();

@@ -4,6 +4,7 @@
   "package": "net.optiminium.mixin",
   "mixins": [],
   "client": [
+    "BlockEntityRenderDispatcherMixin",
     "GlStateManagerMixin",
     "LevelRendererMixin",
     "ParticleEngineMixin",

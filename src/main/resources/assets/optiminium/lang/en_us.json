@@ -1,1 +1,5 @@
-{}
+{
+  "key.categories.optiminium": "Optiminium",
+  "key.optiminium.toggle": "Toggle Optiminium",
+  "key.optiminium.block_entity_cache_debug": "Toggle Block Entity Cache Debug"
+}

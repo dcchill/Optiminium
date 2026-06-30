@@ -25,6 +25,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.core.registries.BuiltInRegistries;
 
+import net.optiminium.client.OptiminiumGlStateTracker;
+
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Map;
 import java.util.List;
@@ -39,6 +41,7 @@ public class OptiminiumMod {
 
 	public OptiminiumMod(IEventBus modEventBus) {
 		// Start of user code block mod constructor
+		OptiminiumGlStateTracker.init();
 		// End of user code block mod constructor
 		NeoForge.EVENT_BUS.register(this);
 		modEventBus.addListener(this::registerNetworking);
