@@ -1,6 +1,7 @@
 package net.optiminium.client;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleType;
 import net.minecraft.core.particles.ParticleTypes;
@@ -55,6 +56,8 @@ public final class OptiminiumGpuOptimizer {
 	private static boolean blockEntityCulling;
 	private static boolean particleLimiter;
 	private static boolean hasCamera;
+	private static boolean visualSignificanceEnabled;
+	private static boolean visualSignificanceParticleRecording;
 	private static Entity cameraEntity;
 	private static double cameraX;
 	private static double cameraY;
@@ -130,6 +133,8 @@ public final class OptiminiumGpuOptimizer {
 		updateAdaptiveScales(enabled);
 		blockEntityCulling = enabled && OptiminiumSettings.isBlockEntityCulling();
 		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
+		visualSignificanceEnabled = OptiminiumVisualSignificance.isEnabled();
+		visualSignificanceParticleRecording = OptiminiumVisualSignificance.isParticleRecordingEnabled();
 
 		double particleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * particleWorkScale);
 		double lowPriorityDistance = Math.max(8.0D, particleDistance * 0.5D);
@@ -159,7 +164,9 @@ public final class OptiminiumGpuOptimizer {
 		try {
 			ParticleType<?> type = options.getType();
 			if (!particleLimiter || !hasCamera || isImportantParticle(type)) {
-				OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
+				if (visualSignificanceParticleRecording) {
+					OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
+				}
 				return false;
 			}
 
@@ -171,7 +178,9 @@ public final class OptiminiumGpuOptimizer {
 				|| lowPriority && lowPriorityParticlesThisFrame >= maxLowPriorityParticlesPerFrame;
 			if (skip) {
 				recordHiddenParticle();
-				OptiminiumVisualSignificance.recordParticle(options, x, y, z, true);
+				if (visualSignificanceParticleRecording) {
+					OptiminiumVisualSignificance.recordParticle(options, x, y, z, true);
+				}
 				return true;
 			}
 
@@ -179,7 +188,9 @@ public final class OptiminiumGpuOptimizer {
 			if (lowPriority) {
 				lowPriorityParticlesThisFrame++;
 			}
-			OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
+			if (visualSignificanceParticleRecording) {
+				OptiminiumVisualSignificance.recordParticle(options, x, y, z, false);
+			}
 			return false;
 		} finally {
 			recordProfileNanos(PROFILE_PARTICLE_CULLING, profileStart);
@@ -208,18 +219,27 @@ public final class OptiminiumGpuOptimizer {
 			if (!blockEntityCulling || !hasCamera) {
 				return true;
 			}
+			BlockPos pos = blockEntity.getBlockPos();
+			long blockEntityKey = pos.asLong();
+			double blockEntityX = pos.getX() + 0.5D;
+			double blockEntityY = pos.getY() + 0.5D;
+			double blockEntityZ = pos.getZ() + 0.5D;
+			double dx = blockEntityX - cameraX;
+			double dy = blockEntityY - cameraY;
+			double dz = blockEntityZ - cameraZ;
+			double distanceSqr = dx * dx + dy * dy + dz * dz;
 			// Protected (nearby/important/looked-at) entities bypass distance budget culling
-			if (OptiminiumVisualSignificance.shouldProtectBlockEntity(blockEntity)) {
+			if (visualSignificanceEnabled
+					&& OptiminiumVisualSignificance.shouldProtectBlockEntityActive(blockEntity, blockEntityKey, dx, dy, dz, distanceSqr)) {
 				return true;
 			}
 			// Visual Significance can CULL low-importance block entities
 			// while still keeping them in VS memory for classification tracking.
-			if (OptiminiumVisualSignificance.isEnabled() && !OptiminiumVisualSignificance.shouldRenderBySignificance(blockEntity)) {
+			if (visualSignificanceEnabled && !OptiminiumVisualSignificance.shouldRenderBySignificanceActive(blockEntityKey)) {
 				recordCulledBlockEntityRender();
 				return false;
 			}
-			int scaledViewDistance = scaledBlockEntityViewDistance(viewDistance);
-			double distanceSqr = distanceToCameraSqr(blockEntity.getBlockPos().getX() + 0.5D, blockEntity.getBlockPos().getY() + 0.5D, blockEntity.getBlockPos().getZ() + 0.5D);
+			int scaledViewDistance = Math.max(1, Math.round(viewDistance * blockEntityDistanceScale));
 			if (distanceSqr > scaledViewDistance * scaledViewDistance) {
 				recordCulledBlockEntityRender();
 				return false;
@@ -459,7 +479,7 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	private static boolean shouldDeferBlockEntityRender(BlockEntity blockEntity, double distanceSqr) {
-		if (!OptiminiumSettings.isGpuOptimizer() || blockEntityWorkScale > 0.90D || distanceSqr <= BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR || isPriorityBlockEntity(blockEntity)) {
+		if (blockEntityWorkScale > 0.90D || distanceSqr <= BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR || isPriorityBlockEntity(blockEntity)) {
 			return false;
 		}
 		int budget = maxDistantBlockEntityRendersPerFrame();

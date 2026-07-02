@@ -144,7 +144,8 @@ public final class OptiminiumGlStateTracker {
 
 		textureBindRequests.increment();
 		textureBindActual.increment();
-		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY) {
+		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY
+				|| mode == OptiminiumSettings.OpenGlOptimizationMode.MEASURE_ONLY) {
 			return true;
 		}
 
@@ -178,6 +179,7 @@ public final class OptiminiumGlStateTracker {
 			textureBindActual.decrement();
 			return false;
 		}
+		
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.SAFE_OPTIMIZE && sodiumConservative && conservativeSame) {
 			noSkipCompatibilityMode.increment();
 		}
@@ -200,7 +202,8 @@ public final class OptiminiumGlStateTracker {
 
 		shaderBindRequests.increment();
 		shaderBindActual.increment();
-		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY) {
+		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY
+				|| mode == OptiminiumSettings.OpenGlOptimizationMode.MEASURE_ONLY) {
 			return true;
 		}
 

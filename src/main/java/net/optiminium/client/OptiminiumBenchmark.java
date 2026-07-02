@@ -99,7 +99,7 @@ public final class OptiminiumBenchmark {
 		previousEnabled = OptiminiumSettings.isEnabled();
 		previousExperimentalTemporalSignificance = OptiminiumSettings.isExperimentalTemporalSignificance();
 		if (forceSignificanceMetrics) {
-			// Force-enable significance metrics for the normal benchmark.
+			// Force-enable Visual Significance for the ON phase of the normal benchmark.
 			OptiminiumSettings.setExperimentalTemporalSignificance(true);
 		}
 		phase = Phase.OFF;
@@ -133,6 +133,7 @@ public final class OptiminiumBenchmark {
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
 		OptiminiumGpuOptimizer.setProfilingEnabled(true);
 		OptiminiumRenderProfiler.setEnabled(true);
+		OptiminiumVisualSignificance.setDetailedStatisticsEnabled(true);
 		OptiminiumSettings.setEnabled(false);
 		// Capture significance start snapshot after reset — resets accumulators
 		// so the OFF phase significance deltas are measured from a clean baseline.
@@ -220,6 +221,7 @@ public final class OptiminiumBenchmark {
 		OptiminiumSettings.setEnabled(previousEnabled);
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
+		OptiminiumVisualSignificance.setDetailedStatisticsEnabled(false);
 		if (fullBenchmarkSettings != null) {
 			fullBenchmarkResults.add(fullBenchmarkResult(activeBenchmarkName, onMetrics, onProfile, onScene, onRenderProfile, onDiagnostics));
 		}
@@ -1378,7 +1380,7 @@ public final class OptiminiumBenchmark {
 		html.append("<h2>Self-Validation</h2><div class=\"grid\">");
 		int passes = 0;
 		int failures = 0;
-		// 1. Significance engine was active during both phases
+		// 1. Significance engine was active during the ON phase
 		boolean significanceActive = onBands.full() + onBands.throttled() + onBands.reused()
 			+ onBands.proxy() + onBands.culled() > 0L;
 		html.append("<div class=\"card\"><strong>Significance engine active</strong><br><span class=\"")
@@ -1390,13 +1392,13 @@ public final class OptiminiumBenchmark {
 			.append(")</p></div>");
 		if (significanceActive) passes++; else failures++;
 
-		// 2. Significance delta has at least some band data in both phases
+		// 2. OFF phase should not run Visual Significance work.
 		boolean offHasBandData = offBands.full() + offBands.throttled() + offBands.reused()
 			+ offBands.proxy() + offBands.culled() > 0L;
-		html.append("<div class=\"card\"><strong>OFF phase band data present</strong><br><span class=\"")
-			.append(offHasBandData ? "good\">PASS" : "warn\">FAIL (significance not recording during OFF)")
+		html.append("<div class=\"card\"><strong>OFF phase significance inactive</strong><br><span class=\"")
+			.append(!offHasBandData ? "good\">PASS" : "warn\">WARN (significance recorded during OFF)")
 			.append("</span></div>");
-		if (offHasBandData) passes++; else failures++;
+		if (!offHasBandData) passes++; else failures++;
 
 		// 3. Camera stability check
 		html.append("<div class=\"card\"><strong>Camera stability</strong><br><span class=\"")

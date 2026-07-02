@@ -30,6 +30,7 @@ public final class OptiminiumBlockEntityRenderCache {
 	// --- Cache data structures ---
 	private static final LinkedHashMap<Key, Entry> CACHE = new LinkedHashMap<>(256, 0.75F, true);
 	private static final Object CACHE_LOCK = new Object();
+	private static final ThreadLocal<Key> PROBE_KEY = ThreadLocal.withInitial(Key::new);
 
 	// --- Frame counter (incremented by onFrameStart) ---
 	private static long currentFrame;
@@ -170,7 +171,8 @@ public final class OptiminiumBlockEntityRenderCache {
 
 		lookupAttempts.increment();
 		BlockState state = blockEntity.getBlockState();
-		Key key = new Key(
+		Key probe = PROBE_KEY.get();
+		probe.set(
 			blockEntity.getLevel().dimension(),
 			blockEntity.getBlockPos().asLong(),
 			type,
@@ -179,7 +181,7 @@ public final class OptiminiumBlockEntityRenderCache {
 		);
 
 		synchronized (CACHE_LOCK) {
-			Entry entry = CACHE.get(key);
+			Entry entry = CACHE.get(probe);
 			if (entry != null && entry.matches(blockEntity, state)) {
 				// Cache HIT — return cached light without computing it
 				hits.increment();
@@ -201,7 +203,7 @@ public final class OptiminiumBlockEntityRenderCache {
 		rebuildsThisFrame++;
 
 		Entry entry = new Entry(blockEntity, state, packedLight, currentFrame);
-		put(key, entry, type);
+		put(probe.copy(), entry, type);
 
 		TypeStats ts = getOrCreateTypeStats(type);
 		ts.misses.increment();
@@ -622,8 +624,60 @@ public final class OptiminiumBlockEntityRenderCache {
 
 	// --- Key (without packedLight/packedOverlay) ---
 
-	private record Key(ResourceKey<Level> dimension, long pos, BlockEntityType<?> type,
+	private static final class Key {
+		ResourceKey<Level> dimension;
+		long pos;
+		BlockEntityType<?> type;
+		int stateId;
+		Class<?> rendererClass;
+		int hash;
+
+		Key() {
+		}
+
+		Key(ResourceKey<Level> dimension, long pos, BlockEntityType<?> type,
 			int stateId, Class<?> rendererClass) {
+			set(dimension, pos, type, stateId, rendererClass);
+		}
+
+		void set(ResourceKey<Level> dimension, long pos, BlockEntityType<?> type,
+			int stateId, Class<?> rendererClass) {
+			this.dimension = dimension;
+			this.pos = pos;
+			this.type = type;
+			this.stateId = stateId;
+			this.rendererClass = rendererClass;
+			this.hash = computeHashCode();
+		}
+
+		Key copy() {
+			return new Key(dimension, pos, type, stateId, rendererClass);
+		}
+
+		private int computeHashCode() {
+			int result = dimension.hashCode();
+			result = 31 * result + Long.hashCode(pos);
+			result = 31 * result + type.hashCode();
+			result = 31 * result + stateId;
+			result = 31 * result + rendererClass.hashCode();
+			return result;
+		}
+
+		@Override
+		public int hashCode() {
+			return hash;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) return true;
+			if (!(obj instanceof Key other)) return false;
+			return pos == other.pos
+				&& dimension.equals(other.dimension)
+				&& type == other.type
+				&& stateId == other.stateId
+				&& rendererClass == other.rendererClass;
+		}
 	}
 
 	// --- Entry (mutable for reuse tracking) ---
