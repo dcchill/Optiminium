@@ -362,6 +362,18 @@ public final class OptiminiumVisualSignificance {
 	private static long scoreRecomputesDeferred;
 	private static long scoreRecomputesDeferredThisFrame;
 	private static long periodicRechecks;
+	private static long periodicScheduled;
+	private static long periodicTriggered;
+	private static long periodicMerged;
+	private static long periodicDelayed;
+	private static long periodicCancelled;
+	private static int evaluationTimingCounter;
+	private static long periodicEvaluationSampleNanos;
+	private static long periodicEvaluationSamples;
+	private static long debtEvaluationSampleNanos;
+	private static long debtEvaluationSamples;
+	private static long cacheFastPathSampleNanos;
+	private static long cacheFastPathSamples;
 	private static int periodicRechecksThisFrame;
 	private static long accumulatedTicksInBand;
 	private static long ticksInBandSamples;
@@ -400,6 +412,22 @@ public final class OptiminiumVisualSignificance {
 	private static long decisionBecauseHysteresis;
 	private static long decisionBecauseNearbyOverride;
 	private static long decisionBecauseGameplayOverride;
+
+	// Event-driven importance debt. Scheduling state lives in the existing per-object
+	// memory, so the hot path performs no queue-node allocations or duplicate enqueues.
+	private static long importanceDebtScheduled;
+	private static long importanceDebtTriggered;
+	private static long importanceDebtCancelled;
+	private static long importanceDebtMerged;
+	private static long scheduledEvaluations;
+	private static long eventDrivenEvaluations;
+	private static long evaluationDelayFrames;
+	private static long maxEvaluationDelayFrames;
+	private static long schedulerSizeSamples;
+	private static long accumulatedSchedulerSize;
+	private static long peakSchedulerSize;
+	private static long accumulatedFramesUntilPromotion;
+	private static long objectsAwaitingPromotion;
 
 	// ---- CPU timing ----
 	private static long significanceNanos;
@@ -496,6 +524,9 @@ public final class OptiminiumVisualSignificance {
 			captureFrameBurstSnapshot();
 		}
 		frameIndex++;
+		schedulerSizeSamples++;
+		accumulatedSchedulerSize += objectsAwaitingPromotion;
+		peakSchedulerSize = Math.max(peakSchedulerSize, objectsAwaitingPromotion);
 		recordInteractionTarget();
 		captureCrosshairTarget();
 		accumulateTotals();
@@ -787,11 +818,14 @@ public final class OptiminiumVisualSignificance {
 		if (interactedThisFrame) reasons |= DIRTY_INTERACTION;
 		if (mem.lastClassification == CULLED && inFront
 				&& frameIndex - mem.lastVisibleFrame <= BLOCK_ENTITY_RECENTLY_VISIBLE_GRACE_FRAMES) {
-			reasons |= DIRTY_RECENT_VISIBILITY;
+				reasons |= DIRTY_RECENT_VISIBILITY;
 		}
-		if (mem.importanceDebt >= IMPORTANCE_DEBT_LIMIT * 0.80D) reasons |= DIRTY_IMPORTANCE_DEBT;
-		if (!firstSeen && periodicRecheckDue(mem.lastClassification, distanceSqr, mem.lastReevaluateFrame,
-				(int)(key ^ (key >>> 32)))) {
+		if (mem.importanceDebtDueFrame > 0L && frameIndex >= mem.importanceDebtDueFrame) {
+			reasons |= DIRTY_IMPORTANCE_DEBT;
+		}
+		int periodicSalt = (int)(key ^ (key >>> 32));
+		ensurePeriodicScheduled(mem, mem.lastClassification, distanceSqr, periodicSalt);
+		if (!firstSeen && mem.nextPeriodicEvaluationFrame > 0L && frameIndex >= mem.nextPeriodicEvaluationFrame) {
 			reasons |= DIRTY_PERIODIC_RECHECK;
 		}
 		return reasons;
@@ -825,18 +859,18 @@ public final class OptiminiumVisualSignificance {
 				&& frameIndex - mem.lastVisibleFrame <= RECENTLY_VISIBLE_GRACE_FRAMES) {
 			reasons |= DIRTY_RECENT_VISIBILITY;
 		}
-		if (mem.importanceDebt >= IMPORTANCE_DEBT_LIMIT * 0.80D) reasons |= DIRTY_IMPORTANCE_DEBT;
-		if (!firstSeen && periodicRecheckDue(mem.lastClassification, distanceSqr, mem.lastReevaluateFrame, entityId)) {
+		if (mem.importanceDebtDueFrame > 0L && frameIndex >= mem.importanceDebtDueFrame) {
+			reasons |= DIRTY_IMPORTANCE_DEBT;
+		}
+		ensurePeriodicScheduled(mem, mem.lastClassification, distanceSqr, entityId);
+		if (!firstSeen && mem.nextPeriodicEvaluationFrame > 0L && frameIndex >= mem.nextPeriodicEvaluationFrame) {
 			reasons |= DIRTY_PERIODIC_RECHECK;
 		}
 		return reasons;
 	}
 
-	private static boolean periodicRecheckDue(byte band, double distanceSqr, long lastReevaluateFrame, int salt) {
-		if (lastReevaluateFrame <= 0L) return true;
-		int interval = periodicRecheckInterval(band, distanceSqr);
-		if (frameIndex - lastReevaluateFrame < interval) return false;
-		return Math.floorMod((int)frameIndex + salt, interval) == 0;
+	static long nextPeriodicEvaluationFrame(long lastEvaluationFrame, int interval, int salt) {
+		return OptiminiumEvaluationScheduler.nextPeriodicEvaluationFrame(lastEvaluationFrame, interval, salt);
 	}
 
 	private static int periodicRecheckInterval(byte band, double distanceSqr) {
@@ -868,16 +902,81 @@ public final class OptiminiumVisualSignificance {
 		}
 	}
 
+	private static void ensurePeriodicScheduled(ObjectMemory mem, byte band, double distanceSqr, int salt) {
+		if (mem.nextPeriodicEvaluationFrame != 0L || mem.lastReevaluateFrame <= 0L) return;
+		mem.nextPeriodicEvaluationFrame = nextPeriodicEvaluationFrame(mem.lastReevaluateFrame,
+			periodicRecheckInterval(band, distanceSqr), salt);
+		periodicScheduled++;
+	}
+
+	private static void ensurePeriodicScheduled(EntityMemory mem, byte band, double distanceSqr, int salt) {
+		if (mem.nextPeriodicEvaluationFrame != 0L || mem.lastReevaluateFrame <= 0L) return;
+		mem.nextPeriodicEvaluationFrame = nextPeriodicEvaluationFrame(mem.lastReevaluateFrame,
+			periodicRecheckInterval(band, distanceSqr), salt);
+		periodicScheduled++;
+	}
+
+	private static void consumePeriodicEvaluation(ObjectMemory mem, int dirtyReasons) {
+		if (mem.nextPeriodicEvaluationFrame == 0L) return;
+		if ((dirtyReasons & DIRTY_PERIODIC_RECHECK) != 0) {
+			periodicTriggered++;
+			if (frameIndex > mem.nextPeriodicEvaluationFrame) periodicDelayed += frameIndex - mem.nextPeriodicEvaluationFrame;
+		} else periodicMerged++;
+		mem.nextPeriodicEvaluationFrame = 0L;
+	}
+
+	private static void consumePeriodicEvaluation(EntityMemory mem, int dirtyReasons) {
+		if (mem.nextPeriodicEvaluationFrame == 0L) return;
+		if ((dirtyReasons & DIRTY_PERIODIC_RECHECK) != 0) {
+			periodicTriggered++;
+			if (frameIndex > mem.nextPeriodicEvaluationFrame) periodicDelayed += frameIndex - mem.nextPeriodicEvaluationFrame;
+		} else periodicMerged++;
+		mem.nextPeriodicEvaluationFrame = 0L;
+	}
+
+	private static void consumeScheduledEvaluation(ObjectMemory mem, int dirtyReasons) {
+		if (mem.importanceDebtDueFrame <= 0L) return;
+		if ((dirtyReasons & DIRTY_IMPORTANCE_DEBT) != 0) {
+			long delay = Math.max(0L, frameIndex - mem.importanceDebtDueFrame);
+			importanceDebtTriggered++;
+			scheduledEvaluations++;
+			evaluationDelayFrames += delay;
+			maxEvaluationDelayFrames = Math.max(maxEvaluationDelayFrames, delay);
+		} else {
+			importanceDebtMerged++;
+			eventDrivenEvaluations++;
+		}
+		mem.importanceDebtDueFrame = 0L;
+		objectsAwaitingPromotion = Math.max(0L, objectsAwaitingPromotion - 1L);
+	}
+
+	private static void consumeScheduledEvaluation(EntityMemory mem, int dirtyReasons) {
+		if (mem.importanceDebtDueFrame <= 0L) return;
+		if ((dirtyReasons & DIRTY_IMPORTANCE_DEBT) != 0) {
+			long delay = Math.max(0L, frameIndex - mem.importanceDebtDueFrame);
+			importanceDebtTriggered++;
+			scheduledEvaluations++;
+			evaluationDelayFrames += delay;
+			maxEvaluationDelayFrames = Math.max(maxEvaluationDelayFrames, delay);
+		} else {
+			importanceDebtMerged++;
+			eventDrivenEvaluations++;
+		}
+		mem.importanceDebtDueFrame = 0L;
+		objectsAwaitingPromotion = Math.max(0L, objectsAwaitingPromotion - 1L);
+	}
+
 	private static void reuseCachedBlockDecision(ObjectMemory mem, long key, double distanceSqr, double renderCost,
 			boolean important, boolean recent, int repeatCount, boolean pressured) {
+		long timingStart = (++evaluationTimingCounter & 63) == 0 ? System.nanoTime() : 0L;
 		scoreCacheHits++;
 		byte classification = mem.lastClassification == UNKNOWN ? THROTTLED : mem.lastClassification;
 		mem.cachedCandidateBand = classification;
 		beClassifications.put(key, classification);
 		incrementStableBandFrames(mem);
+		updateImportanceDebt(mem, classification);
 		// Fast path for cache hits: avoid diagnostic/sample math unless detailed mode enabled.
 		if (isDetailedStatisticsEnabled()) {
-			updateImportanceDebt(mem, classification);
 			sampleTicksInBand(mem.stableBandFrames);
 			sampleDiagnostics(mem.continuousScore, mem.confidence, renderCost, distanceSqr,
 				mem.importanceDebt, mem.popRisk, mem.visualImportance, mem.gameplayImportance,
@@ -889,18 +988,20 @@ public final class OptiminiumVisualSignificance {
 			if (classification != CULLED) mem.lastVisibleFrame = frameIndex;
 			incrementCounterFast(classification);
 		}
+		if (timingStart != 0L) { cacheFastPathSampleNanos += System.nanoTime() - timingStart; cacheFastPathSamples++; }
 	}
 
 	private static void reuseCachedEntityDecision(Entity entity, boolean culled, EntityMemory mem, double distanceSqr,
 			boolean inFront, boolean important, boolean pressured, double renderCost, EntityCategory category) {
+		long timingStart = (++evaluationTimingCounter & 63) == 0 ? System.nanoTime() : 0L;
 		scoreCacheHits++;
 		byte classification = mem.lastClassification == UNKNOWN ? THROTTLED : mem.lastClassification;
 		mem.cachedCandidateBand = classification;
 		incrementStableBandFrames(mem);
 		mem.lastCulled = classification == CULLED;
+		updateImportanceDebt(mem, classification);
 		// Fast path: avoid diagnostics and importance updates in normal mode to keep cache hits cheap.
 		if (isDetailedStatisticsEnabled()) {
-			updateImportanceDebt(mem, classification);
 			if (!culled && classification != CULLED && !(entity instanceof LivingEntity)) {
 				mem.lastVisibleFrame = frameIndex;
 			}
@@ -915,6 +1016,7 @@ public final class OptiminiumVisualSignificance {
 			if (!culled && classification != CULLED && !(entity instanceof LivingEntity)) mem.lastVisibleFrame = frameIndex;
 			incrementEntityCounterFast(classification);
 		}
+		if (timingStart != 0L) { cacheFastPathSampleNanos += System.nanoTime() - timingStart; cacheFastPathSamples++; }
 	}
 
 	private static byte applyTransitionBudget(byte previous, byte desired, boolean urgentPromotion,
@@ -1082,6 +1184,9 @@ public final class OptiminiumVisualSignificance {
 			reuseCachedBlockDecision(mem, key, distanceSqr, renderCost, important, recent, repeatCount, pressured);
 			return;
 		}
+		long evaluationTimingStart = (++evaluationTimingCounter & 63) == 0 ? System.nanoTime() : 0L;
+		consumeScheduledEvaluation(mem, dirtyReasons);
+		consumePeriodicEvaluation(mem, dirtyReasons);
 		mem.lastReevaluateFrame = frameIndex;
 		mem.dirtyReasons = dirtyReasons;
 
@@ -1135,6 +1240,7 @@ public final class OptiminiumVisualSignificance {
 
 		incrementCounter(classification, distanceSqr, inFront, important,
 			recent, repeatCount, pressured, score, renderCost, mem, false);
+		recordEvaluationTiming(dirtyReasons, evaluationTimingStart);
 	}
 
 	private static void recordEntityProfiled(Entity entity, boolean culled) {
@@ -1197,6 +1303,9 @@ public final class OptiminiumVisualSignificance {
 				renderCost, category);
 			return;
 		}
+		long evaluationTimingStart = (++evaluationTimingCounter & 63) == 0 ? System.nanoTime() : 0L;
+		consumeScheduledEvaluation(mem, dirtyReasons);
+		consumePeriodicEvaluation(mem, dirtyReasons);
 		mem.lastReevaluateFrame = frameIndex;
 		mem.dirtyReasons = dirtyReasons;
 
@@ -1258,6 +1367,20 @@ public final class OptiminiumVisualSignificance {
 		boolean entityWasRendered = mem.lastClassification != CULLED;
 		incrementEntityCounter(classification, distanceSqr, inFront, important,
 			pressured, score, renderCost, category, mem, entityWasRendered);
+		recordEvaluationTiming(dirtyReasons, evaluationTimingStart);
+	}
+
+	private static void recordEvaluationTiming(int dirtyReasons, long startNanos) {
+		if (startNanos == 0L) return;
+		long elapsed = Math.max(0L, System.nanoTime() - startNanos);
+		if ((dirtyReasons & DIRTY_PERIODIC_RECHECK) != 0) {
+			periodicEvaluationSampleNanos += elapsed;
+			periodicEvaluationSamples++;
+		}
+		if ((dirtyReasons & DIRTY_IMPORTANCE_DEBT) != 0) {
+			debtEvaluationSampleNanos += elapsed;
+			debtEvaluationSamples++;
+		}
 	}
 
 	// ============================================================
@@ -1900,6 +2023,7 @@ public final class OptiminiumVisualSignificance {
 	private static void updateImportanceDebt(ObjectMemory mem, byte classification) {
 		if (classification == FULL) {
 			mem.importanceDebt = 0.0D;
+			cancelImportanceDebt(mem);
 			return;
 		}
 		double visualWeight = mem.visualImportance * 0.05D;
@@ -1911,12 +2035,15 @@ public final class OptiminiumVisualSignificance {
 			case CULLED -> 0.020D;
 			default -> 0.0D;
 		};
-		mem.importanceDebt = Math.min(IMPORTANCE_DEBT_LIMIT, mem.importanceDebt + bandWeight + visualWeight + gameplayWeight);
+		double increment = bandWeight + visualWeight + gameplayWeight;
+		mem.importanceDebt = Math.min(IMPORTANCE_DEBT_LIMIT, mem.importanceDebt + increment);
+		scheduleImportanceDebt(mem, increment);
 	}
 
 	private static void updateImportanceDebt(EntityMemory mem, byte classification) {
 		if (classification == FULL) {
 			mem.importanceDebt = 0.0D;
+			cancelImportanceDebt(mem);
 			return;
 		}
 		double visualWeight = mem.visualImportance * 0.05D;
@@ -1928,7 +2055,41 @@ public final class OptiminiumVisualSignificance {
 			case CULLED -> 0.018D;
 			default -> 0.0D;
 		};
-		mem.importanceDebt = Math.min(IMPORTANCE_DEBT_LIMIT, mem.importanceDebt + bandWeight + visualWeight + gameplayWeight);
+		double increment = bandWeight + visualWeight + gameplayWeight;
+		mem.importanceDebt = Math.min(IMPORTANCE_DEBT_LIMIT, mem.importanceDebt + increment);
+		scheduleImportanceDebt(mem, increment);
+	}
+
+	private static long promotionDueFrame(double debt, double increment) {
+		if (increment <= 0.0D) return 0L;
+		long frames = Math.max(1L, (long)Math.ceil((IMPORTANCE_DEBT_LIMIT - debt) / increment));
+		return frameIndex + frames;
+	}
+
+	private static void scheduleImportanceDebt(ObjectMemory mem, double increment) {
+		long due = promotionDueFrame(mem.importanceDebt, increment);
+		if (due <= 0L) { cancelImportanceDebt(mem); return; }
+		if (mem.importanceDebtDueFrame == 0L) { importanceDebtScheduled++; objectsAwaitingPromotion++; }
+		mem.importanceDebtDueFrame = due;
+		accumulatedFramesUntilPromotion += Math.max(0L, due - frameIndex);
+	}
+
+	private static void scheduleImportanceDebt(EntityMemory mem, double increment) {
+		long due = promotionDueFrame(mem.importanceDebt, increment);
+		if (due <= 0L) { cancelImportanceDebt(mem); return; }
+		if (mem.importanceDebtDueFrame == 0L) { importanceDebtScheduled++; objectsAwaitingPromotion++; }
+		mem.importanceDebtDueFrame = due;
+		accumulatedFramesUntilPromotion += Math.max(0L, due - frameIndex);
+	}
+
+	private static void cancelImportanceDebt(ObjectMemory mem) {
+		if (mem.importanceDebtDueFrame != 0L) { importanceDebtCancelled++; objectsAwaitingPromotion = Math.max(0L, objectsAwaitingPromotion - 1L); }
+		mem.importanceDebtDueFrame = 0L;
+	}
+
+	private static void cancelImportanceDebt(EntityMemory mem) {
+		if (mem.importanceDebtDueFrame != 0L) { importanceDebtCancelled++; objectsAwaitingPromotion = Math.max(0L, objectsAwaitingPromotion - 1L); }
+		mem.importanceDebtDueFrame = 0L;
 	}
 
 	private static double computeEntityPopRisk(EntityMemory mem, double distanceSqr, boolean inFront,
@@ -2163,6 +2324,8 @@ public final class OptiminiumVisualSignificance {
 		byte predictedClassification;
 		byte cachedCandidateBand = UNKNOWN;
 		long lastReevaluateFrame;
+		long nextPeriodicEvaluationFrame;
+		long importanceDebtDueFrame;
 		int dirtyReasons;
 		long lastSeenFrame = 1;
 		long lastChangedFrame = -1;
@@ -2294,6 +2457,8 @@ public final class OptiminiumVisualSignificance {
 		byte predictedClassification;
 		byte cachedCandidateBand = UNKNOWN;
 		long lastReevaluateFrame;
+		long nextPeriodicEvaluationFrame;
+		long importanceDebtDueFrame;
 		int dirtyReasons;
 		long lastChangedFrame = -1;
 		long lastInteractedFrame = NEVER_INTERACTED_FRAME;
@@ -2619,6 +2784,8 @@ public final class OptiminiumVisualSignificance {
 			var e = it.next();
 			if (frameIndex - e.getValue().lastSeenFrame > 200) {
 				long key = e.getLongKey();
+				if (e.getValue().nextPeriodicEvaluationFrame != 0L) periodicCancelled++;
+				cancelImportanceDebt(e.getValue());
 				it.remove();
 				seenCounts.remove(key);
 			}
@@ -2632,6 +2799,8 @@ public final class OptiminiumVisualSignificance {
 			var e = it.next();
 			if (frameIndex - e.getValue().lastSeenFrame > 120) {
 				int key = e.getIntKey();
+				if (e.getValue().nextPeriodicEvaluationFrame != 0L) periodicCancelled++;
+				cancelImportanceDebt(e.getValue());
 				it.remove();
 				entityOscillation.remove(key);
 			}
@@ -3226,6 +3395,24 @@ public final class OptiminiumVisualSignificance {
 		return lastFrameBurst;
 	}
 
+	public static SchedulerSnapshot schedulerSnapshot() {
+		double averageDelay = importanceDebtTriggered == 0L ? 0.0D
+			: evaluationDelayFrames / (double)importanceDebtTriggered;
+		double averageSize = schedulerSizeSamples == 0L ? 0.0D
+			: accumulatedSchedulerSize / (double)schedulerSizeSamples;
+		long schedulingSamples = importanceDebtScheduled + importanceDebtMerged;
+		double averageFrames = schedulingSamples == 0L ? 0.0D
+			: accumulatedFramesUntilPromotion / (double)schedulingSamples;
+		return new SchedulerSnapshot(importanceDebtScheduled, importanceDebtTriggered,
+			importanceDebtCancelled, importanceDebtMerged, scheduledEvaluations,
+			eventDrivenEvaluations, periodicRechecks, averageDelay, maxEvaluationDelayFrames,
+			averageSize, peakSchedulerSize, objectsAwaitingPromotion, averageFrames,
+			periodicScheduled, periodicTriggered, periodicMerged, periodicDelayed, periodicCancelled,
+			periodicEvaluationSamples == 0L ? 0.0D : periodicEvaluationSampleNanos / (double)periodicEvaluationSamples / 1_000_000.0D,
+			debtEvaluationSamples == 0L ? 0.0D : debtEvaluationSampleNanos / (double)debtEvaluationSamples / 1_000_000.0D,
+			cacheFastPathSamples == 0L ? 0.0D : cacheFastPathSampleNanos / (double)cacheFastPathSamples / 1_000_000.0D);
+	}
+
 	public static String diagnosticLine() {
 		return snapshot().toLine();
 	}
@@ -3343,6 +3530,22 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	public static void reset() {
+		for (ObjectMemory mem : objectMemory.values()) mem.importanceDebtDueFrame = 0L;
+		for (EntityMemory mem : entityMemory.values()) mem.importanceDebtDueFrame = 0L;
+		for (ObjectMemory mem : objectMemory.values()) mem.nextPeriodicEvaluationFrame = 0L;
+		for (EntityMemory mem : entityMemory.values()) mem.nextPeriodicEvaluationFrame = 0L;
+		importanceDebtScheduled = 0L; importanceDebtTriggered = 0L;
+		importanceDebtCancelled = 0L; importanceDebtMerged = 0L;
+		scheduledEvaluations = 0L; eventDrivenEvaluations = 0L;
+		evaluationDelayFrames = 0L; maxEvaluationDelayFrames = 0L;
+		schedulerSizeSamples = 0L; accumulatedSchedulerSize = 0L; peakSchedulerSize = 0L;
+		accumulatedFramesUntilPromotion = 0L;
+		objectsAwaitingPromotion = 0L;
+		periodicScheduled = 0L; periodicTriggered = 0L; periodicMerged = 0L;
+		periodicDelayed = 0L; periodicCancelled = 0L;
+		evaluationTimingCounter = 0; periodicEvaluationSampleNanos = 0L; periodicEvaluationSamples = 0L;
+		debtEvaluationSampleNanos = 0L; debtEvaluationSamples = 0L;
+		cacheFastPathSampleNanos = 0L; cacheFastPathSamples = 0L;
 		topExpensiveScores.clear();
 		topExpensiveKeys.clear();
 		topExpensiveDirty = true;
@@ -3608,6 +3811,31 @@ public final class OptiminiumVisualSignificance {
 
 		int totalTransitions() {
 			return promotions + demotions;
+		}
+	}
+
+	public record SchedulerSnapshot(
+		long importanceDebtScheduled, long importanceDebtTriggered,
+		long importanceDebtCancelled, long importanceDebtMerged,
+		long scheduledEvaluations, long eventDrivenEvaluations, long periodicEvaluations,
+		double averageEvaluationDelay, long maxEvaluationDelay,
+		double averageSchedulerSize, long peakSchedulerSize,
+		long objectsAwaitingPromotion, double averageFramesUntilPromotion,
+		long periodicScheduled, long periodicTriggered, long periodicMerged,
+		long periodicDelayed, long periodicCancelled,
+		double averagePeriodicEvaluationMs, double averageDebtEvaluationMs,
+		double averageCacheFastPathMs
+	) {
+		public String toLine() {
+			return String.format(java.util.Locale.US,
+				"importanceDebtScheduled=%d, importanceDebtTriggered=%d, importanceDebtCancelled=%d, importanceDebtMerged=%d, scheduledEvaluations=%d, eventDrivenEvaluations=%d, periodicEvaluations=%d, averageEvaluationDelay=%.3f, maxEvaluationDelay=%d, averageSchedulerSize=%.3f, peakSchedulerSize=%d, objectsAwaitingPromotion=%d, averageFramesUntilPromotion=%.3f, periodicScheduled=%d, periodicTriggered=%d, periodicMerged=%d, periodicDelayed=%d, periodicCancelled=%d, averagePeriodicEvaluationMs=%.6f, averageDebtEvaluationMs=%.6f, averageCacheFastPathMs=%.6f",
+				importanceDebtScheduled, importanceDebtTriggered, importanceDebtCancelled,
+				importanceDebtMerged, scheduledEvaluations, eventDrivenEvaluations,
+				periodicEvaluations, averageEvaluationDelay, maxEvaluationDelay,
+				averageSchedulerSize, peakSchedulerSize, objectsAwaitingPromotion,
+				averageFramesUntilPromotion, periodicScheduled, periodicTriggered,
+				periodicMerged, periodicDelayed, periodicCancelled,
+				averagePeriodicEvaluationMs, averageDebtEvaluationMs, averageCacheFastPathMs);
 		}
 	}
 

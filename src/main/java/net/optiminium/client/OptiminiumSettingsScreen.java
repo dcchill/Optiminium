@@ -57,8 +57,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 180, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+		this.addRenderableWidget(Button.builder(Component.literal("Run Repeat Benchmark"), button -> OptiminiumBenchmark.startRepeat())
 			.bounds(x, y + 206, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+			.bounds(x, y + 232, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
@@ -87,7 +90,15 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(beRenderCacheLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCache(); button.setMessage(beRenderCacheLabel()); })
 			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 182, OptiminiumSettings::getBlockEntityRenderCacheMaxEntries, OptiminiumSettings::setBlockEntityRenderCacheMaxEntries, 256, 65536, "BE Cache Max Entries"));
+		this.addRenderableWidget(Button.builder(beVirtualizationLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderVirtualization(); button.setMessage(beVirtualizationLabel()); })
+			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(beVirtualizationDebugProxyLabel(), button -> { OptiminiumSettings.toggleBlockEntityVirtualizationDebugProxies(); button.setMessage(beVirtualizationDebugProxyLabel()); })
+			.bounds(x, y + 208, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(beVirtualizationAggressivenessLabel(), button -> { OptiminiumSettings.cycleBlockEntityVirtualizationAggressiveness(); button.setMessage(beVirtualizationAggressivenessLabel()); })
+			.bounds(x, y + 234, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		x = rightX;
 		y = rightY;
 		this.addRenderableWidget(Button.builder(particleLimiterLabel(), button -> button.setMessage(Component.literal("Particle Limiter: " + (OptiminiumSettings.toggleParticleLimiter() ? "ON" : "OFF"))))
@@ -108,8 +119,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+		this.addRenderableWidget(Button.builder(Component.literal("Run Repeat Benchmark"), button -> OptiminiumBenchmark.startRepeat())
 			.bounds(x, y + 208, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
+			.bounds(x, y + 234, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
@@ -163,6 +177,21 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component beRenderCacheLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityRenderCache();
 		return Component.literal("BE Render Cache: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component beVirtualizationLabel() {
+		boolean enabled = OptiminiumSettings.isBlockEntityVirtualizationEnabled();
+		return Component.literal("BE Virtualization: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component beVirtualizationDebugProxyLabel() {
+		boolean enabled = OptiminiumSettings.isBlockEntityVirtualizationDebugProxies();
+		return Component.literal("BE Debug Proxies: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component beVirtualizationAggressivenessLabel() {
+		return Component.literal("BE Virtual Mode: "
+			+ OptiminiumSettings.getBlockEntityVirtualizationAggressiveness().name().toLowerCase());
 	}
 
 	private static Component beRenderCacheDebugLabel() {

@@ -16,10 +16,6 @@ import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
 
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Set;
-
 public final class OptiminiumGpuOptimizer {
 	private static final double FRAME_SMOOTHING = 0.12D;
 	private static final double GPU_SCALE_STEP_DOWN = 0.04D;
@@ -29,6 +25,10 @@ public final class OptiminiumGpuOptimizer {
 	private static final int SUSTAINED_PRESSURE_FRAMES = 20;
 	private static final double BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR = 14.0D * 14.0D;
 	private static final int DENSE_SCENE_HOLD_FRAMES = 20;
+	private static final int CLOUD_SKIP_HOLD_FRAMES = 30;
+	private static final int WEATHER_SKIP_HOLD_FRAMES = 20;
+	private static final double CLOUD_SKIP_WORK_SCALE = 0.78D;
+	private static final double WEATHER_SKIP_WORK_SCALE = 0.66D;
 	private static final int PROFILE_PARTICLE_CULLING = 0;
 	private static final int PROFILE_BLOCK_ENTITY_CULLING = 1;
 	private static final int PROFILE_ENTITY_CULLING = 2;
@@ -50,6 +50,10 @@ public final class OptiminiumGpuOptimizer {
 	private static int pendingCulledBlockEntityRenders;
 	private static int pendingHiddenNameTags;
 	private static int pendingHiddenParticles;
+	private static long particleChecksAttempted;
+	private static long particleChecksRejected;
+	private static long particleChecksRendered;
+	private static long particleCheckNanos;
 	private static long culledBlockEntitiesThisRun;
 	private static long renderedBlockEntitiesThisRun;
 	private static boolean frameStateReady;
@@ -85,12 +89,16 @@ public final class OptiminiumGpuOptimizer {
 	private static boolean lastDenseSceneTrigger;
 	private static boolean sustainedFramePressure;
 	private static int consecutivePressureFrames;
+	private static int cloudSkipHoldFrames;
+	private static int weatherSkipHoldFrames;
 	private static String lastAdaptiveReason = "not sampled";
 	private static long denseSceneFrames;
 	private static long denseAdaptiveFrames;
 	private static long denseParticleBudgetFrames;
 	private static long denseBlockEntityBudgetFrames;
 	private static long denseRebuildBudgetFrames;
+	private static long cloudSkipFrames;
+	private static long weatherSkipFrames;
 	private static long adaptiveActivationAttempts;
 	private static long adaptiveActivationSuccesses;
 	private static long adaptiveBlockEntityFrames;
@@ -105,7 +113,6 @@ public final class OptiminiumGpuOptimizer {
 	private static final long[] profileTotals = new long[PROFILE_COUNT];
 	private static final long[] profileFrameTotals = new long[PROFILE_COUNT];
 	private static final long[] profileWorstFrames = new long[PROFILE_COUNT];
-	private static final Set<BlockEntity> rawVisibleBlockEntityCandidates = Collections.newSetFromMap(new IdentityHashMap<>());
 
 	private OptiminiumGpuOptimizer() {
 	}
@@ -114,6 +121,8 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		flushMetrics();
 		OptiminiumBlockEntityRenderCache.onFrameStart();
+		OptiminiumPersistentBlockEntityMeshes.onFrameStart();
+		OptiminiumBlockEntityVirtualizer.onFrameStart();
 		particlesThisFrame = 0;
 		lowPriorityParticlesThisFrame = 0;
 		distantBlockEntityRendersThisFrame = 0;
@@ -122,7 +131,6 @@ public final class OptiminiumGpuOptimizer {
 		maxRawVisibleBlockEntities = Math.max(maxRawVisibleBlockEntities, lastRawVisibleBlockEntities);
 		maxRenderedBlockEntities = Math.max(maxRenderedBlockEntities, lastRenderedBlockEntities);
 		rawVisibleBlockEntitiesThisFrame = 0;
-		rawVisibleBlockEntityCandidates.clear();
 		renderedBlockEntitiesThisFrame = 0;
 		countedDenseParticleBudgetFrame = false;
 		countedDenseBlockEntityBudgetFrame = false;
@@ -131,6 +139,7 @@ public final class OptiminiumGpuOptimizer {
 		updateDenseSceneState(enabled);
 		updateGpuWorkScale(enabled);
 		updateAdaptiveScales(enabled);
+		updateGraphicsEffectPressure(enabled);
 		blockEntityCulling = enabled && OptiminiumSettings.isBlockEntityCulling();
 		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
 		visualSignificanceEnabled = OptiminiumVisualSignificance.isEnabled();
@@ -161,6 +170,7 @@ public final class OptiminiumGpuOptimizer {
 	public static boolean shouldSkipParticle(ParticleOptions options, double x, double y, double z) {
 		ensureFrameState();
 		long profileStart = profileStart();
+		if (profilingEnabled) particleChecksAttempted++;
 		try {
 			ParticleType<?> type = options.getType();
 			if (!particleLimiter || !hasCamera || isImportantParticle(type)) {
@@ -177,6 +187,7 @@ public final class OptiminiumGpuOptimizer {
 				|| particlesThisFrame >= maxParticlesPerFrame
 				|| lowPriority && lowPriorityParticlesThisFrame >= maxLowPriorityParticlesPerFrame;
 			if (skip) {
+				if (profilingEnabled) particleChecksRejected++;
 				recordHiddenParticle();
 				if (visualSignificanceParticleRecording) {
 					OptiminiumVisualSignificance.recordParticle(options, x, y, z, true);
@@ -185,6 +196,7 @@ public final class OptiminiumGpuOptimizer {
 			}
 
 			particlesThisFrame++;
+			if (profilingEnabled) particleChecksRendered++;
 			if (lowPriority) {
 				lowPriorityParticlesThisFrame++;
 			}
@@ -193,8 +205,17 @@ public final class OptiminiumGpuOptimizer {
 			}
 			return false;
 		} finally {
+			if (profileStart != 0L) particleCheckNanos += Math.max(0L, System.nanoTime() - profileStart);
 			recordProfileNanos(PROFILE_PARTICLE_CULLING, profileStart);
 		}
+	}
+
+	public static boolean shouldProcessParticleHookThisFrame() {
+		if (!frameStateReady) {
+			return OptiminiumSettings.isEnabled()
+				&& (OptiminiumSettings.isParticleLimiter() || OptiminiumVisualSignificance.isParticleRecordingEnabled());
+		}
+		return particleLimiter && hasCamera || visualSignificanceParticleRecording;
 	}
 
 	public static boolean isBlockEntityCullingActive() {
@@ -236,15 +257,18 @@ public final class OptiminiumGpuOptimizer {
 			// Visual Significance can CULL low-importance block entities
 			// while still keeping them in VS memory for classification tracking.
 			if (visualSignificanceEnabled && !OptiminiumVisualSignificance.shouldRenderBySignificanceActive(blockEntityKey)) {
+				OptiminiumPersistentBlockEntityMeshes.recordCandidateCulled(blockEntity);
 				recordCulledBlockEntityRender();
 				return false;
 			}
 			int scaledViewDistance = Math.max(1, Math.round(viewDistance * blockEntityDistanceScale));
 			if (distanceSqr > scaledViewDistance * scaledViewDistance) {
+				OptiminiumPersistentBlockEntityMeshes.recordCandidateCulled(blockEntity);
 				recordCulledBlockEntityRender();
 				return false;
 			}
 			if (shouldDeferBlockEntityRender(blockEntity, distanceSqr)) {
+				OptiminiumPersistentBlockEntityMeshes.recordCandidateCulled(blockEntity);
 				recordCulledBlockEntityRender();
 				return false;
 			}
@@ -257,6 +281,11 @@ public final class OptiminiumGpuOptimizer {
 	public static double getGpuWorkScale() {
 		ensureFrameState();
 		return gpuWorkScale;
+	}
+
+	public static double getParticleWorkScale() {
+		ensureFrameState();
+		return particleWorkScale;
 	}
 
 	public static long getLatestCpuFrameNanos() {
@@ -277,7 +306,7 @@ public final class OptiminiumGpuOptimizer {
 		finishProfileFrame();
 		ProfileSnapshot profile = profileSnapshot();
 		return String.format(
-			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, %s, adaptiveReason=\"%s\"",
+			", rendererCompatibilityMode=%s, gpuTimer=%s, gpuMs=%.2f, cpuMs=%.2f, gpuScale=%.2f, particleScale=%.2f, blockEntityScale=%.2f, minParticleScale=%.2f, minBlockEntityScale=%.2f, particleCullingMs=%.3f, blockEntityCullingMs=%.3f, entityCullingMs=%.3f, adaptiveQualityMs=%.3f, visualSignificanceMs=%.3f, totalOptiminiumCpuMs=%.3f, worstParticleCullingMs=%.3f, worstBlockEntityCullingMs=%.3f, worstEntityCullingMs=%.3f, worstAdaptiveQualityMs=%.3f, worstVisualSignificanceMs=%.3f, worstOptiminiumCpuMs=%.3f, rawVisibleBlockEntities=%d, maxRawVisibleBlockEntities=%d, renderedBlockEntitiesAfterCulling=%d, renderedBlockEntitiesThisRun=%d, culledBlockEntitiesThisRun=%d, maxVisibleBlockEntities=%d, maxRenderedBlockEntitiesAfterCulling=%d, denseThreshold=%d, denseMode=%s, denseSceneFrames=%d, denseAdaptiveFrames=%d, adaptiveActivationAttempts=%d, adaptiveActivationSuccesses=%d, adaptiveBlockEntityFrames=%d, adaptiveParticleFrames=%d, rawSpikeTriggerFrames=%d, pacingSpikeTriggerFrames=%d, denseParticleBudgetFrames=%d, denseBlockEntityBudgetFrames=%d, denseRebuildBudgetFrames=%d, cloudSkipFrames=%d, weatherSkipFrames=%d, %s, adaptiveReason=\"%s\"",
 			OptiminiumSodiumCompat.rendererModeString(),
 			OptiminiumGpuTimer.status(),
 			OptiminiumGpuTimer.hasTiming() ? OptiminiumGpuTimer.getSmoothedGpuNanos() / 1_000_000.0D : 0.0D,
@@ -319,7 +348,10 @@ public final class OptiminiumGpuOptimizer {
 			denseParticleBudgetFrames,
 			denseBlockEntityBudgetFrames,
 			denseRebuildBudgetFrames,
-			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()) + ", " + OptiminiumBlockEntityRenderCache.diagnosticLine(),
+			cloudSkipFrames,
+			weatherSkipFrames,
+			OptiminiumVisualSignificance.diagnosticLine(reportedRawVisibleBlockEntities()) + ", " + OptiminiumBlockEntityRenderCache.diagnosticLine()
+				+ ", " + OptiminiumPersistentBlockEntityMeshes.diagnosticLine(),
 			lastAdaptiveReason
 		);
 	}
@@ -339,11 +371,19 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	public static boolean shouldSkipClouds() {
-		return false;
+		boolean skip = shouldCullGraphicsEffects() && cloudSkipHoldFrames > 0;
+		if (skip) {
+			cloudSkipFrames++;
+		}
+		return skip;
 	}
 
 	public static boolean shouldSkipWeather() {
-		return false;
+		boolean skip = shouldCullGraphicsEffects() && weatherSkipHoldFrames > 0;
+		if (skip) {
+			weatherSkipFrames++;
+		}
+		return skip;
 	}
 
 	public static void recordCulledBlockEntityRender() {
@@ -366,7 +406,7 @@ public final class OptiminiumGpuOptimizer {
 
 	public static void recordRawVisibleBlockEntityBeforeCulling(BlockEntity blockEntity) {
 		ensureFrameState();
-		if (blockEntity != null && rawVisibleBlockEntityCandidates.add(blockEntity)) {
+		if (blockEntity != null) {
 			rawVisibleBlockEntitiesThisFrame++;
 		}
 	}
@@ -383,6 +423,8 @@ public final class OptiminiumGpuOptimizer {
 		denseParticleBudgetFrames = 0L;
 		denseBlockEntityBudgetFrames = 0L;
 		denseRebuildBudgetFrames = 0L;
+		cloudSkipFrames = 0L;
+		weatherSkipFrames = 0L;
 		adaptiveActivationAttempts = 0L;
 		adaptiveActivationSuccesses = 0L;
 		adaptiveBlockEntityFrames = 0L;
@@ -394,7 +436,6 @@ public final class OptiminiumGpuOptimizer {
 		minParticleScale = 1.0D;
 		minBlockEntityScale = 1.0D;
 		rawVisibleBlockEntitiesThisFrame = 0;
-		rawVisibleBlockEntityCandidates.clear();
 		renderedBlockEntitiesThisFrame = 0;
 		lastRawVisibleBlockEntities = 0;
 		lastRenderedBlockEntities = 0;
@@ -402,6 +443,8 @@ public final class OptiminiumGpuOptimizer {
 		maxRenderedBlockEntities = 0;
 		culledBlockEntitiesThisRun = 0L;
 		renderedBlockEntitiesThisRun = 0L;
+		particleChecksAttempted = 0L; particleChecksRejected = 0L;
+		particleChecksRendered = 0L; particleCheckNanos = 0L;
 		OptiminiumVisualSignificance.reset();
 		consecutiveDenseSceneFrames = 0;
 		denseSceneHoldFrames = 0;
@@ -479,15 +522,30 @@ public final class OptiminiumGpuOptimizer {
 	}
 
 	private static boolean shouldDeferBlockEntityRender(BlockEntity blockEntity, double distanceSqr) {
-		if (blockEntityWorkScale > 0.90D || distanceSqr <= BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR || isPriorityBlockEntity(blockEntity)) {
+		if (blockEntityWorkScale > 0.90D || distanceSqr <= BLOCK_ENTITY_RENDER_BUDGET_DISTANCE_SQR) {
 			return false;
 		}
 		int budget = maxDistantBlockEntityRendersPerFrame();
-		if (distantBlockEntityRendersThisFrame >= budget) {
-			return true;
+		if (distantBlockEntityRendersThisFrame < budget) {
+			distantBlockEntityRendersThisFrame++;
+			return false;
 		}
-		distantBlockEntityRendersThisFrame++;
-		return false;
+		return !isPriorityBlockEntity(blockEntity);
+	}
+
+	public static ParticleProfileSnapshot particleProfileSnapshot() {
+		return new ParticleProfileSnapshot(particleChecksAttempted, particleChecksRejected,
+			particleChecksRendered, particleCheckNanos / 1_000_000.0D,
+			particleChecksAttempted == 0L ? 0.0D : particleCheckNanos / (double)particleChecksAttempted / 1_000_000.0D);
+	}
+
+	public record ParticleProfileSnapshot(long attempted, long rejected, long rendered,
+		double rejectionCheckMs, double averageCheckMs) {
+		public String toLine() {
+			return String.format(java.util.Locale.US,
+				"particleChecksAttempted=%d, particleChecksRejected=%d, particleChecksRendered=%d, particleRejectionCheckMs=%.3f, particleAverageCheckMs=%.6f",
+				attempted, rejected, rendered, rejectionCheckMs, averageCheckMs);
+		}
 	}
 
 	private static int maxDistantBlockEntityRendersPerFrame() {
@@ -602,6 +660,14 @@ public final class OptiminiumGpuOptimizer {
 				}
 			}
 			// Also apply gpuWorkScale (from raw frame time spikes) as an upper bound
+			OptiminiumSettings.DenseSceneAdaptiveMode denseMode = OptiminiumSettings.getDenseSceneAdaptiveMode();
+			if (denseSceneActive && denseMode != OptiminiumSettings.DenseSceneAdaptiveMode.OFF) {
+				double denseScale = denseSceneScale(denseMode);
+				budgetParticleScale = Math.min(budgetParticleScale, Math.max(0.50D, denseScale + 0.10D));
+				budgetBlockEntityScale = Math.min(budgetBlockEntityScale, denseScale);
+				budgetAllScale = Math.min(budgetAllScale, Math.max(0.45D, denseScale - 0.08D));
+				reason += "+dense";
+			}
 			particleWorkScale = Math.min(gpuWorkScale, budgetParticleScale);
 			blockEntityWorkScale = Math.min(gpuWorkScale, budgetBlockEntityScale);
 			rebuildWorkScale = Math.min(gpuWorkScale, budgetAllScale);
@@ -664,12 +730,44 @@ public final class OptiminiumGpuOptimizer {
 			consecutivePressureFrames = 0;
 		}
 		sustainedFramePressure = consecutivePressureFrames >= SUSTAINED_PRESSURE_FRAMES;
-		if (denseSceneActive || sustainedFramePressure) {
-			gpuWorkScale = Math.max(minScale, gpuWorkScale - GPU_SCALE_STEP_DOWN);
+		if (denseSceneActive || sustainedFramePressure || (lastRawSpike && lastPacingSpike)) {
+			double stepDown = denseSceneActive || sustainedFramePressure ? GPU_SCALE_STEP_DOWN : GPU_SCALE_STEP_DOWN * 0.5D;
+			gpuWorkScale = Math.max(minScale, gpuWorkScale - stepDown);
 		} else if (pacingNanos < targetFrameNanos * 0.86D) {
 			gpuWorkScale = Math.min(1.0D, gpuWorkScale + GPU_SCALE_STEP_UP);
 		} else {
 			gpuWorkScale = 1.0D;
+		}
+	}
+
+	private static double denseSceneScale(OptiminiumSettings.DenseSceneAdaptiveMode mode) {
+		return switch (mode) {
+			case CONSERVATIVE -> 0.86D;
+			case BALANCED -> 0.72D;
+			case AGGRESSIVE -> 0.58D;
+			case OFF -> 1.0D;
+		};
+	}
+
+	private static void updateGraphicsEffectPressure(boolean enabled) {
+		if (!enabled || !OptiminiumSettings.isGpuOptimizer()) {
+			cloudSkipHoldFrames = 0;
+			weatherSkipHoldFrames = 0;
+			return;
+		}
+		OptiminiumVisualSignificance.RenderBudget budget = OptiminiumVisualSignificance.renderBudget();
+		boolean heavyBudget = budget == OptiminiumVisualSignificance.RenderBudget.HEAVY_PRESSURE
+			|| budget == OptiminiumVisualSignificance.RenderBudget.EMERGENCY;
+		boolean emergencyBudget = budget == OptiminiumVisualSignificance.RenderBudget.EMERGENCY;
+		if (denseSceneActive || sustainedFramePressure || heavyBudget || gpuWorkScale <= CLOUD_SKIP_WORK_SCALE) {
+			cloudSkipHoldFrames = CLOUD_SKIP_HOLD_FRAMES;
+		} else if (cloudSkipHoldFrames > 0) {
+			cloudSkipHoldFrames--;
+		}
+		if (emergencyBudget || (sustainedFramePressure && gpuWorkScale <= WEATHER_SKIP_WORK_SCALE)) {
+			weatherSkipHoldFrames = WEATHER_SKIP_HOLD_FRAMES;
+		} else if (weatherSkipHoldFrames > 0) {
+			weatherSkipHoldFrames--;
 		}
 	}
 

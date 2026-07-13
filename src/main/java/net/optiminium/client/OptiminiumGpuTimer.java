@@ -14,6 +14,7 @@ import org.lwjgl.opengl.ARBTimerQuery;
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumGpuTimer {
 	private static final int QUERY_COUNT = 4;
+	private static final int SAMPLE_INTERVAL_FRAMES = 2;
 	private static final double SMOOTHING = 0.12D;
 	private static final int[] startQueries = new int[QUERY_COUNT];
 	private static final int[] endQueries = new int[QUERY_COUNT];
@@ -23,6 +24,7 @@ public final class OptiminiumGpuTimer {
 	private static boolean sampleOpen;
 	private static int writeIndex;
 	private static int pendingQueries;
+	private static int frameCounter;
 	private static long latestGpuNanos;
 	private static long worstGpuNanos;
 	private static long sampleCount;
@@ -36,7 +38,11 @@ public final class OptiminiumGpuTimer {
 	public static void onFrameStart(RenderFrameEvent.Pre event) {
 		initialize();
 		readReadyResults();
-		if (!isActive() || pendingQueries >= QUERY_COUNT) {
+		if (!isActive()) {
+			frameCounter = 0;
+			return;
+		}
+		if (pendingQueries >= QUERY_COUNT || frameCounter++ % SAMPLE_INTERVAL_FRAMES != 0) {
 			return;
 		}
 		queryCounter(startQueries[writeIndex]);

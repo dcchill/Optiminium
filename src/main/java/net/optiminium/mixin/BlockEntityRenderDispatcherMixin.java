@@ -9,8 +9,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.optiminium.client.OptiminiumBlockEntityRenderCache;
+import net.optiminium.client.OptiminiumPersistentBlockEntityMeshes;
+import net.optiminium.client.OptiminiumBlockEntityVirtualizer;
+import net.optiminium.client.OptiminiumRenderProfiler;
+import net.optiminium.optimization.OptiminiumSettings;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -18,12 +21,45 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(BlockEntityRenderDispatcher.class)
 public abstract class BlockEntityRenderDispatcherMixin {
-	@Shadow
-	public abstract <E extends BlockEntity> BlockEntityRenderer<E> getRenderer(E blockEntity);
+	@Redirect(method = "setupAndRender(Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderer;Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderer;render(Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;II)V"))
+	private static <E extends BlockEntity> void optiminium$renderPersistentMesh(BlockEntityRenderer<E> renderer,
+			E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
+			int packedLight, int packedOverlay) {
+		if (!OptiminiumPersistentBlockEntityMeshes.tryRender(renderer, blockEntity, partialTick, poseStack,
+				packedLight, packedOverlay)) {
+			OptiminiumPersistentBlockEntityMeshes.renderVanillaWithSplit(renderer, blockEntity, partialTick,
+				poseStack, bufferSource, packedLight, packedOverlay);
+		}
+	}
+	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
+	private <E extends BlockEntity> void optiminium$virtualizeBlockEntityRender(E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, CallbackInfo callback) {
+		if (OptiminiumBlockEntityRenderCache.isDispatcherHookActive()) {
+			OptiminiumBlockEntityRenderCache.recordDispatcherHook(blockEntity);
+		}
+		if (OptiminiumRenderProfiler.areUploadCategoriesActive()) {
+			OptiminiumRenderProfiler.pushUploadCategory(OptiminiumRenderProfiler.UploadCategory.BLOCK_ENTITY_PROXY);
+		}
+		if (!OptiminiumSettings.isEnabled()
+				|| (!OptiminiumSettings.isBlockEntityVirtualizationEnabled()
+					&& !OptiminiumSettings.isBlockEntityRenderCacheDebug())) {
+			return;
+		}
+		BlockEntityRenderer<E> renderer = ((BlockEntityRenderDispatcher)(Object)this).getRenderer(blockEntity);
+		if (OptiminiumBlockEntityVirtualizer.tryVirtualize(blockEntity, partialTick, poseStack, bufferSource, renderer)) {
+			OptiminiumRenderProfiler.popUploadCategory();
+			callback.cancel();
+			return;
+		}
+		OptiminiumBlockEntityVirtualizer.beginFullRenderer();
+	}
 
-	@Inject(method = "render", at = @At("HEAD"))
-	private <E extends BlockEntity> void optiminium$recordBlockEntityRenderCache(E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, CallbackInfo callback) {
-		OptiminiumBlockEntityRenderCache.recordDispatcherHook(blockEntity, getRenderer(blockEntity));
+	@Inject(method = "render", at = @At("RETURN"))
+	private <E extends BlockEntity> void optiminium$popBlockEntityUploadCategory(E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, CallbackInfo callback) {
+		OptiminiumBlockEntityVirtualizer.finishFullRenderer();
+		if (OptiminiumRenderProfiler.areUploadCategoriesActive()) {
+			OptiminiumRenderProfiler.popUploadCategory();
+		}
 	}
 
 	@Redirect(method = "setupAndRender(Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderer;Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;)V",

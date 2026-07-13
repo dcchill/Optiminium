@@ -15,6 +15,30 @@ neoForge {
     runs {
         client {
             client()
+            def quickPlayWorld = providers.gradleProperty('optiminium.quickPlayWorld')
+            if (quickPlayWorld.isPresent()) {
+                programArgument '--quickPlaySingleplayer'
+                programArgument quickPlayWorld.get()
+            }
+            def persistentMeshMinInstances = providers.gradleProperty('optiminium.persistentMeshMinInstances')
+            if (persistentMeshMinInstances.isPresent()) {
+                systemProperty 'optiminium.persistentMeshMinInstances', persistentMeshMinInstances.get()
+            }
+            if (providers.gradleProperty('optiminium.persistentMeshBenchmarkScene').isPresent()) {
+                systemProperty 'optiminium.persistentMeshBenchmarkScene', 'true'
+            }
+            def persistentMeshBenchmarkGridSize = providers.gradleProperty('optiminium.persistentMeshBenchmarkGridSize')
+            if (persistentMeshBenchmarkGridSize.isPresent()) {
+                systemProperty 'optiminium.persistentMeshBenchmarkGridSize', persistentMeshBenchmarkGridSize.get()
+            }
+            def persistentMeshBenchmarkScreenshot = providers.gradleProperty('optiminium.persistentMeshBenchmarkScreenshot')
+            if (persistentMeshBenchmarkScreenshot.isPresent()) {
+                systemProperty 'optiminium.persistentMeshBenchmarkScreenshot', persistentMeshBenchmarkScreenshot.get()
+            }
+            def persistentMeshBenchmarkOrigin = providers.gradleProperty('optiminium.persistentMeshBenchmarkOrigin')
+            if (persistentMeshBenchmarkOrigin.isPresent()) {
+                systemProperty 'optiminium.persistentMeshBenchmarkOrigin', persistentMeshBenchmarkOrigin.get()
+            }
         }
         server {
             server()
@@ -36,6 +60,14 @@ neoForge {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+test {
+    useJUnitPlatform()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
 }
 
 def deleteStaleModidJar = tasks.register('deleteStaleModidJar', Delete) {

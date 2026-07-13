@@ -16,7 +16,7 @@ public final class OptiminiumBlockEntityCacheOverlay {
 	private static final int X = 8;
 	private static final int Y = 8;
 	private static final int WIDTH = 320;
-	private static final int HEIGHT = 280;
+	private static final int HEIGHT = 350;
 
 	private OptiminiumBlockEntityCacheOverlay() {
 	}
@@ -29,6 +29,8 @@ public final class OptiminiumBlockEntityCacheOverlay {
 		GuiGraphics graphics = event.getGuiGraphics();
 		Font font = Minecraft.getInstance().font;
 		OptiminiumBlockEntityRenderCache.Snapshot cache = OptiminiumBlockEntityRenderCache.snapshot();
+		OptiminiumPersistentBlockEntityMeshes.Snapshot meshes = OptiminiumPersistentBlockEntityMeshes.snapshot();
+		OptiminiumBlockEntityVirtualizer.Snapshot virtualization = OptiminiumBlockEntityVirtualizer.snapshot();
 		OptiminiumGlStateTracker.DiagnosticSnapshot tracker = OptiminiumGlStateTracker.snapshot();
 		OptiminiumGlStateTracker.FrameDiagnostics frameDiag = OptiminiumGlStateTracker.frameDiagnostics();
 		graphics.fill(X - 2, Y - 2, X + WIDTH + 2, Y + HEIGHT + 2, 0xD0000000);
@@ -57,6 +59,45 @@ public final class OptiminiumBlockEntityCacheOverlay {
 		drawLine(graphics, font, lineY, "Top Invalidation: " + cache.topInvalidationReason());
 		lineY += 11;
 		drawLine(graphics, font, lineY, "Unstable Types: " + cache.unstableTypeCount());
+		lineY += 11;
+		drawLine(graphics, font, lineY, "GPU meshes: " + format(meshes.cachedMeshes())
+			+ " | memory: " + formatMemory(meshes.estimatedGpuBytes()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Mesh frame hit/miss/upload: " + format(meshes.hitsThisFrame()) + "/"
+			+ format(meshes.missesThisFrame()) + "/" + format(meshes.uploadsThisFrame())
+			+ " | instance uploads: " + format(meshes.instanceUploadsThisFrame()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Cached instances/frame: " + format(meshes.instancesDrawnThisFrame())
+			+ " | culled: " + format(meshes.instancesCulledThisFrame())
+			+ " | fallback: " + format(meshes.fallbacksThisFrame()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Vertices avoided/frame: " + format(meshes.verticesAvoidedThisFrame())
+			+ " | draws: " + format(meshes.drawCallsThisFrame()));
+		lineY += 14;
+
+		graphics.drawString(font, "--- BE Virtualization ---", X + 10, lineY, 0x88CCFF, false);
+		lineY += 12;
+		drawLine(graphics, font, lineY, "Mode: " + OptiminiumSettings.getBlockEntityVirtualizationAggressiveness().name().toLowerCase(Locale.ROOT)
+			+ " | Enabled: " + OptiminiumSettings.isBlockEntityVirtualizationEnabled()
+			+ " | Debug: " + OptiminiumSettings.isBlockEntityVirtualizationDebugProxies());
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Frame: total=" + format(virtualization.totalThisFrame())
+			+ " would=" + format(virtualization.wouldVirtualizeThisFrame())
+			+ " actual=" + format(virtualization.skippedThisFrame()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Cancelled: cached=" + format(virtualization.cachedThisFrame())
+			+ " simple=" + format(virtualization.simplifiedThisFrame())
+			+ " impostor=" + format(virtualization.impostorThisFrame())
+			+ " off=" + format(virtualization.virtualizedThisFrame()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, "Total would=" + format(virtualization.wouldVirtualize())
+			+ " | BER cancelled=" + format(virtualization.skippedBerCalls()));
+		lineY += 11;
+		drawLine(graphics, font, lineY, String.format(Locale.ROOT,
+			"Cache=%s | failures=%s", format(virtualization.cachedRepresentations()), format(virtualization.proxyRenderFailures())));
+		lineY += 11;
+		drawLine(graphics, font, lineY, String.format(Locale.ROOT,
+			"Est CPU %.2f ms | Avg BER %.3f ms", virtualization.estimatedCpuSavedMs(), virtualization.averageFullRendererMs()));
 		lineY += 14;
 
 		// GL State Tracker section

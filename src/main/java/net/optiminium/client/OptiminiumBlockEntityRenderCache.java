@@ -19,7 +19,6 @@ import net.optiminium.optimization.OptiminiumSettings;
 
 import java.lang.ref.WeakReference;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,29 +27,36 @@ import java.util.function.Predicate;
 
 public final class OptiminiumBlockEntityRenderCache {
 	// --- Cache data structures ---
-	private static final LinkedHashMap<Key, Entry> CACHE = new LinkedHashMap<>(256, 0.75F, true);
-	private static final Object CACHE_LOCK = new Object();
+	private static final ConcurrentHashMap<Key, Entry> CACHE = new ConcurrentHashMap<>(256);
 	private static final ThreadLocal<Key> PROBE_KEY = ThreadLocal.withInitial(Key::new);
 
 	// --- Frame counter (incremented by onFrameStart) ---
 	private static long currentFrame;
 
 	// --- Core statistics ---
-	private static final LongAdder hookCalls = new LongAdder();
-	private static final LongAdder lookupAttempts = new LongAdder();
-	private static final LongAdder hits = new LongAdder();
-	private static final LongAdder misses = new LongAdder();
+	private static long hookCalls;
+	private static long lookupAttempts;
+	private static long hits;
+	private static long misses;
 	private static final LongAdder invalidations = new LongAdder();
-	private static final LongAdder fallbacks = new LongAdder();
+	private static long fallbacks;
 	private static final LongAdder entriesStored = new LongAdder();
-	private static final LongAdder rejectedRenderer = new LongAdder();
-	private static final LongAdder rejectedType = new LongAdder();
-	private static final LongAdder rejectedState = new LongAdder();
-	private static final LongAdder rejectedAnimated = new LongAdder();
-	private static final LongAdder rejectedInvalidType = new LongAdder();
-	private static final LongAdder disabled = new LongAdder();
-	private static final LongAdder buildNanos = new LongAdder();
-	private static final LongAdder estimatedSavedNanos = new LongAdder();
+	private static long rejectedRenderer;
+	private static long rejectedType;
+	private static long rejectedState;
+	private static long rejectedAnimated;
+	private static long rejectedInvalidType;
+	private static long disabled;
+	private static long buildNanos;
+	private static long estimatedSavedNanos;
+	private static boolean cacheActiveThisFrame;
+	private static boolean hookMetricsThisFrame;
+	private static long hookSampleNanos;
+	private static long hookSamples;
+	private static long lookupSampleNanos;
+	private static long lookupSamples;
+	private static int timingSampleCounter;
+	private static long costBypasses;
 
 	// --- Invalidation reason counters ---
 	private static final LongAdder invalBlockStateChanged = new LongAdder();
@@ -72,6 +78,7 @@ public final class OptiminiumBlockEntityRenderCache {
 
 	// --- Per-type stat tracking ---
 	private static final ConcurrentHashMap<BlockEntityType<?>, TypeStats> typeStatsMap = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<BlockEntityType<?>, Boolean> staticTypeEligibility = new ConcurrentHashMap<>();
 
 	// --- Unstable entry detection ---
 	// If an entry is invalidated within UNSTABLE_FRAME_THRESHOLD frames of creation,
@@ -88,9 +95,12 @@ public final class OptiminiumBlockEntityRenderCache {
 	private static int lastRebuildsThisFrame;
 	private static long savedThisFrameNanos;
 	private static long lastSavedFrameNanos;
+	private static long averageBuildNanos;
+	private static long buildSamples;
 
 	// Per-frame tracked invalidation reason (top reason string, updated each frame)
 	private static String topInvalidationReason = "none";
+	private static boolean topInvalidationDirty;
 
 	private OptiminiumBlockEntityRenderCache() {
 	}
@@ -100,29 +110,16 @@ public final class OptiminiumBlockEntityRenderCache {
 		return vanillaDecision(blockEntity, viewDistance);
 	}
 
-	public static void recordDispatcherHook(BlockEntity blockEntity, Object renderer) {
-		hookCalls.increment();
+	public static void recordDispatcherHook(BlockEntity blockEntity) {
+		if (!hookMetricsThisFrame) return;
+		long start = (++timingSampleCounter & 63) == 0 ? System.nanoTime() : 0L;
+		hookCalls++;
 		visibleThisFrame++;
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isBlockEntityRenderCache()) {
-			disabled.increment();
-			return;
-		}
-		if (renderer == null) {
-			fallback("no_renderer");
-			rejectedRenderer.increment();
-			return;
-		}
-		Level level = blockEntity.getLevel();
-		if (level == null) {
-			fallback("no_level");
-			rejectedState.increment();
-			return;
-		}
-		if (!blockEntity.getType().isValid(blockEntity.getBlockState())) {
-			fallback("invalid_type");
-			rejectedInvalidType.increment();
-			return;
-		}
+		if (start != 0L) { hookSampleNanos += System.nanoTime() - start; hookSamples++; }
+	}
+
+	public static boolean isDispatcherHookActive() {
+		return cacheActiveThisFrame || hookMetricsThisFrame;
 	}
 
 	/**
@@ -134,27 +131,28 @@ public final class OptiminiumBlockEntityRenderCache {
 	public static int lightFor(BlockAndTintGetter levelView, BlockPos pos, BlockEntityRenderer<?> renderer,
 			BlockEntity blockEntity, float partialTick, int packedOverlay) {
 		// Fast path: if caching is disabled, compute and return immediately
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isBlockEntityRenderCache()) {
-			disabled.increment();
+		if (!cacheActiveThisFrame) {
+			disabled++;
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
 		if (renderer == null) {
 			fallback("no_renderer");
-			rejectedRenderer.increment();
+			rejectedRenderer++;
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
-		if (blockEntity.getLevel() == null) {
+		Level level = blockEntity.getLevel();
+		if (level == null) {
 			fallback("no_level");
-			rejectedState.increment();
+			rejectedState++;
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
-		if (!blockEntity.getType().isValid(blockEntity.getBlockState())) {
-			fallback("invalid_type");
-			rejectedInvalidType.increment();
-			return LevelRenderer.getLightColor(levelView, pos);
-		}
-
+		BlockState state = blockEntity.getBlockState();
 		BlockEntityType<?> type = blockEntity.getType();
+		if (!type.isValid(state)) {
+			fallback("invalid_type");
+			rejectedInvalidType++;
+			return LevelRenderer.getLightColor(levelView, pos);
+		}
 
 		// Check if this type is on unstable cooldown — bypass caching entirely
 		if (isTypeUnstable(type)) {
@@ -163,50 +161,59 @@ public final class OptiminiumBlockEntityRenderCache {
 		}
 
 		// Reject animated or unsuitable types
-		String rejectionReason = rejectionReason(blockEntity, partialTick, true);
+		String rejectionReason = rejectionReason(blockEntity, state, type, true);
 		if (rejectionReason != null) {
 			fallback(rejectionReason);
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
+		TypeStats ts = getOrCreateTypeStats(type);
+		if (ts.shouldBypass()) {
+			costBypasses++;
+			return LevelRenderer.getLightColor(levelView, pos);
+		}
 
-		lookupAttempts.increment();
-		BlockState state = blockEntity.getBlockState();
+		long lookupStart = (++timingSampleCounter & 63) == 0 ? System.nanoTime() : 0L;
+		lookupAttempts++;
 		Key probe = PROBE_KEY.get();
 		probe.set(
-			blockEntity.getLevel().dimension(),
-			blockEntity.getBlockPos().asLong(),
+			level.dimension(),
+			pos.asLong(),
 			type,
 			Block.getId(state),
 			renderer.getClass()
 		);
 
-		synchronized (CACHE_LOCK) {
-			Entry entry = CACHE.get(probe);
-			if (entry != null && entry.matches(blockEntity, state)) {
+		Entry cachedEntry = CACHE.get(probe);
+		if (lookupStart != 0L) {
+			long lookupNanos = System.nanoTime() - lookupStart;
+			lookupSampleNanos += lookupNanos; lookupSamples++;
+			ts.lookupSampleNanos += lookupNanos; ts.lookupSamples++;
+		}
+		if (cachedEntry != null && cachedEntry.matches(blockEntity, state)) {
 				// Cache HIT — return cached light without computing it
-				hits.increment();
-				entry.recordReuse(currentFrame);
-				long savedNanos = averageBuildNanos();
-				estimatedSavedNanos.add(savedNanos);
+				hits++;
+				cachedEntry.recordReuse(currentFrame);
+				long savedNanos = averageBuildNanos;
+				estimatedSavedNanos += savedNanos;
 				savedThisFrameNanos += savedNanos;
-				TypeStats ts = getOrCreateTypeStats(type);
-				ts.hits.increment();
-				return entry.packedLight;
-			}
+				cachedEntry.typeStats.hits++;
+			return cachedEntry.packedLight;
 		}
 
 		// Cache MISS — compute light, store entry
 		long start = System.nanoTime();
 		int packedLight = LevelRenderer.getLightColor(levelView, pos);
-		buildNanos.add(System.nanoTime() - start);
-		misses.increment();
+		long elapsedNanos = System.nanoTime() - start;
+		buildNanos += elapsedNanos;
+		misses++;
 		rebuildsThisFrame++;
 
-		Entry entry = new Entry(blockEntity, state, packedLight, currentFrame);
-		put(probe.copy(), entry, type);
+		ts.misses++;
+		ts.buildNanos += elapsedNanos;
+		updateAverageBuildNanos(elapsedNanos);
 
-		TypeStats ts = getOrCreateTypeStats(type);
-		ts.misses.increment();
+		Entry entry = new Entry(blockEntity, state, packedLight, currentFrame, ts);
+		put(probe.copy(), entry, type);
 
 		return packedLight;
 	}
@@ -259,18 +266,67 @@ public final class OptiminiumBlockEntityRenderCache {
 	}
 
 	public static void clear() {
-		synchronized (CACHE_LOCK) {
-			int size = CACHE.size();
-			if (size > 0) {
-				invalResourceReload.add(size);
-				recordInvalidationBatch(size);
-				invalidations.add(size);
-				CACHE.clear();
-			}
+		int size = CACHE.size();
+		if (size > 0) {
+			invalResourceReload.add(size);
+			topInvalidationDirty = true;
+			recordInvalidationBatch(size);
+			invalidations.add(size);
+			CACHE.clear();
 		}
 	}
 
+	public static void resetForBenchmark() {
+		CACHE.clear();
+		hookCalls = 0L;
+		lookupAttempts = 0L;
+		hits = 0L;
+		misses = 0L;
+		invalidations.reset();
+		fallbacks = 0L;
+		entriesStored.reset();
+		rejectedRenderer = 0L;
+		rejectedType = 0L;
+		rejectedState = 0L;
+		rejectedAnimated = 0L;
+		rejectedInvalidType = 0L;
+		disabled = 0L;
+		buildNanos = 0L;
+		estimatedSavedNanos = 0L;
+		invalBlockStateChanged.reset();
+		invalLightChanged.reset();
+		invalOverlayChanged.reset();
+		invalBEDirty.reset();
+		invalRendererChanged.reset();
+		invalResourceReload.reset();
+		invalChunkUnload.reset();
+		invalAnimationState.reset();
+		invalDistanceCamera.reset();
+		invalEvictedLRU.reset();
+		invalUnknown.reset();
+		totalEntryLifetimeFrames.reset();
+		totalReuses.reset();
+		totalInvalidatedEntries.reset();
+		typeStatsMap.clear();
+		staticTypeEligibility.clear();
+		unstableTypeCooldown.clear();
+		visibleThisFrame = 0;
+		lastVisibleBlockEntities = 0;
+		rebuildsThisFrame = 0;
+		lastRebuildsThisFrame = 0;
+		savedThisFrameNanos = 0L;
+		lastSavedFrameNanos = 0L;
+		averageBuildNanos = 0L;
+		buildSamples = 0L;
+		topInvalidationReason = "none";
+		topInvalidationDirty = false;
+		hookSampleNanos = 0L; hookSamples = 0L; lookupSampleNanos = 0L; lookupSamples = 0L; timingSampleCounter = 0;
+		costBypasses = 0L;
+	}
+
 	public static void onFrameStart() {
+		cacheActiveThisFrame = OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityRenderCache();
+		hookMetricsThisFrame = cacheActiveThisFrame && OptiminiumRenderProfiler.isEnabled();
 		lastVisibleBlockEntities = visibleThisFrame;
 		lastRebuildsThisFrame = rebuildsThisFrame;
 		lastSavedFrameNanos = savedThisFrameNanos;
@@ -284,8 +340,6 @@ public final class OptiminiumBlockEntityRenderCache {
 			decayUnstableCooldowns();
 		}
 
-		// Update top invalidation reason for diagnostic output
-		updateTopInvalidationReason();
 	}
 
 	// --- Diagnostic output ---
@@ -293,23 +347,27 @@ public final class OptiminiumBlockEntityRenderCache {
 	public static String diagnosticLine() {
 		Snapshot snapshot = snapshot();
 		return String.format(Locale.ROOT,
-			"blockEntityRenderCache=%s, beHookCalls=%d, beLookupAttempts=%d, beCacheSize=%d, beCacheHitRate=%.1f%%, beCacheHits=%d, beCacheMisses=%d, beCacheInvalidations=%d, beCacheFallbacks=%d, beRejectedRenderer=%d, beRejectedType=%d, beRejectedState=%d, beRejectedAnimated=%d, beRejectedInvalidType=%d, beCacheStored=%d, beCacheSavedMs=%.3f, beAvgLifetimeFrames=%.1f, beAvgReuses=%.1f, beTopInvalidation=%s, beUnstableTypes=%d",
+			"blockEntityRenderCache=%s, beHookCalls=%d, beLookupAttempts=%d, beCacheSize=%d, beCacheHitRate=%.1f%%, beCacheHits=%d, beCacheMisses=%d, beCacheInvalidations=%d, beCacheFallbacks=%d, beRejectedRenderer=%d, beRejectedType=%d, beRejectedState=%d, beRejectedAnimated=%d, beRejectedInvalidType=%d, beCacheStored=%d, beCacheSavedMs=%.3f, beAvgLifetimeFrames=%.1f, beAvgReuses=%.1f, beTopInvalidation=%s, beUnstableTypes=%d, beHookSampleMs=%.6f, beLookupSampleMs=%.6f, beCostBypasses=%d, beTypeCosts=%s",
 			OptiminiumSettings.isBlockEntityRenderCache() ? "on" : "off",
 			snapshot.hookCalls(), snapshot.lookupAttempts(), snapshot.cachedEntries(), snapshot.hitRate(),
 			snapshot.hits(), snapshot.misses(), snapshot.invalidations(), snapshot.fallbacks(),
 			snapshot.rejectedRenderer(), snapshot.rejectedType(), snapshot.rejectedState(),
 			snapshot.rejectedAnimated(), snapshot.rejectedInvalidType(), snapshot.entriesStored(),
-			estimatedSavedNanos.sum() / 1_000_000.0D,
+			estimatedSavedNanos / 1_000_000.0D,
 			snapshot.avgEntryLifetimeFrames(),
 			snapshot.avgReuses(),
 			snapshot.topInvalidationReason(),
-			unstableTypeCooldown.size()
+			unstableTypeCooldown.size(),
+			hookSamples == 0L ? 0.0D : hookSampleNanos / (double)hookSamples / 1_000_000.0D,
+			lookupSamples == 0L ? 0.0D : lookupSampleNanos / (double)lookupSamples / 1_000_000.0D,
+			costBypasses, collectTypeStats()
 		);
 	}
 
 	public static Snapshot snapshot() {
-		long hitCount = hits.sum();
-		long missCount = misses.sum();
+		updateTopInvalidationReasonIfNeeded();
+		long hitCount = hits;
+		long missCount = misses;
 		long total = hitCount + missCount;
 		double hitRate = total == 0L ? 0.0D : hitCount * 100.0D / total;
 		int cachedEntries = size();
@@ -321,21 +379,21 @@ public final class OptiminiumBlockEntityRenderCache {
 		return new Snapshot(
 			cachedEntries,
 			lastVisibleBlockEntities,
-			hookCalls.sum(),
-			lookupAttempts.sum(),
+			hookCalls,
+			lookupAttempts,
 			hitCount,
 			missCount,
 			hitRate,
 			lastRebuildsThisFrame,
 			invalCount,
-			fallbacks.sum(),
+			fallbacks,
 			entriesStored.sum(),
-			rejectedRenderer.sum(),
-			rejectedType.sum(),
-			rejectedState.sum(),
-			rejectedAnimated.sum(),
-			rejectedInvalidType.sum(),
-			disabled.sum(),
+			rejectedRenderer,
+			rejectedType,
+			rejectedState,
+			rejectedAnimated,
+			rejectedInvalidType,
+			disabled,
 			lastSavedFrameNanos / 1_000_000.0D,
 			cachedEntries * 6L * 1024L,
 			avgLifetime,
@@ -357,27 +415,28 @@ public final class OptiminiumBlockEntityRenderCache {
 	}
 
 	private static void put(Key key, Entry entry, BlockEntityType<?> type) {
-		synchronized (CACHE_LOCK) {
-			CACHE.put(key, entry);
-			entriesStored.increment();
-			int max = OptiminiumSettings.getBlockEntityRenderCacheMaxEntries();
-			while (CACHE.size() > max && !CACHE.isEmpty()) {
-				Iterator<Key> iterator = CACHE.keySet().iterator();
-				Key evictedKey = iterator.next();
+		CACHE.put(key, entry);
+		entriesStored.increment();
+		int max = OptiminiumSettings.getBlockEntityRenderCacheMaxEntries();
+		while (CACHE.size() > max && !CACHE.isEmpty()) {
+			Iterator<Key> iterator = CACHE.keySet().iterator();
+			if (!iterator.hasNext()) {
+				return;
+			}
+			Key evictedKey = iterator.next();
+			Entry removed = CACHE.remove(evictedKey);
+			if (removed != null) {
 				// Record eviction reason
 				trackInvalidationReason(evictedKey, INVALIDATION_EVICTED_LRU);
-				iterator.remove();
+				recordEntryLifetime(removed);
 				invalidations.increment();
 			}
 		}
 	}
 
-	private static String rejectionReason(BlockEntity blockEntity, float partialTick, boolean count) {
-		BlockState state = blockEntity.getBlockState();
-		BlockEntityType<?> type = blockEntity.getType();
-
+	private static String rejectionReason(BlockEntity blockEntity, BlockState state, BlockEntityType<?> type, boolean count) {
 		if (blockEntity.isRemoved() || state.isRandomlyTicking()) {
-			if (count) rejectedState.increment();
+			if (count) rejectedState++;
 			return "state";
 		}
 		if (type == BlockEntityType.BEACON || type == BlockEntityType.CONDUIT
@@ -385,29 +444,37 @@ public final class OptiminiumBlockEntityRenderCache {
 				|| type == BlockEntityType.MOB_SPAWNER || type == BlockEntityType.TRIAL_SPAWNER
 				|| type == BlockEntityType.VAULT || type == BlockEntityType.PISTON
 				|| state.getLightEmission() > 0) {
-			if (count) rejectedType.increment();
+			if (count) rejectedType++;
 			return "type";
 		}
 		// Only cache chest-like block entities when they are fully closed
 		if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST
 				|| type == BlockEntityType.ENDER_CHEST || type == BlockEntityType.SHULKER_BOX) {
 			if (!(blockEntity instanceof LidBlockEntity lid)) {
-				if (count) rejectedAnimated.increment();
+				if (count) rejectedAnimated++;
 				return "animated";
 			}
 			// getOpenNess with partialTick interpolates — use 1.0F (full tick) for stability
 			if (lid.getOpenNess(1.0F) != 0.0F) {
-				if (count) rejectedAnimated.increment();
+				if (count) rejectedAnimated++;
 				return "animated";
 			}
 		}
 		// Skip modded block entities that don't look static
-		ResourceLocation id = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type);
-		if (id != null && !"minecraft".equals(id.getNamespace()) && !looksStaticModded(id)) {
-			if (count) rejectedType.increment();
+		if (!isStaticCacheEligible(type)) {
+			if (count) rejectedType++;
 			return "modded_type";
 		}
 		return null;
+	}
+
+	private static boolean isStaticCacheEligible(BlockEntityType<?> type) {
+		return staticTypeEligibility.computeIfAbsent(type, OptiminiumBlockEntityRenderCache::computeStaticCacheEligibility);
+	}
+
+	private static boolean computeStaticCacheEligibility(BlockEntityType<?> type) {
+		ResourceLocation id = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type);
+		return id == null || "minecraft".equals(id.getNamespace()) || looksStaticModded(id);
 	}
 
 	private static boolean looksStaticModded(ResourceLocation id) {
@@ -420,35 +487,34 @@ public final class OptiminiumBlockEntityRenderCache {
 	}
 
 	private static int size() {
-		synchronized (CACHE_LOCK) {
-			return CACHE.size();
-		}
+		return CACHE.size();
 	}
 
-	private static long averageBuildNanos() {
-		long missCount = misses.sum();
-		return missCount <= 1L ? 0L : buildNanos.sum() / missCount;
+	private static void updateAverageBuildNanos(long elapsedNanos) {
+		if (elapsedNanos <= 0L) {
+			return;
+		}
+		if (buildSamples++ == 0L) {
+			averageBuildNanos = elapsedNanos;
+			return;
+		}
+		averageBuildNanos = (long)(averageBuildNanos * 0.875D + elapsedNanos * 0.125D);
 	}
 
 	private static void removeIf(Predicate<Key> predicate) {
-		synchronized (CACHE_LOCK) {
-			Iterator<Map.Entry<Key, Entry>> iterator = CACHE.entrySet().iterator();
-			while (iterator.hasNext()) {
-				Map.Entry<Key, Entry> mapEntry = iterator.next();
-				Key key = mapEntry.getKey();
-				Entry entry = mapEntry.getValue();
-				if (predicate.test(key)) {
-					// Record lifetime and reuse data before removal
-					recordEntryLifetime(entry);
-					iterator.remove();
-					invalidations.increment();
-				}
+		for (Map.Entry<Key, Entry> mapEntry : CACHE.entrySet()) {
+			Key key = mapEntry.getKey();
+			Entry entry = mapEntry.getValue();
+			if (predicate.test(key) && CACHE.remove(key, entry)) {
+				// Record lifetime and reuse data before removal
+				recordEntryLifetime(entry);
+				invalidations.increment();
 			}
 		}
 	}
 
 	private static void fallback(String reason) {
-		fallbacks.increment();
+		fallbacks++;
 	}
 
 	// --- Entry lifetime tracking ---
@@ -495,6 +561,7 @@ public final class OptiminiumBlockEntityRenderCache {
 	private static final String INVALIDATION_UNKNOWN = "unknown";
 
 	private static void trackInvalidationReason(Key key, String reason) {
+		topInvalidationDirty = true;
 		switch (reason) {
 			case INVALIDATION_BLOCK_STATE_CHANGED -> invalBlockStateChanged.increment();
 			case INVALIDATION_LIGHT_CHANGED -> invalLightChanged.increment();
@@ -510,8 +577,12 @@ public final class OptiminiumBlockEntityRenderCache {
 		}
 	}
 
-	private static void updateTopInvalidationReason() {
+	private static void updateTopInvalidationReasonIfNeeded() {
+		if (!topInvalidationDirty) {
+			return;
+		}
 		topInvalidationReason = findTopInvalidationReason();
+		topInvalidationDirty = false;
 	}
 
 	private static String findTopInvalidationReason() {
@@ -569,19 +640,22 @@ public final class OptiminiumBlockEntityRenderCache {
 		// Sort by total accesses (hits+misses) descending, take top 8
 		typeStatsMap.entrySet().stream()
 			.sorted((a, b) -> Long.compare(
-				b.getValue().hits.sum() + b.getValue().misses.sum(),
-				a.getValue().hits.sum() + a.getValue().misses.sum()))
+				b.getValue().hits + b.getValue().misses,
+				a.getValue().hits + a.getValue().misses))
 			.limit(8)
 			.forEach(entry -> {
 				ResourceLocation id = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getKey());
 				String name = id != null ? id.toString() : "unknown";
 				TypeStats stats = entry.getValue();
-				long total = stats.hits.sum() + stats.misses.sum();
-				double rate = total <= 0L ? 0.0D : stats.hits.sum() * 100.0D / total;
+				long total = stats.hits + stats.misses;
+				double rate = total <= 0L ? 0.0D : stats.hits * 100.0D / total;
 				if (sb.length() > 0) sb.append(" ");
-				sb.append(name).append(":h=").append(stats.hits.sum())
-					.append("/m=").append(stats.misses.sum())
-					.append("/r=").append(String.format(Locale.ROOT, "%.0f%%", rate));
+				sb.append(name).append(":h=").append(stats.hits)
+					.append("/m=").append(stats.misses)
+					.append("/r=").append(String.format(Locale.ROOT, "%.0f%%", rate))
+					.append("/lookupNs=").append(stats.lookupSamples == 0L ? 0L : stats.lookupSampleNanos / stats.lookupSamples)
+					.append("/buildNs=").append(stats.misses == 0L ? 0L : stats.buildNanos / stats.misses)
+					.append("/bypass=").append(stats.shouldBypass());
 			});
 		return sb.toString();
 	}
@@ -690,9 +764,10 @@ public final class OptiminiumBlockEntityRenderCache {
 		long lastAccessFrame;
 		int reuseCount;
 		// Store type for unstable detection on eviction
-		private BlockEntityType<?> type;
+		private final BlockEntityType<?> type;
+		private final TypeStats typeStats;
 
-		Entry(BlockEntity blockEntity, BlockState state, int packedLight, long birthFrame) {
+		Entry(BlockEntity blockEntity, BlockState state, int packedLight, long birthFrame, TypeStats typeStats) {
 			this.blockEntity = new WeakReference<>(blockEntity);
 			this.state = state;
 			this.packedLight = packedLight;
@@ -700,6 +775,7 @@ public final class OptiminiumBlockEntityRenderCache {
 			this.lastAccessFrame = birthFrame;
 			this.reuseCount = 0;
 			this.type = blockEntity.getType();
+			this.typeStats = typeStats;
 		}
 
 		boolean matches(BlockEntity current, BlockState currentState) {
@@ -720,8 +796,19 @@ public final class OptiminiumBlockEntityRenderCache {
 	// --- Per-type stats holder ---
 
 	private static class TypeStats {
-		final LongAdder hits = new LongAdder();
-		final LongAdder misses = new LongAdder();
+		long hits;
+		long misses;
+		long lookupSampleNanos;
+		long lookupSamples;
+		long buildNanos;
+
+		boolean shouldBypass() {
+			long accesses = hits + misses;
+			if (accesses < 256L || lookupSamples < 4L || misses == 0L) return false;
+			double averageLookup = lookupSampleNanos / (double)lookupSamples;
+			double averageBuild = buildNanos / (double)misses;
+			return averageLookup > averageBuild;
+		}
 	}
 
 	// --- Snapshot record ---

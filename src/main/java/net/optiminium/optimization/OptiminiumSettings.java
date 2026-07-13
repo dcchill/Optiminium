@@ -20,15 +20,18 @@ public final class OptiminiumSettings {
 	private static volatile int particleRenderDistanceBlocks = 64;
 	private static volatile int maxParticlesPerFrame = 96;
 	private static volatile boolean blockEntityCulling = true;
-	private static volatile int blockEntityDistanceScalePercent = 100;
+	private static volatile int blockEntityDistanceScalePercent = 90;
 	private static volatile int denseBlockEntityThreshold = 512;
 	private static volatile boolean blockEntityRenderCache = true;
+	private static volatile boolean blockEntityVirtualizationEnabled = false;
+	private static volatile boolean blockEntityVirtualizationDebugProxies = false;
+	private static volatile BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
 	private static volatile int blockEntityRenderCacheMaxEntries = 4096;
 	private static volatile boolean blockEntityRenderCacheDebug = false;
 	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 	private static volatile boolean experimentalTemporalSignificance = false;
 	private static volatile boolean enableOpenGlTweaks = true;
-	private static volatile OpenGlOptimizationMode openGlOptimizationMode = OpenGlOptimizationMode.MEASURE_ONLY;
+	private static volatile OpenGlOptimizationMode openGlOptimizationMode = OpenGlOptimizationMode.OFF;
 
 	static {
 		load();
@@ -54,7 +57,8 @@ public final class OptiminiumSettings {
 
 	public static Snapshot snapshot() {
 		return new Snapshot(enabled, framePacing, particleLimiter, blockEntityCulling,
-			denseSceneAdaptiveMode);
+			blockEntityRenderCache, blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
+			blockEntityVirtualizationAggressiveness, denseSceneAdaptiveMode, enableOpenGlTweaks, openGlOptimizationMode);
 	}
 
 	public static void restore(Snapshot snapshot) {
@@ -62,7 +66,13 @@ public final class OptiminiumSettings {
 		framePacing = snapshot.framePacing;
 		particleLimiter = snapshot.particleLimiter;
 		blockEntityCulling = snapshot.blockEntityCulling;
+		blockEntityRenderCache = snapshot.blockEntityRenderCache;
+		blockEntityVirtualizationEnabled = snapshot.blockEntityVirtualizationEnabled;
+		blockEntityVirtualizationDebugProxies = snapshot.blockEntityVirtualizationDebugProxies;
+		blockEntityVirtualizationAggressiveness = snapshot.blockEntityVirtualizationAggressiveness;
 		denseSceneAdaptiveMode = snapshot.denseSceneAdaptiveMode;
+		enableOpenGlTweaks = snapshot.enableOpenGlTweaks;
+		openGlOptimizationMode = snapshot.openGlOptimizationMode;
 		save();
 	}
 
@@ -70,8 +80,14 @@ public final class OptiminiumSettings {
 		framePacing = false;
 		particleLimiter = false;
 		blockEntityCulling = false;
+		blockEntityRenderCache = false;
+		blockEntityVirtualizationEnabled = false;
+		blockEntityVirtualizationDebugProxies = false;
+		blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
 		experimentalTemporalSignificance = false;
 		denseSceneAdaptiveMode = DenseSceneAdaptiveMode.OFF;
+		enableOpenGlTweaks = false;
+		openGlOptimizationMode = OpenGlOptimizationMode.OFF;
 		save();
 	}
 
@@ -79,6 +95,10 @@ public final class OptiminiumSettings {
 		enabled = true;
 		framePacing = true;
 		blockEntityCulling = true;
+		blockEntityVirtualizationEnabled = false;
+		blockEntityVirtualizationDebugProxies = false;
+		blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
+		openGlOptimizationMode = OpenGlOptimizationMode.OFF;
 		switch (preset) {
 			case HIGH_PERFORMANCE -> {
 				gpuTargetFps = 120;
@@ -161,7 +181,7 @@ public final class OptiminiumSettings {
 	}
 
 	public static OpenGlOptimizationMode getOpenGlOptimizationMode() {
-		return enableOpenGlTweaks ? openGlOptimizationMode : OpenGlOptimizationMode.OFF;
+		return enabled && enableOpenGlTweaks ? openGlOptimizationMode : OpenGlOptimizationMode.OFF;
 	}
 
 	public static OpenGlOptimizationMode cycleOpenGlOptimizationMode() {
@@ -241,6 +261,64 @@ public final class OptiminiumSettings {
 
 	public static void setBlockEntityRenderCache(boolean value) {
 		blockEntityRenderCache = value;
+		save();
+	}
+
+	public static boolean isBlockEntityRenderVirtualization() {
+		return isBlockEntityVirtualizationEnabled();
+	}
+
+	public static boolean toggleBlockEntityRenderVirtualization() {
+		return toggleBlockEntityVirtualizationEnabled();
+	}
+
+	public static void setBlockEntityRenderVirtualization(boolean value) {
+		setBlockEntityVirtualizationEnabled(value);
+	}
+
+	public static boolean isBlockEntityVirtualizationEnabled() {
+		return blockEntityVirtualizationEnabled;
+	}
+
+	public static boolean toggleBlockEntityVirtualizationEnabled() {
+		blockEntityVirtualizationEnabled = !blockEntityVirtualizationEnabled;
+		save();
+		return blockEntityVirtualizationEnabled;
+	}
+
+	public static void setBlockEntityVirtualizationEnabled(boolean value) {
+		blockEntityVirtualizationEnabled = value;
+		save();
+	}
+
+	public static boolean isBlockEntityVirtualizationDebugProxies() {
+		return blockEntityVirtualizationDebugProxies;
+	}
+
+	public static boolean toggleBlockEntityVirtualizationDebugProxies() {
+		blockEntityVirtualizationDebugProxies = !blockEntityVirtualizationDebugProxies;
+		save();
+		return blockEntityVirtualizationDebugProxies;
+	}
+
+	public static void setBlockEntityVirtualizationDebugProxies(boolean value) {
+		blockEntityVirtualizationDebugProxies = value;
+		save();
+	}
+
+	public static BlockEntityVirtualizationAggressiveness getBlockEntityVirtualizationAggressiveness() {
+		return blockEntityVirtualizationAggressiveness;
+	}
+
+	public static BlockEntityVirtualizationAggressiveness cycleBlockEntityVirtualizationAggressiveness() {
+		BlockEntityVirtualizationAggressiveness[] modes = BlockEntityVirtualizationAggressiveness.values();
+		blockEntityVirtualizationAggressiveness = modes[(blockEntityVirtualizationAggressiveness.ordinal() + 1) % modes.length];
+		save();
+		return blockEntityVirtualizationAggressiveness;
+	}
+
+	public static void setBlockEntityVirtualizationAggressiveness(BlockEntityVirtualizationAggressiveness value) {
+		blockEntityVirtualizationAggressiveness = value == null ? BlockEntityVirtualizationAggressiveness.CONSERVATIVE : value;
 		save();
 	}
 
@@ -336,6 +414,10 @@ public final class OptiminiumSettings {
 			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
 			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			blockEntityRenderCache = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache)));
+			blockEntityVirtualizationEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationEnabled",
+				properties.getProperty("blockEntityRenderVirtualization", Boolean.toString(blockEntityVirtualizationEnabled))));
+			blockEntityVirtualizationDebugProxies = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationDebugProxies", Boolean.toString(blockEntityVirtualizationDebugProxies)));
+			blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.parse(properties.getProperty("blockEntityVirtualizationAggressiveness", blockEntityVirtualizationAggressiveness.name()));
 			blockEntityRenderCacheMaxEntries = clamp(Integer.parseInt(properties.getProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries))), 256, 65536);
 			blockEntityRenderCacheDebug = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug)));
 			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
@@ -361,6 +443,9 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
 		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache));
+		properties.setProperty("blockEntityVirtualizationEnabled", Boolean.toString(blockEntityVirtualizationEnabled));
+		properties.setProperty("blockEntityVirtualizationDebugProxies", Boolean.toString(blockEntityVirtualizationDebugProxies));
+		properties.setProperty("blockEntityVirtualizationAggressiveness", blockEntityVirtualizationAggressiveness.name().toLowerCase());
 		properties.setProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries));
 		properties.setProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug));
 		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
@@ -395,6 +480,20 @@ public final class OptiminiumSettings {
 		}
 	}
 
+	public enum BlockEntityVirtualizationAggressiveness {
+		CONSERVATIVE,
+		BALANCED,
+		AGGRESSIVE;
+
+		private static BlockEntityVirtualizationAggressiveness parse(String value) {
+			try {
+				return BlockEntityVirtualizationAggressiveness.valueOf(value.toUpperCase());
+			} catch (IllegalArgumentException | NullPointerException exception) {
+				return CONSERVATIVE;
+			}
+		}
+	}
+
 	public enum OpenGlOptimizationMode {
 		OFF,
 		DIAGNOSTIC_ONLY,
@@ -409,7 +508,7 @@ public final class OptiminiumSettings {
 				}
 				return OpenGlOptimizationMode.valueOf(normalized);
 			} catch (IllegalArgumentException exception) {
-				return MEASURE_ONLY;
+				return OFF;
 			}
 		}
 	}
@@ -421,7 +520,11 @@ public final class OptiminiumSettings {
 	}
 
 	public record Snapshot(boolean enabled, boolean framePacing, boolean particleLimiter,
-			boolean blockEntityCulling,
-			DenseSceneAdaptiveMode denseSceneAdaptiveMode) {
+			boolean blockEntityCulling, boolean blockEntityRenderCache,
+			boolean blockEntityVirtualizationEnabled,
+			boolean blockEntityVirtualizationDebugProxies,
+			BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness,
+			DenseSceneAdaptiveMode denseSceneAdaptiveMode,
+			boolean enableOpenGlTweaks, OpenGlOptimizationMode openGlOptimizationMode) {
 	}
 }

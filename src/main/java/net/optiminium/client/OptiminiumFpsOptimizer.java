@@ -27,9 +27,15 @@ public final class OptiminiumFpsOptimizer {
 		OptiminiumVisualSignificance.onFrameStart();
 		boolean enabled = OptiminiumSettings.isEnabled();
 		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
-		player = Minecraft.getInstance().player;
-		double effectParticleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * 0.375D);
-		effectParticleDistanceSqr = effectParticleDistance * effectParticleDistance;
+		if (particleLimiter) {
+			player = Minecraft.getInstance().player;
+			double effectParticleDistance = Math.max(8.0D,
+				OptiminiumSettings.getParticleRenderDistanceBlocks() * 0.375D * OptiminiumGpuOptimizer.getParticleWorkScale());
+			effectParticleDistanceSqr = effectParticleDistance * effectParticleDistance;
+		} else {
+			player = null;
+			effectParticleDistanceSqr = 0.0D;
+		}
 	}
 
 	@SubscribeEvent

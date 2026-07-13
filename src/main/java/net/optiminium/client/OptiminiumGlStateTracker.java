@@ -124,7 +124,8 @@ public final class OptiminiumGlStateTracker {
 	}
 
 	public static void onActiveTexture(int glTexture) {
-		if (effectiveMode() == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
+		OptiminiumSettings.OpenGlOptimizationMode mode = effectiveMode();
+		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF || !tracksState(mode)) {
 			return;
 		}
 		int unit = glTexture - GL_TEXTURE0;
@@ -143,11 +144,11 @@ public final class OptiminiumGlStateTracker {
 		}
 
 		textureBindRequests.increment();
-		textureBindActual.increment();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY
 				|| mode == OptiminiumSettings.OpenGlOptimizationMode.MEASURE_ONLY) {
 			return true;
 		}
+		textureBindActual.increment();
 
 		boolean knownUnit = activeTextureKnown && activeTextureUnit >= 0 && activeTextureUnit < MAX_TEXTURE_UNITS;
 		int previousTarget = knownUnit ? textureTargets[activeTextureUnit] : UNKNOWN;
@@ -201,11 +202,11 @@ public final class OptiminiumGlStateTracker {
 		}
 
 		shaderBindRequests.increment();
-		shaderBindActual.increment();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.DIAGNOSTIC_ONLY
 				|| mode == OptiminiumSettings.OpenGlOptimizationMode.MEASURE_ONLY) {
 			return true;
 		}
+		shaderBindActual.increment();
 
 		observedPreviousShaderId = activeProgram;
 		requestedShaderId = program;
@@ -253,11 +254,18 @@ public final class OptiminiumGlStateTracker {
 	}
 
 	public static void invalidate(InvalidationReason reason) {
-		if (effectiveMode() == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
+		OptiminiumSettings.OpenGlOptimizationMode mode = effectiveMode();
+		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
 			return;
 		}
 		trackerInvalidations.increment();
 		invalidationReasons[reason.ordinal()].increment();
+		if (!tracksState(mode)) {
+			if (reason == InvalidationReason.FRAMEBUFFER) {
+				framebufferOnlyInvalidations.increment();
+			}
+			return;
+		}
 		switch (reason) {
 			case FRAMEBUFFER -> {
 				framebufferOnlyInvalidations.increment();
@@ -285,22 +293,28 @@ public final class OptiminiumGlStateTracker {
 		OptiminiumSettings.OpenGlOptimizationMode mode = effectiveMode();
 		long conservativePotential = textureBindPotentialSkipped.sum() + shaderBindPotentialSkipped.sum();
 		long relaxedPotential = textureRelaxedPotentialSkipped.sum() + shaderRelaxedPotentialSkipped.sum();
+		long textureRequests = textureBindRequests.sum();
+		long textureSkipped = textureBindSkipped.sum();
+		long shaderRequests = shaderBindRequests.sum();
+		long shaderSkipped = shaderBindSkipped.sum();
+		long textureActual = tracksState(mode) ? textureBindActual.sum() : Math.max(0L, textureRequests - textureSkipped);
+		long shaderActual = tracksState(mode) ? shaderBindActual.sum() : Math.max(0L, shaderRequests - shaderSkipped);
 		return new DiagnosticSnapshot(
 			OptiminiumSettings.isOpenGlTweaksEnabled(),
 			mode.name(),
 			sodiumConservative && mode == OptiminiumSettings.OpenGlOptimizationMode.SAFE_OPTIMIZE,
 			glAutoDisabled,
 			glAutoDisableReason,
-			textureBindRequests.sum(),
+			textureRequests,
 			textureBindPotentialSkipped.sum(),
 			textureRelaxedPotentialSkipped.sum(),
-			textureBindSkipped.sum(),
-			textureBindActual.sum(),
-			shaderBindRequests.sum(),
+			textureSkipped,
+			textureActual,
+			shaderRequests,
 			shaderBindPotentialSkipped.sum(),
 			shaderRelaxedPotentialSkipped.sum(),
-			shaderBindSkipped.sum(),
-			shaderBindActual.sum(),
+			shaderSkipped,
+			shaderActual,
 			trackerInvalidations.sum(),
 			activeTextureUnitMismatches.sum(),
 			textureTargetMismatches.sum(),
@@ -334,15 +348,23 @@ public final class OptiminiumGlStateTracker {
 	}
 
 	public static FrameDiagnostics frameDiagnostics() {
+		if (!isFrameDiagnosticsActive()) {
+			return FrameDiagnostics.empty();
+		}
+		OptiminiumSettings.OpenGlOptimizationMode mode = effectiveMode();
+		long textureRequests = textureBindRequests.sum() - frameStartRequestsTex;
+		long textureSkipped = textureBindSkipped.sum() - frameStartSkippedTex;
+		long shaderRequests = shaderBindRequests.sum() - frameStartRequestsSh;
+		long shaderSkipped = shaderBindSkipped.sum() - frameStartSkippedSh;
 		return new FrameDiagnostics(
-			textureBindRequests.sum() - frameStartRequestsTex,
+			textureRequests,
 			textureBindPotentialSkipped.sum() - frameStartPotentialSkippedTex,
-			textureBindSkipped.sum() - frameStartSkippedTex,
-			textureBindActual.sum() - frameStartActualTex,
-			shaderBindRequests.sum() - frameStartRequestsSh,
+			textureSkipped,
+			tracksState(mode) ? textureBindActual.sum() - frameStartActualTex : Math.max(0L, textureRequests - textureSkipped),
+			shaderRequests,
 			shaderBindPotentialSkipped.sum() - frameStartPotentialSkippedSh,
-			shaderBindSkipped.sum() - frameStartSkippedSh,
-			shaderBindActual.sum() - frameStartActualSh,
+			shaderSkipped,
+			tracksState(mode) ? shaderBindActual.sum() - frameStartActualSh : Math.max(0L, shaderRequests - shaderSkipped),
 			trackerInvalidations.sum() - frameStartInvalidations
 		);
 	}
@@ -358,6 +380,18 @@ public final class OptiminiumGlStateTracker {
 	private static long frameStartInvalidations;
 
 	public static void onFrameStart() {
+		if (!isFrameDiagnosticsActive()) {
+			frameStartRequestsTex = 0L;
+			frameStartPotentialSkippedTex = 0L;
+			frameStartSkippedTex = 0L;
+			frameStartActualTex = 0L;
+			frameStartRequestsSh = 0L;
+			frameStartPotentialSkippedSh = 0L;
+			frameStartSkippedSh = 0L;
+			frameStartActualSh = 0L;
+			frameStartInvalidations = 0L;
+			return;
+		}
 		frameStartRequestsTex = textureBindRequests.sum();
 		frameStartPotentialSkippedTex = textureBindPotentialSkipped.sum();
 		frameStartSkippedTex = textureBindSkipped.sum();
@@ -369,6 +403,12 @@ public final class OptiminiumGlStateTracker {
 		frameStartInvalidations = trackerInvalidations.sum();
 	}
 
+	private static boolean isFrameDiagnosticsActive() {
+		return OptiminiumSettings.isOpenGlTweaksEnabled()
+			&& OptiminiumSettings.getOpenGlOptimizationMode() != OptiminiumSettings.OpenGlOptimizationMode.OFF
+			&& !glAutoDisabled;
+	}
+
 	private static OptiminiumSettings.OpenGlOptimizationMode effectiveMode() {
 		if (!OptiminiumSettings.isOpenGlTweaksEnabled() || glAutoDisabled) {
 			if (!OptiminiumSettings.isOpenGlTweaksEnabled()) {
@@ -377,6 +417,10 @@ public final class OptiminiumGlStateTracker {
 			return OptiminiumSettings.OpenGlOptimizationMode.OFF;
 		}
 		return OptiminiumSettings.getOpenGlOptimizationMode();
+	}
+
+	private static boolean tracksState(OptiminiumSettings.OpenGlOptimizationMode mode) {
+		return mode == OptiminiumSettings.OpenGlOptimizationMode.SAFE_OPTIMIZE;
 	}
 
 	private static HookOrder hookOrder() {

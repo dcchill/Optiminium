@@ -5,11 +5,15 @@
   "mixins": [],
   "client": [
     "BlockEntityRenderDispatcherMixin",
+    "ChestRendererMixin",
+    "HangingSignRendererMixin",
     "GlStateManagerMixin",
     "LevelRendererMixin",
     "MinecraftMixin",
     "ParticleEngineMixin",
-    "RenderStateShardMixin"
+    "RenderStateShardMixin",
+    "SignRendererMixin",
+    "VertexBufferAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

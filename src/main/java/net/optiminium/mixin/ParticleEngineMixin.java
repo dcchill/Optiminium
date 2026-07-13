@@ -22,6 +22,9 @@ import java.util.function.Predicate;
 public abstract class ParticleEngineMixin {
 	@Inject(method = "createParticle", at = @At("HEAD"), cancellable = true)
 	private void optiminium$skipParticleCreate(ParticleOptions options, double x, double y, double z, double xSpeed, double ySpeed, double zSpeed, CallbackInfoReturnable<Particle> callback) {
+		if (!OptiminiumGpuOptimizer.shouldProcessParticleHookThisFrame()) {
+			return;
+		}
 		if (OptiminiumGpuOptimizer.shouldSkipParticle(options, x, y, z)) {
 			callback.setReturnValue(null);
 		}
@@ -29,6 +32,9 @@ public abstract class ParticleEngineMixin {
 
 	@Inject(method = "createTrackingEmitter(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/particles/ParticleOptions;)V", at = @At("HEAD"), cancellable = true)
 	private void optiminium$skipTrackingEmitter(Entity entity, ParticleOptions options, CallbackInfo callback) {
+		if (!OptiminiumGpuOptimizer.shouldProcessParticleHookThisFrame()) {
+			return;
+		}
 		if (OptiminiumGpuOptimizer.shouldSkipParticle(options, entity.getX(), entity.getY(), entity.getZ())) {
 			callback.cancel();
 		}
@@ -36,14 +42,35 @@ public abstract class ParticleEngineMixin {
 
 	@Inject(method = "createTrackingEmitter(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/particles/ParticleOptions;I)V", at = @At("HEAD"), cancellable = true)
 	private void optiminium$skipTimedTrackingEmitter(Entity entity, ParticleOptions options, int lifetime, CallbackInfo callback) {
+		if (!OptiminiumGpuOptimizer.shouldProcessParticleHookThisFrame()) {
+			return;
+		}
 		if (OptiminiumGpuOptimizer.shouldSkipParticle(options, entity.getX(), entity.getY(), entity.getZ())) {
 			callback.cancel();
 		}
 	}
 
 	@Inject(method = "render(Lnet/minecraft/client/renderer/LightTexture;Lnet/minecraft/client/Camera;FLnet/minecraft/client/renderer/culling/Frustum;Ljava/util/function/Predicate;)V",
+		at = @At("HEAD"))
+	private void optiminium$pushParticleUploadCategory(LightTexture lightTexture, Camera camera, float partialTick, Frustum frustum, Predicate<ParticleRenderType> renderTypePredicate, CallbackInfo callback) {
+		if (OptiminiumRenderProfiler.areUploadCategoriesActive()) {
+			OptiminiumRenderProfiler.pushUploadCategory(OptiminiumRenderProfiler.UploadCategory.PARTICLES_EFFECTS);
+		}
+	}
+
+	@Inject(method = "render(Lnet/minecraft/client/renderer/LightTexture;Lnet/minecraft/client/Camera;FLnet/minecraft/client/renderer/culling/Frustum;Ljava/util/function/Predicate;)V",
+		at = @At("RETURN"))
+	private void optiminium$popParticleUploadCategory(LightTexture lightTexture, Camera camera, float partialTick, Frustum frustum, Predicate<ParticleRenderType> renderTypePredicate, CallbackInfo callback) {
+		if (OptiminiumRenderProfiler.areUploadCategoriesActive()) {
+			OptiminiumRenderProfiler.popUploadCategory();
+		}
+	}
+
+	@Inject(method = "render(Lnet/minecraft/client/renderer/LightTexture;Lnet/minecraft/client/Camera;FLnet/minecraft/client/renderer/culling/Frustum;Ljava/util/function/Predicate;)V",
 		at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/vertex/BufferUploader;drawWithShader(Lcom/mojang/blaze3d/vertex/MeshData;)V"))
 	private void optiminium$profileParticleRender(LightTexture lightTexture, Camera camera, float partialTick, Frustum frustum, Predicate<ParticleRenderType> renderTypePredicate, CallbackInfo callback) {
-		OptiminiumRenderProfiler.recordParticleRender();
+		if (OptiminiumRenderProfiler.isEnabled()) {
+			OptiminiumRenderProfiler.recordParticleRender();
+		}
 	}
 }

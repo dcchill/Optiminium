@@ -1,7 +1,11 @@
 package net.optiminium.client;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+
 public final class OptiminiumRenderProfiler {
 	private static final long STALL_NANOS = 2_000_000L;
+	private static final ThreadLocal<Deque<UploadCategory>> UPLOAD_CATEGORY_STACK = ThreadLocal.withInitial(ArrayDeque::new);
 	private static boolean enabled;
 	private static boolean frameOpen;
 	private static long textureBindCount;
@@ -26,6 +30,30 @@ public final class OptiminiumRenderProfiler {
 	private static int maxBufferUploadsPerFrame;
 	private static int maxRenderLayerSwitchesPerFrame;
 	private static long maxBufferUploadNanosPerFrame;
+	private static long proxyLodUploadCount;
+	private static long proxyLodUploadBytes;
+	private static long terrainChunkUploadCount;
+	private static long terrainChunkUploadBytes;
+	private static long blockEntityProxyUploadCount;
+	private static long blockEntityProxyUploadBytes;
+	private static long particleEffectUploadCount;
+	private static long particleEffectUploadBytes;
+	private static long unknownVanillaUploadCount;
+	private static long unknownVanillaUploadBytes;
+	private static long totalUploadBytes;
+	private static long optiminiumDrawCalls;
+	private static long optiminiumRenderTypeSwitches;
+	private static long optiminiumEndBatchCalls;
+	private static long proxyDrawCalls;
+	private static long proxyBatches;
+	private static long debugDrawCalls;
+	private static long debugBatches;
+	private static Object lastOptiminiumRenderType;
+	private static long largestUploadBytes;
+	private static UploadCategory largestUploadCategory = UploadCategory.UNKNOWN_VANILLA;
+	private static long frameUploadBytes;
+	private static long frameLargestUploadBytes;
+	private static UploadCategory frameLargestUploadCategory = UploadCategory.UNKNOWN_VANILLA;
 	private static boolean frameHasTranslucentRender;
 	private static boolean frameHasParticleRender;
 	private static boolean frameHasTerrainRender;
@@ -62,7 +90,20 @@ public final class OptiminiumRenderProfiler {
 			maxShaderBindsPerFrame,
 			maxBufferUploadsPerFrame,
 			maxRenderLayerSwitchesPerFrame,
-			maxBufferUploadNanosPerFrame / 1_000_000.0D
+			maxBufferUploadNanosPerFrame / 1_000_000.0D,
+			proxyLodUploadCount,
+			proxyLodUploadBytes,
+			terrainChunkUploadCount,
+			terrainChunkUploadBytes,
+			blockEntityProxyUploadCount,
+			blockEntityProxyUploadBytes,
+			particleEffectUploadCount,
+			particleEffectUploadBytes,
+			unknownVanillaUploadCount,
+			unknownVanillaUploadBytes,
+			totalUploadBytes,
+			largestUploadCategory.displayName(), optiminiumDrawCalls, optiminiumRenderTypeSwitches,
+			optiminiumEndBatchCalls, proxyDrawCalls, proxyBatches, debugDrawCalls, debugBatches
 		);
 	}
 
@@ -90,6 +131,26 @@ public final class OptiminiumRenderProfiler {
 		maxBufferUploadsPerFrame = 0;
 		maxRenderLayerSwitchesPerFrame = 0;
 		maxBufferUploadNanosPerFrame = 0L;
+		proxyLodUploadCount = 0L;
+		proxyLodUploadBytes = 0L;
+		terrainChunkUploadCount = 0L;
+		terrainChunkUploadBytes = 0L;
+		blockEntityProxyUploadCount = 0L;
+		blockEntityProxyUploadBytes = 0L;
+		particleEffectUploadCount = 0L;
+		particleEffectUploadBytes = 0L;
+		unknownVanillaUploadCount = 0L;
+		unknownVanillaUploadBytes = 0L;
+		totalUploadBytes = 0L;
+		optiminiumDrawCalls = 0L; optiminiumRenderTypeSwitches = 0L; optiminiumEndBatchCalls = 0L;
+		proxyDrawCalls = 0L; proxyBatches = 0L; debugDrawCalls = 0L; debugBatches = 0L;
+		lastOptiminiumRenderType = null;
+		largestUploadBytes = 0L;
+		largestUploadCategory = UploadCategory.UNKNOWN_VANILLA;
+		frameUploadBytes = 0L;
+		frameLargestUploadBytes = 0L;
+		frameLargestUploadCategory = UploadCategory.UNKNOWN_VANILLA;
+		UPLOAD_CATEGORY_STACK.get().clear();
 		lastFrameSnapshot = FrameSnapshot.EMPTY;
 		frameHasTranslucentRender = false;
 		frameHasParticleRender = false;
@@ -155,17 +216,118 @@ public final class OptiminiumRenderProfiler {
 		return isActive() ? System.nanoTime() : 0L;
 	}
 
+	public static void recordOptiminiumDraw(Object renderType, boolean proxy, boolean debug) {
+		if (!isActive()) return;
+		optiminiumDrawCalls++;
+		if (renderType != null && renderType != lastOptiminiumRenderType) {
+			optiminiumRenderTypeSwitches++;
+			lastOptiminiumRenderType = renderType;
+		}
+		if (proxy) { proxyDrawCalls++; proxyBatches++; }
+		if (debug) { debugDrawCalls++; debugBatches++; }
+	}
+
+	public static void recordOptiminiumEndBatch() {
+		if (isActive()) optiminiumEndBatchCalls++;
+	}
+
+	public static boolean isEnabled() {
+		return enabled;
+	}
+
+	public static boolean areUploadCategoriesActive() {
+		return isActive();
+	}
+
+	public static void pushUploadCategory(UploadCategory category) {
+		if (!isActive()) {
+			return;
+		}
+		UPLOAD_CATEGORY_STACK.get().push(category == null ? UploadCategory.UNKNOWN_VANILLA : category);
+	}
+
+	public static void popUploadCategory() {
+		if (!isActive()) {
+			return;
+		}
+		Deque<UploadCategory> stack = UPLOAD_CATEGORY_STACK.get();
+		if (!stack.isEmpty()) {
+			stack.pop();
+		}
+	}
+
+	public static UploadCategory currentUploadCategory() {
+		if (!isActive()) {
+			return UploadCategory.UNKNOWN_VANILLA;
+		}
+		Deque<UploadCategory> stack = UPLOAD_CATEGORY_STACK.get();
+		return stack.isEmpty() ? UploadCategory.UNKNOWN_VANILLA : stack.peek();
+	}
+
 	public static void recordBufferUpload(long startNanos) {
 		if (startNanos == 0L) {
 			return;
 		}
+		recordBufferUpload(startNanos, 0L, currentUploadCategory());
+	}
+
+	public static void recordBufferUpload(long startNanos, long bytes, UploadCategory category) {
+		recordBufferUpload(startNanos, bytes, category, true);
+	}
+
+	public static void recordBufferUpload(long startNanos, long bytes, UploadCategory category, boolean countAsUpload) {
+		if (startNanos == 0L) {
+			return;
+		}
 		long nanos = Math.max(0L, System.nanoTime() - startNanos);
-		bufferUploadCount++;
-		frameBufferUploads++;
+		if (countAsUpload) {
+			bufferUploadCount++;
+			frameBufferUploads++;
+		}
 		bufferUploadNanos += nanos;
 		recordRenderProfilingDuration(nanos);
 		frameBufferUploadNanos += nanos;
 		frameOpen = true;
+		if (bytes < 0L) {
+			bytes = 0L;
+		}
+		if (bytes > 0L && countAsUpload) {
+			if (category == null) {
+				category = UploadCategory.UNKNOWN_VANILLA;
+			}
+			totalUploadBytes += bytes;
+			switch (category) {
+				case PROXY_LOD -> {
+					proxyLodUploadCount++;
+					proxyLodUploadBytes += bytes;
+				}
+				case TERRAIN_CHUNK -> {
+					terrainChunkUploadCount++;
+					terrainChunkUploadBytes += bytes;
+				}
+				case BLOCK_ENTITY_PROXY -> {
+					blockEntityProxyUploadCount++;
+					blockEntityProxyUploadBytes += bytes;
+				}
+				case PARTICLES_EFFECTS -> {
+					particleEffectUploadCount++;
+					particleEffectUploadBytes += bytes;
+				}
+				case UNKNOWN_VANILLA -> {
+					unknownVanillaUploadCount++;
+					unknownVanillaUploadBytes += bytes;
+				}
+			}
+			frameUploadBytes += bytes;
+			if (bytes > frameLargestUploadBytes) {
+				frameLargestUploadBytes = bytes;
+				frameLargestUploadCategory = category;
+			}
+			if (bytes > largestUploadBytes) {
+				largestUploadBytes = bytes;
+				largestUploadCategory = category;
+			}
+		}
 	}
 
 	private static void recordRenderProfilingSince(long startNanos) {
@@ -190,7 +352,9 @@ public final class OptiminiumRenderProfiler {
 			frameBufferUploads,
 			frameRenderLayerSwitches,
 			frameBufferUploadNanos / 1_000_000.0D,
-			frameRenderProfilingNanos / 1_000_000.0D
+			frameRenderProfilingNanos / 1_000_000.0D,
+			frameUploadBytes,
+			frameLargestUploadCategory.displayName()
 		);
 		maxTextureBindsPerFrame = Math.max(maxTextureBindsPerFrame, frameTextureBinds);
 		maxShaderBindsPerFrame = Math.max(maxShaderBindsPerFrame, frameShaderBinds);
@@ -215,6 +379,9 @@ public final class OptiminiumRenderProfiler {
 		frameHasTranslucentRender = false;
 		frameHasParticleRender = false;
 		frameHasTerrainRender = false;
+		frameUploadBytes = 0L;
+		frameLargestUploadBytes = 0L;
+		frameLargestUploadCategory = UploadCategory.UNKNOWN_VANILLA;
 		frameOpen = false;
 	}
 
@@ -226,15 +393,35 @@ public final class OptiminiumRenderProfiler {
 		return lastFrameSnapshot;
 	}
 
+	public enum UploadCategory {
+		PROXY_LOD("proxyLod"),
+		TERRAIN_CHUNK("terrainChunk"),
+		BLOCK_ENTITY_PROXY("blockEntity"),
+		PARTICLES_EFFECTS("particles"),
+		UNKNOWN_VANILLA("unknown");
+
+		private final String displayName;
+
+		UploadCategory(String displayName) {
+			this.displayName = displayName;
+		}
+
+		public String displayName() {
+			return displayName;
+		}
+	}
+
 	public record FrameSnapshot(
 		int textureBinds,
 		int shaderBinds,
 		int bufferUploads,
 		int renderLayerSwitches,
 		double bufferUploadMs,
-		double renderProfileMs
+		double renderProfileMs,
+		long uploadBytes,
+		String largestUploadSource
 	) {
-		private static final FrameSnapshot EMPTY = new FrameSnapshot(0, 0, 0, 0, 0.0D, 0.0D);
+		private static final FrameSnapshot EMPTY = new FrameSnapshot(0, 0, 0, 0, 0.0D, 0.0D, 0L, "none");
 	}
 
 	public record Snapshot(
@@ -253,7 +440,22 @@ public final class OptiminiumRenderProfiler {
 		int maxShaderBindsPerFrame,
 		int maxBufferUploadsPerFrame,
 		int maxRenderLayerSwitchesPerFrame,
-		double maxBufferUploadMsPerFrame
+		double maxBufferUploadMsPerFrame,
+		long proxyLodUploadCount,
+		long proxyLodUploadBytes,
+		long terrainChunkUploadCount,
+		long terrainChunkUploadBytes,
+		long blockEntityProxyUploadCount,
+		long blockEntityProxyUploadBytes,
+		long particleEffectUploadCount,
+		long particleEffectUploadBytes,
+		long unknownVanillaUploadCount,
+		long unknownVanillaUploadBytes,
+		long totalUploadBytes,
+		String largestUploadSource,
+		long optiminiumDrawCalls, long optiminiumRenderTypeSwitches,
+		long optiminiumEndBatchCalls, long proxyDrawCalls, long proxyBatches,
+		long debugDrawCalls, long debugBatches
 	) {
 	}
 }
