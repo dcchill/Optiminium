@@ -65,6 +65,12 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.build());
 		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getBlockEntityPersistenceAdaptiveMinInstances, OptiminiumSettings::setBlockEntityPersistenceAdaptiveMinInstances, 4, 128, "BE Adaptive Minimum"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 130, OptiminiumSettings::getBlockEntityPersistenceMaxMeshes, OptiminiumSettings::setBlockEntityPersistenceMaxMeshes, 16, 4096, "BE Persistent Meshes"));
+		this.addRenderableWidget(Button.builder(armorStandPersistenceLabel(), button -> { OptiminiumSettings.toggleArmorStandPersistenceEnabled(); button.setMessage(armorStandPersistenceLabel()); })
+			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
+			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
 			.build());
@@ -103,6 +109,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component bePersistenceAdaptiveLabel() {
 		return Component.literal("BE Adaptive Persistence: "
 			+ (OptiminiumSettings.isBlockEntityPersistenceAdaptive() ? "ON" : "OFF"));
+	}
+
+	private static Component armorStandPersistenceLabel() {
+		return Component.literal("Armor Stand Persistence: "
+			+ (OptiminiumSettings.isArmorStandPersistenceEnabled() ? "ON" : "OFF"));
 	}
 
 	private static Component beVirtualizationLabel() {

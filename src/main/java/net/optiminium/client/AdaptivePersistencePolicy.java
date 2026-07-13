@@ -9,6 +9,7 @@ final class AdaptivePersistencePolicy {
 	private static final double REQUIRED_SAVING = 0.15D;
 	private static final double EWMA_OLD = 0.75D;
 	private static final long BUILD_AMORTIZATION_FRAMES = 300L;
+	private static final long MIN_TRIAL_VANILLA_FRAME_NANOS = 100_000L;
 
 	private boolean active;
 	private boolean trial;
@@ -16,6 +17,8 @@ final class AdaptivePersistencePolicy {
 	private int losses;
 	private int trials;
 	private int lastCount;
+	private int stableFrames;
+	private int previousCount;
 	private long lastSeenFrame;
 	private long nextTrialFrame;
 	private double vanillaPerInstanceNanos;
@@ -32,6 +35,12 @@ final class AdaptivePersistencePolicy {
 	boolean beginFrame(long frame, int candidates, boolean adaptive, int adaptiveMin, int guaranteed) {
 		commitFrameSamples();
 		lastCount = candidates;
+		if (candidates > 0 && Math.abs(candidates - previousCount) <= Math.max(2, previousCount / 8)) {
+			stableFrames++;
+		} else {
+			stableFrames = candidates > 0 ? 1 : 0;
+		}
+		previousCount = candidates;
 		trial = false;
 		if (candidates > 0) lastSeenFrame = frame;
 		if (!adaptive) {
@@ -72,7 +81,9 @@ final class AdaptivePersistencePolicy {
 			active = true;
 			reason = "guaranteed_threshold";
 		}
-		if (!active && frame >= nextTrialFrame) {
+		boolean trialWorthwhile = candidates >= guaranteed
+			|| vanillaPerInstanceNanos * candidates >= MIN_TRIAL_VANILLA_FRAME_NANOS;
+		if (!active && stableFrames >= REQUIRED_WINS && trialWorthwhile && frame >= nextTrialFrame) {
 			trial = true;
 			trials++;
 			nextTrialFrame = frame + TRIAL_INTERVAL_FRAMES;

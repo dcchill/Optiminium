@@ -24,6 +24,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererMixin {
 	@Inject(method = "renderLevel", at = @At(value = "INVOKE",
+		target = "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;endLastBatch()V",
+		ordinal = 0))
+	private void optiminium$flushPersistentArmorStandInstances(DeltaTracker deltaTracker,
+			boolean renderBlockOutline, net.minecraft.client.Camera camera, GameRenderer gameRenderer,
+			LightTexture lightTexture, Matrix4f projectionMatrix, Matrix4f modelViewMatrix,
+			CallbackInfo callback) {
+		OptiminiumPersistentBlockEntityMeshes.flushQueued();
+	}
+
+	@Inject(method = "renderLevel", at = @At(value = "INVOKE",
 		target = "Lnet/minecraft/client/renderer/LevelRenderer;checkPoseStack(Lcom/mojang/blaze3d/vertex/PoseStack;)V",
 		ordinal = 1))
 	private void optiminium$flushPersistentBlockEntityInstances(DeltaTracker deltaTracker,

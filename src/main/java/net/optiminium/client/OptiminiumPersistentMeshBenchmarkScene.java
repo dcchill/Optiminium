@@ -10,6 +10,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.entity.decoration.ArmorStand;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -24,6 +25,7 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 	private static final int GRID_SIZE = Math.max(4, Integer.getInteger("optiminium.persistentMeshBenchmarkGridSize", 16));
 	private static final String SCREENSHOT_NAME = System.getProperty("optiminium.persistentMeshBenchmarkScreenshot", "");
 	private static final String BENCHMARK_ORIGIN = System.getProperty("optiminium.persistentMeshBenchmarkOrigin", "");
+	private static final boolean ARMOR_STANDS = Boolean.getBoolean("optiminium.persistentMeshBenchmarkArmorStands");
 	private static int readyTicks;
 	private static boolean queued;
 	private static boolean screenshotTaken;
@@ -73,6 +75,10 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 			previousHideGui = minecraft.options.hideGui;
 			minecraft.options.hideGui = true;
 		}
+		if (ENABLED && readyTicks == 200) {
+			OptiminiumMod.LOGGER.info("Persistent mesh benchmark diagnostics: {}",
+				OptiminiumPersistentBlockEntityMeshes.diagnosticLine());
+		}
 		if (!SCREENSHOT_NAME.isEmpty() && !screenshotTaken && readyTicks >= 240) {
 			screenshotTaken = true;
 			Screenshot.grab(minecraft.gameDirectory, SCREENSHOT_NAME, minecraft.getMainRenderTarget(),
@@ -99,11 +105,23 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 					}
 				}
 			}
-			BlockState pot = Blocks.DECORATED_POT.defaultBlockState()
-				.setValue(HorizontalDirectionalBlock.FACING, Direction.NORTH);
-			for (int x = 0; x < GRID_SIZE; x++) {
-				for (int z = 0; z < GRID_SIZE; z++) {
-					level.setBlock(origin.offset(x, 0, z), pot, 3);
+			if (ARMOR_STANDS) {
+				for (int x = 0; x < GRID_SIZE; x++) {
+					for (int z = 0; z < GRID_SIZE; z++) {
+						ArmorStand stand = new ArmorStand(level, origin.getX() + x + 0.5D,
+							origin.getY(), origin.getZ() + z + 0.5D);
+						stand.setNoGravity(true);
+						stand.setYRot(0.0F);
+						level.addFreshEntity(stand);
+					}
+				}
+			} else {
+				BlockState pot = Blocks.DECORATED_POT.defaultBlockState()
+					.setValue(HorizontalDirectionalBlock.FACING, Direction.NORTH);
+				for (int x = 0; x < GRID_SIZE; x++) {
+					for (int z = 0; z < GRID_SIZE; z++) {
+						level.setBlock(origin.offset(x, 0, z), pot, 3);
+					}
 				}
 			}
 			level.setDayTime(6000L);
@@ -111,8 +129,8 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 			player.teleportTo(level, origin.getX() + (GRID_SIZE - 1) * 0.5D,
 				origin.getY() + GRID_SIZE * 0.8D, origin.getZ() - GRID_SIZE * 0.9D,
 				0.0F, 31.0F);
-			OptiminiumMod.LOGGER.info("Persistent mesh benchmark scene ready: {} identical decorated pots at {}",
-				GRID_SIZE * GRID_SIZE, origin);
+			OptiminiumMod.LOGGER.info("Persistent mesh benchmark scene ready: {} identical {} at {}",
+				GRID_SIZE * GRID_SIZE, ARMOR_STANDS ? "armor stands" : "decorated pots", origin);
 		});
 	}
 }

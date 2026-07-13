@@ -15,20 +15,34 @@ class AdaptivePersistencePolicyTest {
 	@Test
 	void beneficialTrialActivatesAfterHysteresis() {
 		AdaptivePersistencePolicy policy = new AdaptivePersistencePolicy();
-		policy.recordVanilla(16_000L, 16);
-		assertTrue(policy.beginFrame(1L, 16, true, 16, 128));
-		assertTrue(policy.trial());
-		policy.recordPersistent(8_000L, 16);
+		policy.recordVanilla(160_000L, 16);
+		assertFalse(policy.beginFrame(1L, 16, true, 16, 128));
+		policy.recordVanilla(160_000L, 16);
 		assertFalse(policy.beginFrame(2L, 16, true, 16, 128));
-		assertFalse(policy.beginFrame(3L, 16, true, 16, 128));
-		assertTrue(policy.beginFrame(4L, 16, true, 16, 128));
+		policy.recordVanilla(160_000L, 16);
+		assertTrue(policy.beginFrame(3L, 16, true, 16, 128));
+		assertTrue(policy.trial());
+		policy.recordPersistent(80_000L, 16);
+		assertFalse(policy.beginFrame(4L, 16, true, 16, 128));
+		assertFalse(policy.beginFrame(5L, 16, true, 16, 128));
+		assertTrue(policy.beginFrame(6L, 16, true, 16, 128));
 		assertTrue(policy.active());
+	}
+
+	@Test
+	void cheapModerateSceneNeverPaysForATrial() {
+		AdaptivePersistencePolicy policy = new AdaptivePersistencePolicy();
+		for (long frame = 1L; frame <= 240L; frame++) {
+			policy.recordVanilla(16_000L, 16);
+			assertFalse(policy.beginFrame(frame, 16, true, 16, 128));
+		}
+		assertFalse(policy.trial());
 	}
 
 	@Test
 	void sustainedRegressionDisablesAnActiveKey() {
 		AdaptivePersistencePolicy policy = activePolicy();
-		policy.recordPersistent(64_000L, 16);
+		policy.recordPersistent(320_000L, 16);
 		for (int i = 0; i < AdaptivePersistencePolicy.REQUIRED_LOSSES - 1; i++) {
 			assertTrue(policy.beginFrame(10L + i, 16, true, 16, 128));
 		}
@@ -77,12 +91,16 @@ class AdaptivePersistencePolicyTest {
 
 	private static AdaptivePersistencePolicy activePolicy() {
 		AdaptivePersistencePolicy policy = new AdaptivePersistencePolicy();
-		policy.recordVanilla(16_000L, 16);
+		policy.recordVanilla(160_000L, 16);
 		policy.beginFrame(1L, 16, true, 16, 128);
-		policy.recordPersistent(8_000L, 16);
+		policy.recordVanilla(160_000L, 16);
 		policy.beginFrame(2L, 16, true, 16, 128);
+		policy.recordVanilla(160_000L, 16);
 		policy.beginFrame(3L, 16, true, 16, 128);
+		policy.recordPersistent(80_000L, 16);
 		policy.beginFrame(4L, 16, true, 16, 128);
+		policy.beginFrame(5L, 16, true, 16, 128);
+		policy.beginFrame(6L, 16, true, 16, 128);
 		return policy;
 	}
 }

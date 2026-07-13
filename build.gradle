@@ -39,6 +39,9 @@ neoForge {
             if (persistentMeshBenchmarkOrigin.isPresent()) {
                 systemProperty 'optiminium.persistentMeshBenchmarkOrigin', persistentMeshBenchmarkOrigin.get()
             }
+			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkArmorStands').isPresent()) {
+				systemProperty 'optiminium.persistentMeshBenchmarkArmorStands', 'true'
+			}
         }
         server {
             server()
