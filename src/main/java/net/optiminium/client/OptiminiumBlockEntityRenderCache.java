@@ -407,11 +407,8 @@ public final class OptiminiumBlockEntityRenderCache {
 	// --- Private helpers ---
 
 	private static boolean vanillaDecision(BlockEntity blockEntity, int viewDistance) {
-		boolean render = OptiminiumGpuOptimizer.shouldRenderBlockEntity(blockEntity, viewDistance);
-		if (render) {
-			OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
-		}
-		return render;
+		OptiminiumGpuOptimizer.recordRenderedBlockEntityAfterCulling();
+		return true;
 	}
 
 	private static void put(Key key, Entry entry, BlockEntityType<?> type) {

@@ -348,17 +348,6 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		return candidateCountsLastFrame.getOrDefault(key, 0) >= densityThreshold();
 	}
 
-	public static void recordCandidateCulled(BlockEntity blockEntity) {
-		if (!metricsEnabled) return;
-		BlockEntityType<?> type = blockEntity.getType();
-		if (type == BlockEntityType.DECORATED_POT || type == BlockEntityType.CHEST
-				|| type == BlockEntityType.TRAPPED_CHEST || type == BlockEntityType.ENDER_CHEST
-				|| type == BlockEntityType.SIGN || type == BlockEntityType.HANGING_SIGN
-				|| type == BlockEntityType.BELL) {
-			culledThisFrame++;
-		}
-	}
-
 	/** Flushes all queued visible instances once, after vanilla has enumerated block entities. */
 	public static void flushQueued() {
 		if (QUEUED_MESHES.isEmpty()) return;

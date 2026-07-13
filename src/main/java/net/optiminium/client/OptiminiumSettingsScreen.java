@@ -84,11 +84,8 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getGpuTargetFps, OptiminiumSettings::setGpuTargetFps, 30, 240, "Target FPS"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 78, OptiminiumSettings::getGpuMinRenderScalePercent, OptiminiumSettings::setGpuMinRenderScalePercent, 35, 100, "Min Scale %"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getEntityAlwaysRenderDistanceBlocks, OptiminiumSettings::setEntityAlwaysRenderDistanceBlocks, 10, 200, "Entity Safe Range"));
-		this.addRenderableWidget(Button.builder(visualSignificanceLabel(), button -> button.setMessage(Component.literal("Visual Significance: " + (OptiminiumSettings.toggleExperimentalTemporalSignificance() ? "ON" : "OFF"))))
-			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
 		this.addRenderableWidget(Button.builder(beRenderCacheLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCache(); button.setMessage(beRenderCacheLabel()); })
-			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(beVirtualizationLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderVirtualization(); button.setMessage(beVirtualizationLabel()); })
 			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
@@ -106,13 +103,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.build());
 		this.addRenderableWidget(new SettingsSlider(x, y + 26, OptiminiumSettings::getParticleRenderDistanceBlocks, OptiminiumSettings::setParticleRenderDistanceBlocks, 16, 160, "Particle Distance"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getMaxParticlesPerFrame, OptiminiumSettings::setMaxParticlesPerFrame, 16, 512, "Particles/Frame"));
-		this.addRenderableWidget(Button.builder(blockEntityCullingLabel(), button -> button.setMessage(Component.literal("Block Entity Culling: " + (OptiminiumSettings.toggleBlockEntityCulling() ? "ON" : "OFF"))))
-			.bounds(x, y + 78, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getBlockEntityDistanceScalePercent, OptiminiumSettings::setBlockEntityDistanceScalePercent, 25, 200, "Block Entity Range %"));
-		this.addRenderableWidget(Button.builder(denseSceneAdaptiveLabel(), button -> button.setMessage(denseSceneAdaptiveLabel(OptiminiumSettings.cycleDenseSceneAdaptiveMode())))
-			.bounds(x, y + 130, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
 		this.addRenderableWidget(Button.builder(beRenderCacheDebugLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCacheDebug(); button.setMessage(beRenderCacheDebugLabel()); })
 			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
@@ -166,10 +156,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 		return Component.literal("Particle Limiter: " + (OptiminiumSettings.isParticleLimiter() ? "ON" : "OFF"));
 	}
 
-	private static Component blockEntityCullingLabel() {
-		return Component.literal("Block Entity Culling: " + (OptiminiumSettings.isBlockEntityCulling() ? "ON" : "OFF"));
-	}
-
 	private static Component beRenderCacheLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityRenderCache();
 		return Component.literal("BE Render Cache: " + (enabled ? "ON" : "OFF"));
@@ -198,18 +184,6 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component beRenderCacheDebugLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityRenderCacheDebug();
 		return Component.literal("BE Cache Debug (F9): " + (enabled ? "ON" : "OFF"));
-	}
-
-	private static Component visualSignificanceLabel() {
-		return Component.literal("Visual Significance: " + (OptiminiumSettings.isExperimentalTemporalSignificance() ? "ON" : "OFF"));
-	}
-
-	private static Component denseSceneAdaptiveLabel() {
-		return denseSceneAdaptiveLabel(OptiminiumSettings.getDenseSceneAdaptiveMode());
-	}
-
-	private static Component denseSceneAdaptiveLabel(OptiminiumSettings.DenseSceneAdaptiveMode mode) {
-		return Component.literal("Dense Scene Mode: " + mode.name().toLowerCase());
 	}
 
 	private static final class SettingsSlider extends AbstractSliderButton {

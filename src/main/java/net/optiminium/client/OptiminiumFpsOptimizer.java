@@ -24,7 +24,6 @@ public final class OptiminiumFpsOptimizer {
 		OptiminiumGlStateTracker.onFrameStart();
 		OptiminiumGpuOptimizer.onFrameStart();
 		OptiminiumRenderProfiler.onFrameStart();
-		OptiminiumVisualSignificance.onFrameStart();
 		boolean enabled = OptiminiumSettings.isEnabled();
 		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
 		if (particleLimiter) {

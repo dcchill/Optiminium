@@ -250,11 +250,8 @@ public final class OptiminiumBlockEntityVirtualizer {
 			return stableDecision(key, FULL);
 		}
 
-		if (OptiminiumVisualSignificance.isEnabled()) {
-			OptiminiumVisualSignificance.recordBlockEntity(blockEntity, frameCameraPosition());
-		}
-		byte classification = OptiminiumVisualSignificance.getBlockEntityClassification(blockEntity);
-		float fadeAlpha = OptiminiumVisualSignificance.blockEntityFadeAlpha(blockEntity);
+		byte classification = -1;
+		float fadeAlpha = 1.0F;
 		byte desired = levelFromClassification(classification, blockEntity, distanceSqr, lookedAt, lookDot);
 		boolean fullSkipSafe = desired == VIRTUALIZED && isFullSkipSafe(distanceSqr, lookedAt, lookDot);
 		return stableDecision(key, desired, fadeAlpha, fullSkipSafe);

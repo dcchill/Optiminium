@@ -548,7 +548,7 @@ public final class OptiminiumVisualSignificance {
 	}
 
 	public static boolean isEnabled() {
-		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isExperimentalTemporalSignificance();
+		return false;
 	}
 
 	public static boolean isParticleRecordingEnabled() {

@@ -19,9 +19,6 @@ public final class OptiminiumSettings {
 	private static volatile boolean particleLimiter = true;
 	private static volatile int particleRenderDistanceBlocks = 64;
 	private static volatile int maxParticlesPerFrame = 96;
-	private static volatile boolean blockEntityCulling = true;
-	private static volatile int blockEntityDistanceScalePercent = 90;
-	private static volatile int denseBlockEntityThreshold = 512;
 	private static volatile boolean blockEntityRenderCache = true;
 	private static volatile boolean blockEntityPersistenceEnabled = true;
 	private static volatile int blockEntityPersistenceMinInstances = 128;
@@ -31,8 +28,6 @@ public final class OptiminiumSettings {
 	private static volatile BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
 	private static volatile int blockEntityRenderCacheMaxEntries = 4096;
 	private static volatile boolean blockEntityRenderCacheDebug = false;
-	private static volatile DenseSceneAdaptiveMode denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
-	private static volatile boolean experimentalTemporalSignificance = false;
 	private static volatile boolean enableOpenGlTweaks = true;
 	private static volatile OpenGlOptimizationMode openGlOptimizationMode = OpenGlOptimizationMode.OFF;
 
@@ -59,17 +54,16 @@ public final class OptiminiumSettings {
 	}
 
 	public static Snapshot snapshot() {
-		return new Snapshot(enabled, framePacing, particleLimiter, blockEntityCulling,
+		return new Snapshot(enabled, framePacing, particleLimiter,
 			blockEntityRenderCache, blockEntityPersistenceEnabled, blockEntityPersistenceMinInstances,
 			blockEntityPersistenceMaxMeshes, blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
-			blockEntityVirtualizationAggressiveness, denseSceneAdaptiveMode, enableOpenGlTweaks, openGlOptimizationMode);
+			blockEntityVirtualizationAggressiveness, enableOpenGlTweaks, openGlOptimizationMode);
 	}
 
 	public static void restore(Snapshot snapshot) {
 		enabled = snapshot.enabled;
 		framePacing = snapshot.framePacing;
 		particleLimiter = snapshot.particleLimiter;
-		blockEntityCulling = snapshot.blockEntityCulling;
 		blockEntityRenderCache = snapshot.blockEntityRenderCache;
 		blockEntityPersistenceEnabled = snapshot.blockEntityPersistenceEnabled;
 		blockEntityPersistenceMinInstances = snapshot.blockEntityPersistenceMinInstances;
@@ -77,7 +71,6 @@ public final class OptiminiumSettings {
 		blockEntityVirtualizationEnabled = snapshot.blockEntityVirtualizationEnabled;
 		blockEntityVirtualizationDebugProxies = snapshot.blockEntityVirtualizationDebugProxies;
 		blockEntityVirtualizationAggressiveness = snapshot.blockEntityVirtualizationAggressiveness;
-		denseSceneAdaptiveMode = snapshot.denseSceneAdaptiveMode;
 		enableOpenGlTweaks = snapshot.enableOpenGlTweaks;
 		openGlOptimizationMode = snapshot.openGlOptimizationMode;
 		save();
@@ -86,14 +79,11 @@ public final class OptiminiumSettings {
 	public static void disableBenchmarkFeatures() {
 		framePacing = false;
 		particleLimiter = false;
-		blockEntityCulling = false;
 		blockEntityRenderCache = false;
 		blockEntityPersistenceEnabled = false;
 		blockEntityVirtualizationEnabled = false;
 		blockEntityVirtualizationDebugProxies = false;
 		blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
-		experimentalTemporalSignificance = false;
-		denseSceneAdaptiveMode = DenseSceneAdaptiveMode.OFF;
 		enableOpenGlTweaks = false;
 		openGlOptimizationMode = OpenGlOptimizationMode.OFF;
 		save();
@@ -102,7 +92,6 @@ public final class OptiminiumSettings {
 	public static void applyPreset(Preset preset) {
 		enabled = true;
 		framePacing = true;
-		blockEntityCulling = true;
 		blockEntityVirtualizationEnabled = false;
 		blockEntityVirtualizationDebugProxies = false;
 		blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
@@ -115,8 +104,6 @@ public final class OptiminiumSettings {
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 32;
 				maxParticlesPerFrame = 64;
-				blockEntityDistanceScalePercent = 75;
-				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.AGGRESSIVE;
 			}
 			case MEDIUM -> {
 				gpuTargetFps = 75;
@@ -125,8 +112,6 @@ public final class OptiminiumSettings {
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 64;
 				maxParticlesPerFrame = 128;
-				blockEntityDistanceScalePercent = 100;
-				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.BALANCED;
 			}
 			case QUALITY -> {
 				gpuTargetFps = 60;
@@ -135,8 +120,6 @@ public final class OptiminiumSettings {
 				particleLimiter = true;
 				particleRenderDistanceBlocks = 128;
 				maxParticlesPerFrame = 256;
-				blockEntityDistanceScalePercent = 160;
-				denseSceneAdaptiveMode = DenseSceneAdaptiveMode.CONSERVATIVE;
 			}
 		}
 		save();
@@ -175,9 +158,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isExperimentalTemporalSignificance() {
-		return experimentalTemporalSignificance;
-	}
 
 	public static boolean isOpenGlTweaksEnabled() {
 		return enableOpenGlTweaks;
@@ -204,16 +184,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean toggleExperimentalTemporalSignificance() {
-		experimentalTemporalSignificance = !experimentalTemporalSignificance;
-		save();
-		return experimentalTemporalSignificance;
-	}
-
-	public static void setExperimentalTemporalSignificance(boolean value) {
-		experimentalTemporalSignificance = value;
-		save();
-	}
 
 	public static int getEntityAlwaysRenderDistanceBlocks() {
 		return entityAlwaysRenderDistanceBlocks;
@@ -224,38 +194,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static boolean isBlockEntityCulling() {
-		return blockEntityCulling;
-	}
-
-	public static boolean toggleBlockEntityCulling() {
-		blockEntityCulling = !blockEntityCulling;
-		save();
-		return blockEntityCulling;
-	}
-
-	public static void setBlockEntityCulling(boolean value) {
-		blockEntityCulling = value;
-		save();
-	}
-
-	public static int getBlockEntityDistanceScalePercent() {
-		return blockEntityDistanceScalePercent;
-	}
-
-	public static void setBlockEntityDistanceScalePercent(int scalePercent) {
-		blockEntityDistanceScalePercent = clamp(scalePercent, 25, 200);
-		save();
-	}
-
-	public static int getDenseBlockEntityThreshold() {
-		return denseBlockEntityThreshold;
-	}
-
-	public static void setDenseBlockEntityThreshold(int threshold) {
-		denseBlockEntityThreshold = clamp(threshold, 64, 4096);
-		save();
-	}
 
 	public static boolean isBlockEntityRenderCache() {
 		return blockEntityRenderCache;
@@ -387,21 +325,6 @@ public final class OptiminiumSettings {
 		save();
 	}
 
-	public static DenseSceneAdaptiveMode getDenseSceneAdaptiveMode() {
-		return denseSceneAdaptiveMode;
-	}
-
-	public static DenseSceneAdaptiveMode cycleDenseSceneAdaptiveMode() {
-		DenseSceneAdaptiveMode[] modes = DenseSceneAdaptiveMode.values();
-		denseSceneAdaptiveMode = modes[(denseSceneAdaptiveMode.ordinal() + 1) % modes.length];
-		save();
-		return denseSceneAdaptiveMode;
-	}
-
-	public static void setDenseSceneAdaptiveMode(DenseSceneAdaptiveMode mode) {
-		denseSceneAdaptiveMode = mode;
-		save();
-	}
 
 	public static boolean isParticleLimiter() {
 		return particleLimiter;
@@ -451,9 +374,6 @@ public final class OptiminiumSettings {
 			particleLimiter = Boolean.parseBoolean(properties.getProperty("particleLimiter", Boolean.toString(particleLimiter)));
 			particleRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks))), 16, 160);
 			maxParticlesPerFrame = clamp(Integer.parseInt(properties.getProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame))), 16, 512);
-			blockEntityCulling = Boolean.parseBoolean(properties.getProperty("blockEntityCulling", Boolean.toString(blockEntityCulling)));
-			blockEntityDistanceScalePercent = clamp(Integer.parseInt(properties.getProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent))), 25, 200);
-			denseBlockEntityThreshold = clamp(Integer.parseInt(properties.getProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold))), 64, 4096);
 			blockEntityRenderCache = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache)));
 			blockEntityPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled)));
 			blockEntityPersistenceMinInstances = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances))), 16, 1024);
@@ -464,8 +384,6 @@ public final class OptiminiumSettings {
 			blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.parse(properties.getProperty("blockEntityVirtualizationAggressiveness", blockEntityVirtualizationAggressiveness.name()));
 			blockEntityRenderCacheMaxEntries = clamp(Integer.parseInt(properties.getProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries))), 256, 65536);
 			blockEntityRenderCacheDebug = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug)));
-			denseSceneAdaptiveMode = DenseSceneAdaptiveMode.parse(properties.getProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name()));
-			experimentalTemporalSignificance = Boolean.parseBoolean(properties.getProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance)));
 			enableOpenGlTweaks = Boolean.parseBoolean(properties.getProperty("enableOpenGlTweaks", Boolean.toString(enableOpenGlTweaks)));
 			openGlOptimizationMode = OpenGlOptimizationMode.parse(properties.getProperty("openGlOptimizationMode",
 				properties.getProperty("glStateTrackerMode", openGlOptimizationMode.name())));
@@ -483,9 +401,6 @@ public final class OptiminiumSettings {
 		properties.setProperty("particleLimiter", Boolean.toString(particleLimiter));
 		properties.setProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks));
 		properties.setProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame));
-		properties.setProperty("blockEntityCulling", Boolean.toString(blockEntityCulling));
-		properties.setProperty("blockEntityDistanceScalePercent", Integer.toString(blockEntityDistanceScalePercent));
-		properties.setProperty("denseBlockEntityThreshold", Integer.toString(denseBlockEntityThreshold));
 		properties.setProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache));
 		properties.setProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled));
 		properties.setProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances));
@@ -495,8 +410,6 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityVirtualizationAggressiveness", blockEntityVirtualizationAggressiveness.name().toLowerCase());
 		properties.setProperty("blockEntityRenderCacheMaxEntries", Integer.toString(blockEntityRenderCacheMaxEntries));
 		properties.setProperty("blockEntityRenderCacheDebug", Boolean.toString(blockEntityRenderCacheDebug));
-		properties.setProperty("denseSceneAdaptiveMode", denseSceneAdaptiveMode.name());
-		properties.setProperty("visualSignificance", Boolean.toString(experimentalTemporalSignificance));
 		properties.setProperty("enableOpenGlTweaks", Boolean.toString(enableOpenGlTweaks));
 		properties.setProperty("openGlOptimizationMode", openGlOptimizationMode.name());
 		try {
@@ -510,21 +423,6 @@ public final class OptiminiumSettings {
 
 	private static int clamp(int value, int min, int max) {
 		return Math.max(min, Math.min(max, value));
-	}
-
-	public enum DenseSceneAdaptiveMode {
-		OFF,
-		CONSERVATIVE,
-		BALANCED,
-		AGGRESSIVE;
-
-		private static DenseSceneAdaptiveMode parse(String value) {
-			try {
-				return DenseSceneAdaptiveMode.valueOf(value.toUpperCase());
-			} catch (IllegalArgumentException exception) {
-				return BALANCED;
-			}
-		}
 	}
 
 	public enum BlockEntityVirtualizationAggressiveness {
@@ -567,13 +465,12 @@ public final class OptiminiumSettings {
 	}
 
 	public record Snapshot(boolean enabled, boolean framePacing, boolean particleLimiter,
-			boolean blockEntityCulling, boolean blockEntityRenderCache,
+			boolean blockEntityRenderCache,
 			boolean blockEntityPersistenceEnabled, int blockEntityPersistenceMinInstances,
 			int blockEntityPersistenceMaxMeshes,
 			boolean blockEntityVirtualizationEnabled,
 			boolean blockEntityVirtualizationDebugProxies,
 			BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness,
-			DenseSceneAdaptiveMode denseSceneAdaptiveMode,
 			boolean enableOpenGlTweaks, OpenGlOptimizationMode openGlOptimizationMode) {
 	}
 }

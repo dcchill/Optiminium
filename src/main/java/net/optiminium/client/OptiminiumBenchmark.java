@@ -45,7 +45,6 @@ public final class OptiminiumBenchmark {
 	private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
 	private static boolean running;
 	private static boolean previousEnabled;
-	private static boolean previousExperimentalTemporalSignificance;
 	private static boolean cameraStable;
 	private static int ticks;
 	private static int normalBenchmarkStarts;
@@ -132,11 +131,6 @@ public final class OptiminiumBenchmark {
 		running = true;
 		activeBenchmarkName = benchmarkName;
 		previousEnabled = OptiminiumSettings.isEnabled();
-		previousExperimentalTemporalSignificance = OptiminiumSettings.isExperimentalTemporalSignificance();
-		if (forceSignificanceMetrics) {
-			// Force-enable Visual Significance for the ON phase of the normal benchmark.
-			OptiminiumSettings.setExperimentalTemporalSignificance(true);
-		}
 		phaseSequence = phaseSequenceFor(benchmarkName);
 		phaseSequenceIndex = 0;
 		phase = phaseSequence[phaseSequenceIndex];
@@ -244,7 +238,6 @@ public final class OptiminiumBenchmark {
 			return;
 		}
 		running = false;
-		OptiminiumSettings.setExperimentalTemporalSignificance(previousExperimentalTemporalSignificance);
 		OptiminiumSettings.setEnabled(previousEnabled);
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
@@ -502,8 +495,6 @@ public final class OptiminiumBenchmark {
 			}),
 			new BenchmarkCase("Frame Pacing", () -> OptiminiumSettings.setFramePacing(true)),
 			new BenchmarkCase("Particle Limiter", () -> OptiminiumSettings.setParticleLimiter(true)),
-			new BenchmarkCase("Significance Only", () -> OptiminiumSettings.setExperimentalTemporalSignificance(true)),
-			new BenchmarkCase("Block Entity Culling", () -> OptiminiumSettings.setBlockEntityCulling(true)),
 			new BenchmarkCase("Block Entity Cache", () -> OptiminiumSettings.setBlockEntityRenderCache(true)),
 			new BenchmarkCase("Block Entity Persistence", () -> {
 				OptiminiumSettings.setBlockEntityRenderCache(true);
@@ -514,10 +505,6 @@ public final class OptiminiumBenchmark {
 				OptiminiumSettings.setEnabled(true);
 				OptiminiumSettings.setBlockEntityRenderCache(true);
 				OptiminiumSettings.setBlockEntityPersistenceEnabled(true);
-			}),
-			new BenchmarkCase("Dense Scene Mode", () -> {
-				OptiminiumSettings.setFramePacing(true);
-				OptiminiumSettings.setDenseSceneAdaptiveMode(OptiminiumSettings.DenseSceneAdaptiveMode.BALANCED);
 			})
 		);
 	}
