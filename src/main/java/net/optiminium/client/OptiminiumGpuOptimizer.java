@@ -2,9 +2,6 @@ package net.optiminium.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.ParticleOptions;
-import net.minecraft.core.particles.ParticleType;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -58,7 +55,6 @@ public final class OptiminiumGpuOptimizer {
 	private static long renderedBlockEntitiesThisRun;
 	private static boolean frameStateReady;
 	private static boolean blockEntityCulling;
-	private static boolean particleLimiter;
 	private static boolean hasCamera;
 	private static boolean visualSignificanceEnabled;
 	private static boolean visualSignificanceParticleRecording;
@@ -66,8 +62,6 @@ public final class OptiminiumGpuOptimizer {
 	private static double cameraX;
 	private static double cameraY;
 	private static double cameraZ;
-	private static double particleRenderDistanceSqr;
-	private static double lowPriorityParticleDistanceSqr;
 	private static double gpuWorkScale = 1.0D;
 	private static double particleWorkScale = 1.0D;
 	private static double blockEntityWorkScale = 1.0D;
@@ -77,8 +71,6 @@ public final class OptiminiumGpuOptimizer {
 	private static long lastFrameNanos;
 	private static double smoothedFrameNanos;
 	private static long latestCpuFrameNanos;
-	private static int maxParticlesPerFrame;
-	private static int maxLowPriorityParticlesPerFrame;
 	private static boolean denseSceneActive;
 	private static boolean countedDenseParticleBudgetFrame;
 	private static boolean countedDenseBlockEntityBudgetFrame;
@@ -139,16 +131,9 @@ public final class OptiminiumGpuOptimizer {
 		updateAdaptiveScales(enabled);
 		updateGraphicsEffectPressure(enabled);
 		blockEntityCulling = false;
-		particleLimiter = enabled && OptiminiumSettings.isParticleLimiter();
 		visualSignificanceEnabled = false;
 		visualSignificanceParticleRecording = false;
 
-		double particleDistance = Math.max(8.0D, OptiminiumSettings.getParticleRenderDistanceBlocks() * particleWorkScale);
-		double lowPriorityDistance = Math.max(8.0D, particleDistance * 0.5D);
-		particleRenderDistanceSqr = particleDistance * particleDistance;
-		lowPriorityParticleDistanceSqr = lowPriorityDistance * lowPriorityDistance;
-		maxParticlesPerFrame = Math.max(8, (int)Math.round(OptiminiumSettings.getMaxParticlesPerFrame() * particleWorkScale));
-		maxLowPriorityParticlesPerFrame = Math.max(4, maxParticlesPerFrame / 3);
 
 		Minecraft minecraft = Minecraft.getInstance();
 		cameraEntity = minecraft.cameraEntity;
@@ -162,47 +147,6 @@ public final class OptiminiumGpuOptimizer {
 			hasCamera = true;
 		}
 		frameStateReady = true;
-	}
-
-	public static boolean shouldSkipParticle(ParticleOptions options, double x, double y, double z) {
-		ensureFrameState();
-		long profileStart = profileStart();
-		if (profilingEnabled) particleChecksAttempted++;
-		try {
-			ParticleType<?> type = options.getType();
-			if (!particleLimiter || !hasCamera || isImportantParticle(type)) {
-				return false;
-			}
-
-			double distanceSqr = distanceToCameraSqr(x, y, z);
-			boolean lowPriority = isLowPriorityParticle(type);
-			boolean skip = distanceSqr > particleRenderDistanceSqr
-				|| lowPriority && distanceSqr > lowPriorityParticleDistanceSqr
-				|| particlesThisFrame >= maxParticlesPerFrame
-				|| lowPriority && lowPriorityParticlesThisFrame >= maxLowPriorityParticlesPerFrame;
-			if (skip) {
-				if (profilingEnabled) particleChecksRejected++;
-				recordHiddenParticle();
-				return true;
-			}
-
-			particlesThisFrame++;
-			if (profilingEnabled) particleChecksRendered++;
-			if (lowPriority) {
-				lowPriorityParticlesThisFrame++;
-			}
-			return false;
-		} finally {
-			if (profileStart != 0L) particleCheckNanos += Math.max(0L, System.nanoTime() - profileStart);
-			recordProfileNanos(PROFILE_PARTICLE_CULLING, profileStart);
-		}
-	}
-
-	public static boolean shouldProcessParticleHookThisFrame() {
-		if (!frameStateReady) {
-			return OptiminiumSettings.isEnabled() && OptiminiumSettings.isParticleLimiter();
-		}
-		return particleLimiter && hasCamera || visualSignificanceParticleRecording;
 	}
 
 	/**
@@ -324,10 +268,6 @@ public final class OptiminiumGpuOptimizer {
 
 	public static void recordHiddenNameTag() {
 		pendingHiddenNameTags++;
-	}
-
-	public static void recordHiddenParticle() {
-		pendingHiddenParticles++;
 	}
 
 	public static void recordRawVisibleBlockEntitiesBeforeCulling(int count) {
@@ -752,30 +692,6 @@ public final class OptiminiumGpuOptimizer {
 		double dy = cameraY - y;
 		double dz = cameraZ - z;
 		return dx * dx + dy * dy + dz * dz;
-	}
-
-	private static boolean isImportantParticle(ParticleType<?> type) {
-		return type == ParticleTypes.EXPLOSION_EMITTER
-			|| type == ParticleTypes.EXPLOSION
-			|| type == ParticleTypes.FLASH
-			|| type == ParticleTypes.FIREWORK
-			|| type == ParticleTypes.TOTEM_OF_UNDYING
-			|| type == ParticleTypes.DAMAGE_INDICATOR
-			|| type == ParticleTypes.ELDER_GUARDIAN;
-	}
-
-	private static boolean isLowPriorityParticle(ParticleType<?> type) {
-		return type == ParticleTypes.ASH
-			|| type == ParticleTypes.CLOUD
-			|| type == ParticleTypes.MYCELIUM
-			|| type == ParticleTypes.RAIN
-			|| type == ParticleTypes.SMOKE
-			|| type == ParticleTypes.WHITE_SMOKE
-			|| type == ParticleTypes.SNOWFLAKE
-			|| type == ParticleTypes.SPORE_BLOSSOM_AIR
-			|| type == ParticleTypes.CRIMSON_SPORE
-			|| type == ParticleTypes.WARPED_SPORE
-			|| type == ParticleTypes.UNDERWATER;
 	}
 
 	public record ProfileSnapshot(

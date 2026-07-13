@@ -16,9 +16,6 @@ public final class OptiminiumSettings {
 	private static volatile int gpuTargetFps = 60;
 	private static volatile int gpuMinRenderScalePercent = 60;
 	private static volatile int entityAlwaysRenderDistanceBlocks = 50;
-	private static volatile boolean particleLimiter = true;
-	private static volatile int particleRenderDistanceBlocks = 64;
-	private static volatile int maxParticlesPerFrame = 96;
 	private static volatile boolean blockEntityRenderCache = true;
 	private static volatile boolean blockEntityPersistenceEnabled = true;
 	private static volatile int blockEntityPersistenceMinInstances = 128;
@@ -54,7 +51,7 @@ public final class OptiminiumSettings {
 	}
 
 	public static Snapshot snapshot() {
-		return new Snapshot(enabled, framePacing, particleLimiter,
+		return new Snapshot(enabled, framePacing,
 			blockEntityRenderCache, blockEntityPersistenceEnabled, blockEntityPersistenceMinInstances,
 			blockEntityPersistenceMaxMeshes, blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
 			blockEntityVirtualizationAggressiveness, enableOpenGlTweaks, openGlOptimizationMode);
@@ -63,7 +60,6 @@ public final class OptiminiumSettings {
 	public static void restore(Snapshot snapshot) {
 		enabled = snapshot.enabled;
 		framePacing = snapshot.framePacing;
-		particleLimiter = snapshot.particleLimiter;
 		blockEntityRenderCache = snapshot.blockEntityRenderCache;
 		blockEntityPersistenceEnabled = snapshot.blockEntityPersistenceEnabled;
 		blockEntityPersistenceMinInstances = snapshot.blockEntityPersistenceMinInstances;
@@ -78,7 +74,6 @@ public final class OptiminiumSettings {
 
 	public static void disableBenchmarkFeatures() {
 		framePacing = false;
-		particleLimiter = false;
 		blockEntityRenderCache = false;
 		blockEntityPersistenceEnabled = false;
 		blockEntityVirtualizationEnabled = false;
@@ -101,25 +96,16 @@ public final class OptiminiumSettings {
 				gpuTargetFps = 120;
 				gpuMinRenderScalePercent = 45;
 				entityAlwaysRenderDistanceBlocks = 40;
-				particleLimiter = true;
-				particleRenderDistanceBlocks = 32;
-				maxParticlesPerFrame = 64;
 			}
 			case MEDIUM -> {
 				gpuTargetFps = 75;
 				gpuMinRenderScalePercent = 60;
 				entityAlwaysRenderDistanceBlocks = 50;
-				particleLimiter = true;
-				particleRenderDistanceBlocks = 64;
-				maxParticlesPerFrame = 128;
 			}
 			case QUALITY -> {
 				gpuTargetFps = 60;
 				gpuMinRenderScalePercent = 85;
 				entityAlwaysRenderDistanceBlocks = 70;
-				particleLimiter = true;
-				particleRenderDistanceBlocks = 128;
-				maxParticlesPerFrame = 256;
 			}
 		}
 		save();
@@ -326,39 +312,6 @@ public final class OptiminiumSettings {
 	}
 
 
-	public static boolean isParticleLimiter() {
-		return particleLimiter;
-	}
-
-	public static boolean toggleParticleLimiter() {
-		particleLimiter = !particleLimiter;
-		save();
-		return particleLimiter;
-	}
-
-	public static void setParticleLimiter(boolean value) {
-		particleLimiter = value;
-		save();
-	}
-
-	public static int getParticleRenderDistanceBlocks() {
-		return particleRenderDistanceBlocks;
-	}
-
-	public static void setParticleRenderDistanceBlocks(int distanceBlocks) {
-		particleRenderDistanceBlocks = clamp(distanceBlocks, 16, 160);
-		save();
-	}
-
-	public static int getMaxParticlesPerFrame() {
-		return maxParticlesPerFrame;
-	}
-
-	public static void setMaxParticlesPerFrame(int maxParticles) {
-		maxParticlesPerFrame = clamp(maxParticles, 16, 512);
-		save();
-	}
-
 	private static void load() {
 		if (!Files.isRegularFile(CONFIG_FILE)) {
 			return;
@@ -371,9 +324,6 @@ public final class OptiminiumSettings {
 			gpuTargetFps = clamp(Integer.parseInt(properties.getProperty("gpuTargetFps", Integer.toString(gpuTargetFps))), 30, 240);
 			gpuMinRenderScalePercent = clamp(Integer.parseInt(properties.getProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent))), 35, 100);
 			entityAlwaysRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks))), 10, 200);
-			particleLimiter = Boolean.parseBoolean(properties.getProperty("particleLimiter", Boolean.toString(particleLimiter)));
-			particleRenderDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks))), 16, 160);
-			maxParticlesPerFrame = clamp(Integer.parseInt(properties.getProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame))), 16, 512);
 			blockEntityRenderCache = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache)));
 			blockEntityPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled)));
 			blockEntityPersistenceMinInstances = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances))), 16, 1024);
@@ -398,9 +348,6 @@ public final class OptiminiumSettings {
 		properties.setProperty("gpuTargetFps", Integer.toString(gpuTargetFps));
 		properties.setProperty("gpuMinRenderScalePercent", Integer.toString(gpuMinRenderScalePercent));
 		properties.setProperty("entityAlwaysRenderDistanceBlocks", Integer.toString(entityAlwaysRenderDistanceBlocks));
-		properties.setProperty("particleLimiter", Boolean.toString(particleLimiter));
-		properties.setProperty("particleRenderDistanceBlocks", Integer.toString(particleRenderDistanceBlocks));
-		properties.setProperty("maxParticlesPerFrame", Integer.toString(maxParticlesPerFrame));
 		properties.setProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache));
 		properties.setProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled));
 		properties.setProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances));
@@ -464,7 +411,7 @@ public final class OptiminiumSettings {
 		QUALITY
 	}
 
-	public record Snapshot(boolean enabled, boolean framePacing, boolean particleLimiter,
+	public record Snapshot(boolean enabled, boolean framePacing,
 			boolean blockEntityRenderCache,
 			boolean blockEntityPersistenceEnabled, int blockEntityPersistenceMinInstances,
 			int blockEntityPersistenceMaxMeshes,

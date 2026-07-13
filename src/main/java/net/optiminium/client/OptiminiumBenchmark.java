@@ -494,7 +494,6 @@ public final class OptiminiumBenchmark {
 			new BenchmarkCase("All settings off", () -> {
 			}),
 			new BenchmarkCase("Frame Pacing", () -> OptiminiumSettings.setFramePacing(true)),
-			new BenchmarkCase("Particle Limiter", () -> OptiminiumSettings.setParticleLimiter(true)),
 			new BenchmarkCase("Block Entity Cache", () -> OptiminiumSettings.setBlockEntityRenderCache(true)),
 			new BenchmarkCase("Block Entity Persistence", () -> {
 				OptiminiumSettings.setBlockEntityRenderCache(true);
@@ -1402,15 +1401,6 @@ public final class OptiminiumBenchmark {
 			card(html, "Cache fast-path CPU", onScheduler.averageCacheFastPathMs(), "ms sampled avg", true);
 			html.append("</div><div class=\"raw\">").append(escape(onScheduler.toLine())).append("</div>");
 		}
-		if (onParticleProfile != null) {
-			html.append("<h2>Particle Limiter Profile</h2><div class=\"grid\">");
-			card(html, "Checks attempted", onParticleProfile.attempted(), "particles", true);
-			card(html, "Rejected", onParticleProfile.rejected(), "particles", true);
-			card(html, "Accepted", onParticleProfile.rendered(), "particles", true);
-			card(html, "Rejection-check CPU", onParticleProfile.rejectionCheckMs(), "ms total", true);
-			card(html, "Average check CPU", onParticleProfile.averageCheckMs(), "ms", onParticleProfile.averageCheckMs() < 0.001D);
-			html.append("</div><div class=\"raw\">").append(escape(onParticleProfile.toLine())).append("</div>");
-		}
 		html.append("<p><span class=\"pill\">dominant promotion reason: ").append(escape(onBands.mostCommonReason())).append("</span><span class=\"pill\">confidence vetoes: ").append(onBands.lowConfidenceDemotionBlocks()).append("</span><span class=\"pill\">pop-risk vetoes: ").append(onBands.highPopRiskDemotionBlocks()).append("</span><span class=\"pill\">importance debt promotions: ").append(onBands.importanceDebtPromotions()).append("</span></p>");
 		html.append("<h2>Stability</h2><div class=\"grid\">");
 		card(html, "Entity cull oscillation events", onBands.entityCullOscillationEvents(), "events", onBands.entityCullOscillationEvents() <= 100L);
@@ -2126,12 +2116,6 @@ public final class OptiminiumBenchmark {
 			OptiminiumVisualSignificance.Snapshot offBands, OptiminiumVisualSignificance.Snapshot onBands) {
 		StringBuilder sb = new StringBuilder();
 		// Culling metrics that should have increased (more culling = good when enabled)
-		if (onMetrics.hiddenParticles() <= offMetrics.hiddenParticles() && onMetrics.hiddenParticles() == 0L) {
-			sb.append("|particleLimiter:inactive");
-		}
-		if (onMetrics.culledBlockEntityRenders() <= offMetrics.culledBlockEntityRenders() && onMetrics.culledBlockEntityRenders() == 0L) {
-			sb.append("|blockEntityCulling:inactive");
-		}
 		if (onMetrics.culledEntityRenders() <= offMetrics.culledEntityRenders() && onMetrics.culledEntityRenders() == 0L) {
 			sb.append("|entityCulling:inactive");
 		}

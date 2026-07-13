@@ -10,7 +10,6 @@
     "GlStateManagerMixin",
     "LevelRendererMixin",
     "MinecraftMixin",
-    "ParticleEngineMixin",
     "RenderStateShardMixin",
     "SignRendererMixin",
     "VertexBufferAccessor"
