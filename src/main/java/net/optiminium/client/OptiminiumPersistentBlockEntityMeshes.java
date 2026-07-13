@@ -59,7 +59,6 @@ import java.util.Locale;
 	 * the cached model is built against an identity pose and the caller's pose is supplied only when drawing.</p>
  */
 public final class OptiminiumPersistentBlockEntityMeshes {
-	private static final int MAX_MESHES = 256;
 	private static final Map<MeshKey, CachedMesh> MESHES = new LinkedHashMap<>(32, 0.75F, true);
 	private static final LongAdder hits = new LongAdder();
 	private static final LongAdder misses = new LongAdder();
@@ -90,8 +89,6 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static final ThreadLocal<SignPartContext> SIGN_PART_CONTEXT = new ThreadLocal<>();
 	private static long lastDiagnosticNanos;
 	private static boolean metricsEnabled;
-	private static final int MIN_INSTANCES_FOR_PERSISTENT_DRAW =
-		Math.max(1, Integer.getInteger("optiminium.persistentMeshMinInstances", 128));
 	private static Map<MeshKey, Integer> candidateCountsThisFrame = new HashMap<>();
 	private static Map<MeshKey, Integer> candidateCountsLastFrame = Map.of();
 	private static int hottestCandidateCount;
@@ -106,7 +103,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 
 	public static <E extends BlockEntity> boolean tryRender(BlockEntityRenderer<E> renderer, E blockEntity,
 			float partialTick, PoseStack instancePose, int packedLight, int packedOverlay) {
-		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isBlockEntityRenderCache()) {
+		if (!isPersistenceActive()) {
 			return false;
 		}
 		if (OptiminiumPersistentMeshShader.get() == null) return false;
@@ -145,6 +142,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	public static void onFrameStart() {
+		if (!isPersistenceActive() && !MESHES.isEmpty()) clear();
+		evictIfNeeded();
 		// A normal frame flushes at the end of the block-entity pass. Discard stale instances if
 		// rendering aborted before that hook (world switch, exception, or minimized-frame edge case).
 		if (!QUEUED_MESHES.isEmpty()) {
@@ -223,13 +222,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	public static <E extends BlockEntity> void renderVanillaWithSplit(BlockEntityRenderer<E> renderer, E blockEntity,
 			float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
 		if (isAuditedSignRenderer(renderer, blockEntity) && OptiminiumPersistentMeshShader.get() != null
-				&& OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityRenderCache()) {
+				&& isPersistenceActive()) {
 			renderSignWithSplit(renderer, blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
 			return;
 		}
 		if (!isSingleChest(blockEntity) || OptiminiumPersistentMeshShader.get() == null
 				|| renderer.getClass() != ChestRenderer.class
-				|| !OptiminiumSettings.isEnabled() || !OptiminiumSettings.isBlockEntityRenderCache()) {
+				|| !isPersistenceActive()) {
 			renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
 			return;
 		}
@@ -346,7 +345,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static boolean recordCandidateAndIsDense(MeshKey key) {
 		int count = candidateCountsThisFrame.merge(key, 1, Integer::sum);
 		if (count > hottestCandidateCount) hottestCandidateCount = count;
-		return candidateCountsLastFrame.getOrDefault(key, 0) >= MIN_INSTANCES_FOR_PERSISTENT_DRAW;
+		return candidateCountsLastFrame.getOrDefault(key, 0) >= densityThreshold();
 	}
 
 	public static void recordCandidateCulled(BlockEntity blockEntity) {
@@ -432,12 +431,22 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private static void evictIfNeeded() {
-		while (MESHES.size() > MAX_MESHES) {
+		while (MESHES.size() > OptiminiumSettings.getBlockEntityPersistenceMaxMeshes()) {
 			Map.Entry<MeshKey, CachedMesh> eldest = MESHES.entrySet().iterator().next();
 			MESHES.remove(eldest.getKey());
 			gpuBytes -= eldest.getValue().bytes;
 			eldest.getValue().close();
 		}
+	}
+
+	private static boolean isPersistenceActive() {
+		return OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityRenderCache()
+			&& OptiminiumSettings.isBlockEntityPersistenceEnabled();
+	}
+
+	private static int densityThreshold() {
+		return Math.max(1, Integer.getInteger("optiminium.persistentMeshMinInstances",
+			OptiminiumSettings.getBlockEntityPersistenceMinInstances()));
 	}
 
 	public static Snapshot snapshot() {
@@ -455,7 +464,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			value.cachedMeshes(), value.hits(), value.misses(), value.uploads(), value.meshRebuildsPerSecond(), value.instanceUploadsThisFrame(), value.instancesDrawnThisFrame(),
 			value.instancesCulledThisFrame(), value.verticesAvoidedThisFrame(), value.drawCallsThisFrame(),
 			value.estimatedGpuBytes(), value.fallbacks(), value.fallbacksThisFrame(), lastHottestCandidateCount,
-			MIN_INSTANCES_FOR_PERSISTENT_DRAW, OptiminiumBlockEntityVirtualizer.snapshot().averageFullRendererMs(),
+			densityThreshold(), OptiminiumBlockEntityVirtualizer.snapshot().averageFullRendererMs(),
 			Minecraft.getInstance().getFps(),
 			OptiminiumGpuOptimizer.getLatestCpuFrameNanos() / 1_000_000.0D);
 	}
@@ -578,7 +587,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					RenderSystem.getProjectionMatrix(), Minecraft.getInstance().getWindow());
 				shader.apply();
 				GL31.glDrawElementsInstanced(accessor.optiminium$getMode().asGLMode,
-					accessor.optiminium$getIndexCount(), accessor.optiminium$getIndexType().asGLType,
+					accessor.optiminium$getIndexCount(), accessor.optiminium$resolveIndexType().asGLType,
 					0L, instances.count);
 				shader.clear();
 				VertexBuffer.unbind();
@@ -662,6 +671,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			ByteBuffer old = data.duplicate();
 			old.clear();
 			grown.put(old);
+			// Keep subsequent relative buffer operations rooted at the instance-data origin.
+			grown.clear();
 			MemoryUtil.memFree(data);
 			data = grown;
 		}

@@ -505,9 +505,15 @@ public final class OptiminiumBenchmark {
 			new BenchmarkCase("Significance Only", () -> OptiminiumSettings.setExperimentalTemporalSignificance(true)),
 			new BenchmarkCase("Block Entity Culling", () -> OptiminiumSettings.setBlockEntityCulling(true)),
 			new BenchmarkCase("Block Entity Cache", () -> OptiminiumSettings.setBlockEntityRenderCache(true)),
+			new BenchmarkCase("Block Entity Persistence", () -> {
+				OptiminiumSettings.setBlockEntityRenderCache(true);
+				OptiminiumSettings.setBlockEntityPersistenceEnabled(true);
+			}),
 			new BenchmarkCase("All Features", () -> {
 				OptiminiumSettings.restore(fullBenchmarkSettings);
 				OptiminiumSettings.setEnabled(true);
+				OptiminiumSettings.setBlockEntityRenderCache(true);
+				OptiminiumSettings.setBlockEntityPersistenceEnabled(true);
 			}),
 			new BenchmarkCase("Dense Scene Mode", () -> {
 				OptiminiumSettings.setFramePacing(true);

@@ -116,15 +116,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(beRenderCacheDebugLabel(), button -> { OptiminiumSettings.toggleBlockEntityRenderCacheDebug(); button.setMessage(beRenderCacheDebugLabel()); })
 			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(Component.literal("Run Benchmark"), button -> OptiminiumBenchmark.start())
+		this.addRenderableWidget(Button.builder(bePersistenceLabel(), button -> { OptiminiumSettings.toggleBlockEntityPersistenceEnabled(); button.setMessage(bePersistenceLabel()); })
 			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(Button.builder(Component.literal("Run Repeat Benchmark"), button -> OptiminiumBenchmark.startRepeat())
-			.bounds(x, y + 208, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
-		this.addRenderableWidget(Button.builder(Component.literal("Run Full Benchmark"), button -> OptiminiumBenchmark.startFull())
-			.bounds(x, y + 234, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 208, OptiminiumSettings::getBlockEntityPersistenceMinInstances, OptiminiumSettings::setBlockEntityPersistenceMinInstances, 16, 1024, "BE Persistence Threshold"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 234, OptiminiumSettings::getBlockEntityPersistenceMaxMeshes, OptiminiumSettings::setBlockEntityPersistenceMaxMeshes, 16, 4096, "BE Persistent Meshes"));
 		this.addRenderableWidget(Button.builder(Component.literal("Simple Settings"), button -> {
 				this.advanced = false;
 				refreshWidgets();
@@ -177,6 +173,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component beRenderCacheLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityRenderCache();
 		return Component.literal("BE Render Cache: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component bePersistenceLabel() {
+		boolean enabled = OptiminiumSettings.isBlockEntityPersistenceEnabled();
+		return Component.literal("BE Persistence: " + (enabled ? "ON" : "OFF"));
 	}
 
 	private static Component beVirtualizationLabel() {
