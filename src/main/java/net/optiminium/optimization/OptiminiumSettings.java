@@ -19,6 +19,8 @@ public final class OptiminiumSettings {
 	private static volatile boolean blockEntityRenderCache = true;
 	private static volatile boolean blockEntityPersistenceEnabled = true;
 	private static volatile int blockEntityPersistenceMinInstances = 128;
+	private static volatile boolean blockEntityPersistenceAdaptive = true;
+	private static volatile int blockEntityPersistenceAdaptiveMinInstances = 16;
 	private static volatile int blockEntityPersistenceMaxMeshes = 256;
 	private static volatile boolean blockEntityVirtualizationEnabled = false;
 	private static volatile boolean blockEntityVirtualizationDebugProxies = false;
@@ -53,6 +55,7 @@ public final class OptiminiumSettings {
 	public static Snapshot snapshot() {
 		return new Snapshot(enabled, framePacing,
 			blockEntityRenderCache, blockEntityPersistenceEnabled, blockEntityPersistenceMinInstances,
+			blockEntityPersistenceAdaptive, blockEntityPersistenceAdaptiveMinInstances,
 			blockEntityPersistenceMaxMeshes, blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
 			blockEntityVirtualizationAggressiveness, enableOpenGlTweaks, openGlOptimizationMode);
 	}
@@ -63,6 +66,8 @@ public final class OptiminiumSettings {
 		blockEntityRenderCache = snapshot.blockEntityRenderCache;
 		blockEntityPersistenceEnabled = snapshot.blockEntityPersistenceEnabled;
 		blockEntityPersistenceMinInstances = snapshot.blockEntityPersistenceMinInstances;
+		blockEntityPersistenceAdaptive = snapshot.blockEntityPersistenceAdaptive;
+		blockEntityPersistenceAdaptiveMinInstances = snapshot.blockEntityPersistenceAdaptiveMinInstances;
 		blockEntityPersistenceMaxMeshes = snapshot.blockEntityPersistenceMaxMeshes;
 		blockEntityVirtualizationEnabled = snapshot.blockEntityVirtualizationEnabled;
 		blockEntityVirtualizationDebugProxies = snapshot.blockEntityVirtualizationDebugProxies;
@@ -220,6 +225,30 @@ public final class OptiminiumSettings {
 		save();
 	}
 
+	public static boolean isBlockEntityPersistenceAdaptive() {
+		return blockEntityPersistenceAdaptive;
+	}
+
+	public static boolean toggleBlockEntityPersistenceAdaptive() {
+		blockEntityPersistenceAdaptive = !blockEntityPersistenceAdaptive;
+		save();
+		return blockEntityPersistenceAdaptive;
+	}
+
+	public static void setBlockEntityPersistenceAdaptive(boolean value) {
+		blockEntityPersistenceAdaptive = value;
+		save();
+	}
+
+	public static int getBlockEntityPersistenceAdaptiveMinInstances() {
+		return blockEntityPersistenceAdaptiveMinInstances;
+	}
+
+	public static void setBlockEntityPersistenceAdaptiveMinInstances(int minInstances) {
+		blockEntityPersistenceAdaptiveMinInstances = clamp(minInstances, 4, 128);
+		save();
+	}
+
 	public static int getBlockEntityPersistenceMaxMeshes() {
 		return blockEntityPersistenceMaxMeshes;
 	}
@@ -327,6 +356,8 @@ public final class OptiminiumSettings {
 			blockEntityRenderCache = Boolean.parseBoolean(properties.getProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache)));
 			blockEntityPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled)));
 			blockEntityPersistenceMinInstances = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances))), 16, 1024);
+			blockEntityPersistenceAdaptive = Boolean.parseBoolean(properties.getProperty("blockEntityPersistenceAdaptive", Boolean.toString(blockEntityPersistenceAdaptive)));
+			blockEntityPersistenceAdaptiveMinInstances = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceAdaptiveMinInstances", Integer.toString(blockEntityPersistenceAdaptiveMinInstances))), 4, 128);
 			blockEntityPersistenceMaxMeshes = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceMaxMeshes", Integer.toString(blockEntityPersistenceMaxMeshes))), 16, 4096);
 			blockEntityVirtualizationEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationEnabled",
 				properties.getProperty("blockEntityRenderVirtualization", Boolean.toString(blockEntityVirtualizationEnabled))));
@@ -351,6 +382,8 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityRenderCache", Boolean.toString(blockEntityRenderCache));
 		properties.setProperty("blockEntityPersistenceEnabled", Boolean.toString(blockEntityPersistenceEnabled));
 		properties.setProperty("blockEntityPersistenceMinInstances", Integer.toString(blockEntityPersistenceMinInstances));
+		properties.setProperty("blockEntityPersistenceAdaptive", Boolean.toString(blockEntityPersistenceAdaptive));
+		properties.setProperty("blockEntityPersistenceAdaptiveMinInstances", Integer.toString(blockEntityPersistenceAdaptiveMinInstances));
 		properties.setProperty("blockEntityPersistenceMaxMeshes", Integer.toString(blockEntityPersistenceMaxMeshes));
 		properties.setProperty("blockEntityVirtualizationEnabled", Boolean.toString(blockEntityVirtualizationEnabled));
 		properties.setProperty("blockEntityVirtualizationDebugProxies", Boolean.toString(blockEntityVirtualizationDebugProxies));
@@ -414,6 +447,7 @@ public final class OptiminiumSettings {
 	public record Snapshot(boolean enabled, boolean framePacing,
 			boolean blockEntityRenderCache,
 			boolean blockEntityPersistenceEnabled, int blockEntityPersistenceMinInstances,
+			boolean blockEntityPersistenceAdaptive, int blockEntityPersistenceAdaptiveMinInstances,
 			int blockEntityPersistenceMaxMeshes,
 			boolean blockEntityVirtualizationEnabled,
 			boolean blockEntityVirtualizationDebugProxies,

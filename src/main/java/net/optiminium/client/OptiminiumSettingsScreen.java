@@ -60,7 +60,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.bounds(x, y + 26, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(new SettingsSlider(x, y + 52, OptiminiumSettings::getBlockEntityPersistenceMinInstances, OptiminiumSettings::setBlockEntityPersistenceMinInstances, 16, 1024, "BE Persistence Threshold"));
-		this.addRenderableWidget(new SettingsSlider(x, y + 78, OptiminiumSettings::getBlockEntityPersistenceMaxMeshes, OptiminiumSettings::setBlockEntityPersistenceMaxMeshes, 16, 4096, "BE Persistent Meshes"));
+		this.addRenderableWidget(Button.builder(bePersistenceAdaptiveLabel(), button -> { OptiminiumSettings.toggleBlockEntityPersistenceAdaptive(); button.setMessage(bePersistenceAdaptiveLabel()); })
+			.bounds(x, y + 78, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getBlockEntityPersistenceAdaptiveMinInstances, OptiminiumSettings::setBlockEntityPersistenceAdaptiveMinInstances, 4, 128, "BE Adaptive Minimum"));
+		this.addRenderableWidget(new SettingsSlider(x, y + 130, OptiminiumSettings::getBlockEntityPersistenceMaxMeshes, OptiminiumSettings::setBlockEntityPersistenceMaxMeshes, 16, 4096, "BE Persistent Meshes"));
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
 			.build());
@@ -94,6 +98,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component bePersistenceLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityPersistenceEnabled();
 		return Component.literal("BE Persistence: " + (enabled ? "ON" : "OFF"));
+	}
+
+	private static Component bePersistenceAdaptiveLabel() {
+		return Component.literal("BE Adaptive Persistence: "
+			+ (OptiminiumSettings.isBlockEntityPersistenceAdaptive() ? "ON" : "OFF"));
 	}
 
 	private static Component beVirtualizationLabel() {

@@ -73,6 +73,10 @@ public final class OptiminiumBlockEntityCacheOverlay {
 		lineY += 11;
 		drawLine(graphics, font, lineY, "Vertices avoided/frame: " + format(meshes.verticesAvoidedThisFrame())
 			+ " | draws: " + format(meshes.drawCallsThisFrame()));
+		lineY += 11;
+		String adaptive = meshes.adaptiveSummary();
+		if (adaptive.length() > 78) adaptive = adaptive.substring(0, 78) + "...";
+		drawLine(graphics, font, lineY, "Adaptive: " + adaptive);
 		lineY += 14;
 
 		graphics.drawString(font, "--- BE Virtualization ---", X + 10, lineY, 0x88CCFF, false);

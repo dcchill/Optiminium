@@ -91,6 +91,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static boolean metricsEnabled;
 	private static Map<MeshKey, Integer> candidateCountsThisFrame = new HashMap<>();
 	private static Map<MeshKey, Integer> candidateCountsLastFrame = Map.of();
+	private static final Map<MeshKey, AdaptivePersistencePolicy> ADAPTIVE_POLICIES = new HashMap<>();
+	private static final java.util.Set<MeshKey> ACTIVE_KEYS = new java.util.HashSet<>();
+	private static long policyFrame;
+	private static String adaptiveSummary = "none";
 	private static int hottestCandidateCount;
 	private static int lastHottestCandidateCount;
 	private static long lastLoggedMeshUploads;
@@ -124,11 +128,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		CachedMesh mesh = MESHES.get(key);
 		if (mesh == null) {
 			recordMiss();
-			mesh = build(renderer, blockEntity, partialTick, packedLight, packedOverlay);
+			long buildStart = System.nanoTime();
+			mesh = build(key, renderer, blockEntity, partialTick, packedLight, packedOverlay);
 			if (mesh == null) {
 				recordFallback();
 				return false;
 			}
+			policy(key).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
 			MESHES.put(key, mesh);
 			gpuBytes += mesh.bytes;
 			recordUpload();
@@ -136,13 +142,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		} else {
 			recordHit(mesh.vertices);
 		}
+		long queueStart = System.nanoTime();
 		mesh.queue(instancePose, packedLight, packedOverlay);
+		policy(key).recordPersistentOverhead(System.nanoTime() - queueStart);
 		recordInstanceDrawn();
 		return true;
 	}
 
 	public static void onFrameStart() {
-		if (!isPersistenceActive() && !MESHES.isEmpty()) clear();
+		if (!isPersistenceActive() && (!MESHES.isEmpty() || !ADAPTIVE_POLICIES.isEmpty())) clear();
 		evictIfNeeded();
 		// A normal frame flushes at the end of the block-entity pass. Discard stale instances if
 		// rendering aborted before that hook (world switch, exception, or minimized-frame edge case).
@@ -160,6 +168,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		lastCulledThisFrame = culledThisFrame;
 		lastInstanceUploadsThisFrame = instanceUploadsThisFrame;
 		lastFallbacksThisFrame = fallbacksThisFrame;
+		policyFrame++;
+		updateAdaptivePolicies(candidateCountsThisFrame);
 		candidateCountsLastFrame = candidateCountsThisFrame;
 		candidateCountsThisFrame = new HashMap<>(Math.max(16, candidateCountsLastFrame.size() * 2));
 		lastHottestCandidateCount = hottestCandidateCount;
@@ -229,18 +239,31 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (!isSingleChest(blockEntity) || OptiminiumPersistentMeshShader.get() == null
 				|| renderer.getClass() != ChestRenderer.class
 				|| !isPersistenceActive()) {
-			renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			Object variant = supportedVariant(blockEntity, partialTick);
+			if (variant == null || !isAuditedVanillaRenderer(renderer, blockEntity)) {
+				renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			} else {
+				MeshKey key = new MeshKey(blockEntity.getType(), Block.getId(blockEntity.getBlockState()), variant, renderer.getClass());
+				long start = System.nanoTime();
+				renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+				policy(key).recordVanilla(System.nanoTime() - start, 1);
+			}
 			return;
 		}
 		if (blockEntity instanceof LidBlockEntity lid && lid.getOpenNess(partialTick) == 0.0F) {
 			// A cold, fully closed chest was already counted by tryRender. Keep its entire vanilla
 			// renderer intact until the full-mesh key crosses the density threshold.
+			MeshKey key = new MeshKey(blockEntity.getType(), Block.getId(blockEntity.getBlockState()),
+				ClosedChestVariant.INSTANCE, renderer.getClass());
+			long start = System.nanoTime();
 			renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			policy(key).recordVanilla(System.nanoTime() - start, 1);
 			return;
 		}
 		ChestPartContext context = new ChestPartContext(new MeshKey(blockEntity.getType(),
 			Block.getId(blockEntity.getBlockState()), ChestBottomVariant.INSTANCE, renderer.getClass()));
 		CHEST_PART_CONTEXT.set(context);
+		long start = System.nanoTime();
 		try {
 			renderer.render(blockEntity, partialTick, poseStack,
 				renderType -> {
@@ -249,6 +272,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 				}, packedLight, packedOverlay);
 		} finally {
 			CHEST_PART_CONTEXT.remove();
+			policy(context.key).recordVanilla(System.nanoTime() - start, 1);
 		}
 	}
 
@@ -257,6 +281,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		SignPartContext context = new SignPartContext(new MeshKey(blockEntity.getType(),
 			Block.getId(blockEntity.getBlockState()), SignBoardVariant.INSTANCE, renderer.getClass()));
 		SIGN_PART_CONTEXT.set(context);
+		long start = System.nanoTime();
 		try {
 			renderer.render(blockEntity, partialTick, poseStack, renderType -> {
 				context.renderType = renderType;
@@ -264,6 +289,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}, packedLight, packedOverlay);
 		} finally {
 			SIGN_PART_CONTEXT.remove();
+			policy(context.key).recordVanilla(System.nanoTime() - start, 1);
 		}
 	}
 
@@ -291,7 +317,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			CaptureSource capture = new CaptureSource();
 			try {
 				part.render(new PoseStack(), capture.getBuffer(renderType), packedLight, packedOverlay);
-				mesh = capture.upload();
+				long buildStart = System.nanoTime();
+				mesh = capture.upload(key);
+				if (mesh != null) policy(key).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
 			} catch (RuntimeException exception) {
 				capture.close();
 				recordFallback();
@@ -305,7 +333,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		} else {
 			recordHit(mesh.vertices);
 		}
+		long queueStart = System.nanoTime();
 		mesh.queue(instancePose, packedLight, packedOverlay);
+		policy(key).recordPersistentOverhead(System.nanoTime() - queueStart);
 		recordInstanceDrawn();
 		return true;
 	}
@@ -345,7 +375,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static boolean recordCandidateAndIsDense(MeshKey key) {
 		int count = candidateCountsThisFrame.merge(key, 1, Integer::sum);
 		if (count > hottestCandidateCount) hottestCandidateCount = count;
-		return candidateCountsLastFrame.getOrDefault(key, 0) >= densityThreshold();
+		return ACTIVE_KEYS.contains(key);
 	}
 
 	/** Flushes all queued visible instances once, after vanilla has enumerated block entities. */
@@ -394,14 +424,14 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		SignPartContext(MeshKey key) { this.key = key; }
 	}
 
-	private static <E extends BlockEntity> CachedMesh build(BlockEntityRenderer<E> renderer, E blockEntity,
+	private static <E extends BlockEntity> CachedMesh build(MeshKey key, BlockEntityRenderer<E> renderer, E blockEntity,
 			float partialTick, int packedLight, int packedOverlay) {
 		CaptureSource capture = new CaptureSource();
 		try {
 			// The vanilla renderer applies facing/model transforms to this identity pose. Instance/world
 			// translation remains in the dispatcher-owned pose used later by CachedMesh.draw.
 			renderer.render(blockEntity, partialTick, new PoseStack(), capture, packedLight, packedOverlay);
-			return capture.upload();
+			return capture.upload(key);
 		} catch (RuntimeException exception) {
 			capture.close();
 			return null;
@@ -416,6 +446,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		for (CachedMesh mesh : MESHES.values()) mesh.close();
 		MESHES.clear();
 		QUEUED_MESHES.clear();
+		ADAPTIVE_POLICIES.clear();
+		ACTIVE_KEYS.clear();
+		adaptiveSummary = "none";
 		gpuBytes = 0L;
 	}
 
@@ -438,22 +471,60 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			OptiminiumSettings.getBlockEntityPersistenceMinInstances()));
 	}
 
+	private static AdaptivePersistencePolicy policy(MeshKey key) {
+		return ADAPTIVE_POLICIES.computeIfAbsent(key, ignored -> new AdaptivePersistencePolicy());
+	}
+
+	private static void updateAdaptivePolicies(Map<MeshKey, Integer> counts) {
+		ACTIVE_KEYS.clear();
+		boolean adaptive = OptiminiumSettings.isBlockEntityPersistenceAdaptive();
+		int adaptiveMin = OptiminiumSettings.getBlockEntityPersistenceAdaptiveMinInstances();
+		int guaranteed = densityThreshold();
+		for (Map.Entry<MeshKey, Integer> entry : counts.entrySet()) {
+			AdaptivePersistencePolicy value = policy(entry.getKey());
+			if (value.beginFrame(policyFrame, entry.getValue(), adaptive, adaptiveMin, guaranteed)) {
+				ACTIVE_KEYS.add(entry.getKey());
+			}
+		}
+		ADAPTIVE_POLICIES.entrySet().removeIf(entry -> {
+			if (!entry.getValue().expired(policyFrame)) return false;
+			CachedMesh mesh = MESHES.remove(entry.getKey());
+			if (mesh != null) {
+				gpuBytes -= mesh.bytes;
+				mesh.close();
+			}
+			ACTIVE_KEYS.remove(entry.getKey());
+			return true;
+		});
+		adaptiveSummary = ADAPTIVE_POLICIES.entrySet().stream()
+			.max(java.util.Comparator.comparingInt(entry -> entry.getValue().lastCount()))
+			.map(entry -> {
+				AdaptivePersistencePolicy value = entry.getValue();
+				return String.format(Locale.ROOT, "%s count=%d mode=%s vanilla=%.0fns persistent=%.0fns trials=%d reason=%s vertices=%d builds=%d",
+					entry.getKey().type(), value.lastCount(), value.active() ? "persistent" : value.trial() ? "trial" : "vanilla",
+					value.vanillaPerInstanceNanos(), value.persistentPerInstanceNanos(), value.trials(), value.reason(), value.meshVertices(), value.builds());
+			})
+			.orElse("none");
+	}
+
 	public static Snapshot snapshot() {
 		return new Snapshot(MESHES.size(), hits.sum(), misses.sum(), uploads.sum(), fallbacks.sum(),
 			instancesDrawn.sum(), Math.max(0L, gpuBytes), lastHitsThisFrame, lastMissesThisFrame,
 			lastUploadsThisFrame, lastDrawnThisFrame, lastVerticesAvoidedThisFrame, lastDrawCallsThisFrame,
 			lastCulledThisFrame, instanceUploads.sum(), lastInstanceUploadsThisFrame,
-			lastFallbacksThisFrame, meshRebuildsPerSecond);
+			lastFallbacksThisFrame, meshRebuildsPerSecond, adaptiveSummary);
 	}
 
 	public static String diagnosticLine() {
 		Snapshot value = snapshot();
 		return String.format(Locale.ROOT,
-			"persistentBeMeshes=%d, persistentBeMeshHits=%d, persistentBeMeshMisses=%d, persistentBeMeshUploads=%d, persistentBeMeshRebuildsPerSecond=%d, persistentBeInstanceUploadsFrame=%d, persistentBeInstancesFrame=%d, persistentBeCulledFrame=%d, persistentBeVerticesAvoidedFrame=%d, persistentBeDrawCallsFrame=%d, persistentBeGpuBytes=%d, persistentBeFallbacks=%d, persistentBeFallbacksFrame=%d, persistentBeCandidatesFrame=%d, persistentBeDensityThreshold=%d, beDispatcherAverageMs=%.6f, clientFps=%d, clientCpuFrameMs=%.3f",
+			"persistentBeMeshes=%d, persistentBeMeshHits=%d, persistentBeMeshMisses=%d, persistentBeMeshUploads=%d, persistentBeMeshRebuildsPerSecond=%d, persistentBeInstanceUploadsFrame=%d, persistentBeInstancesFrame=%d, persistentBeCulledFrame=%d, persistentBeVerticesAvoidedFrame=%d, persistentBeDrawCallsFrame=%d, persistentBeGpuBytes=%d, persistentBeFallbacks=%d, persistentBeFallbacksFrame=%d, persistentBeCandidatesFrame=%d, persistentBeDensityThreshold=%d, persistentBeAdaptiveMin=%d, persistentBeAdaptive=%s, persistentBePolicy=%s, beDispatcherAverageMs=%.6f, clientFps=%d, clientCpuFrameMs=%.3f",
 			value.cachedMeshes(), value.hits(), value.misses(), value.uploads(), value.meshRebuildsPerSecond(), value.instanceUploadsThisFrame(), value.instancesDrawnThisFrame(),
 			value.instancesCulledThisFrame(), value.verticesAvoidedThisFrame(), value.drawCallsThisFrame(),
 			value.estimatedGpuBytes(), value.fallbacks(), value.fallbacksThisFrame(), lastHottestCandidateCount,
-			densityThreshold(), OptiminiumBlockEntityVirtualizer.snapshot().averageFullRendererMs(),
+			densityThreshold(), OptiminiumSettings.getBlockEntityPersistenceAdaptiveMinInstances(),
+			OptiminiumSettings.isBlockEntityPersistenceAdaptive(), value.adaptiveSummary(),
+			OptiminiumBlockEntityVirtualizer.snapshot().averageFullRendererMs(),
 			Minecraft.getInstance().getFps(),
 			OptiminiumGpuOptimizer.getLatestCpuFrameNanos() / 1_000_000.0D);
 	}
@@ -472,7 +543,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			return layers.computeIfAbsent(renderType, LayerBuilder::new).builder;
 		}
 
-		CachedMesh upload() {
+		CachedMesh upload(MeshKey key) {
 			List<CachedLayer> uploaded = new ArrayList<>(layers.size());
 			long bytes = 0L;
 			long vertices = 0L;
@@ -491,7 +562,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					bytes += layerBytes;
 				}
 				if (uploaded.isEmpty()) return null;
-				return new CachedMesh(List.copyOf(uploaded), bytes, vertices);
+				return new CachedMesh(key, List.copyOf(uploaded), bytes, vertices);
 			} catch (RuntimeException exception) {
 				for (CachedLayer layer : uploaded) layer.buffer.close();
 				throw exception;
@@ -520,12 +591,14 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private static final class CachedMesh implements AutoCloseable {
+		final MeshKey key;
 		final List<CachedLayer> layers;
 		final long bytes;
 		final long vertices;
 		final InstanceBatch instances = new InstanceBatch();
 
-		CachedMesh(List<CachedLayer> layers, long bytes, long vertices) {
+		CachedMesh(MeshKey key, List<CachedLayer> layers, long bytes, long vertices) {
+			this.key = key;
 			this.layers = layers;
 			this.bytes = bytes;
 			this.vertices = vertices;
@@ -538,12 +611,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 
 		void drawQueued() {
 			if (instances.count == 0) return;
+			int count = instances.count;
+			long start = System.nanoTime();
 			instances.upload();
 			for (CachedLayer layer : layers) {
 				layer.drawInstanced(instances);
 				if (metricsEnabled) drawCallsThisFrame++;
 			}
 			instances.reset();
+			policy(key).recordPersistent(System.nanoTime() - start, count);
 		}
 
 		@Override public void close() {
@@ -688,6 +764,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		long instancesDrawn, long estimatedGpuBytes, int hitsThisFrame, int missesThisFrame,
 		int uploadsThisFrame, int instancesDrawnThisFrame, long verticesAvoidedThisFrame,
 		int drawCallsThisFrame, int instancesCulledThisFrame, long instanceUploads,
-		int instanceUploadsThisFrame, int fallbacksThisFrame, long meshRebuildsPerSecond) {
+		int instanceUploadsThisFrame, int fallbacksThisFrame, long meshRebuildsPerSecond,
+		String adaptiveSummary) {
 	}
 }
