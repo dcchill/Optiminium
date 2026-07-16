@@ -4,8 +4,12 @@
   "package": "net.optiminium.mixin",
   "mixins": [],
   "client": [
+	"BlockEntityMixin",
     "BlockEntityRenderDispatcherMixin",
 	"EntityRenderDispatcherMixin",
+	"ModelPartAccessor",
+    "ModelPartMixin",
+    "RenderTypeMixin",
     "ChestRendererMixin",
     "HangingSignRendererMixin",
     "GlStateManagerMixin",

@@ -13,7 +13,7 @@ public abstract class RenderStateShardMixin {
 	@Inject(method = "setupRenderState", at = @At("HEAD"))
 	private void optiminium$countRenderLayerSwitch(CallbackInfo callback) {
 		if (OptiminiumRenderProfiler.isEnabled() && (Object)this instanceof RenderType) {
-			OptiminiumRenderProfiler.recordRenderLayerSwitch();
+			OptiminiumRenderProfiler.recordRenderLayerSwitch(this);
 		}
 	}
 }

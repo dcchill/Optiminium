@@ -30,12 +30,12 @@ public abstract class LevelRendererMixin {
 			boolean renderBlockOutline, net.minecraft.client.Camera camera, GameRenderer gameRenderer,
 			LightTexture lightTexture, Matrix4f projectionMatrix, Matrix4f modelViewMatrix,
 			CallbackInfo callback) {
-		OptiminiumPersistentBlockEntityMeshes.flushQueued();
+		// Compatible entity atlases piggyback RenderType.draw before its state is cleared.
 	}
 
 	@Inject(method = "renderLevel", at = @At(value = "INVOKE",
-		target = "Lnet/minecraft/client/renderer/LevelRenderer;checkPoseStack(Lcom/mojang/blaze3d/vertex/PoseStack;)V",
-		ordinal = 1))
+		target = "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;endBatch()V",
+		ordinal = 0, shift = At.Shift.AFTER))
 	private void optiminium$flushPersistentBlockEntityInstances(DeltaTracker deltaTracker,
 			boolean renderBlockOutline, net.minecraft.client.Camera camera, GameRenderer gameRenderer,
 			LightTexture lightTexture, Matrix4f projectionMatrix, Matrix4f modelViewMatrix,

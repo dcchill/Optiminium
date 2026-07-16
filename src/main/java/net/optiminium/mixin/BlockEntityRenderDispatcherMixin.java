@@ -28,8 +28,16 @@ public abstract class BlockEntityRenderDispatcherMixin {
 			int packedLight, int packedOverlay) {
 		if (!OptiminiumPersistentBlockEntityMeshes.tryRender(renderer, blockEntity, partialTick, poseStack,
 				packedLight, packedOverlay)) {
-			OptiminiumPersistentBlockEntityMeshes.renderVanillaWithSplit(renderer, blockEntity, partialTick,
-				poseStack, bufferSource, packedLight, packedOverlay);
+			if (OptiminiumPersistentBlockEntityMeshes.hasPendingGenericVanillaSample(blockEntity)) {
+				long start = System.nanoTime();
+				OptiminiumPersistentBlockEntityMeshes.renderVanillaWithSplit(renderer, blockEntity, partialTick,
+					poseStack, bufferSource, packedLight, packedOverlay);
+				OptiminiumPersistentBlockEntityMeshes.recordGenericVanilla(renderer, blockEntity,
+					System.nanoTime() - start);
+			} else {
+				OptiminiumPersistentBlockEntityMeshes.renderVanillaWithSplit(renderer, blockEntity, partialTick,
+					poseStack, bufferSource, packedLight, packedOverlay);
+			}
 		}
 	}
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)

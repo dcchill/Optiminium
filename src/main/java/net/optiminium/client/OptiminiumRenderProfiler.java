@@ -1,10 +1,16 @@
 package net.optiminium.client;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
 
 public final class OptiminiumRenderProfiler {
 	private static final long STALL_NANOS = 2_000_000L;
+	private static final Pattern RESOURCE_ID = Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 	private static final ThreadLocal<Deque<UploadCategory>> UPLOAD_CATEGORY_STACK = ThreadLocal.withInitial(ArrayDeque::new);
 	private static boolean enabled;
 	private static boolean frameOpen;
@@ -14,6 +20,7 @@ public final class OptiminiumRenderProfiler {
 	private static long bufferUploadCount;
 	private static long bufferUploadNanos;
 	private static long renderLayerSwitchCount;
+	private static final Map<Object, Long> renderLayerCounts = new IdentityHashMap<>();
 	private static long translucentRenderFrames;
 	private static long particleRenderFrames;
 	private static long terrainRenderFrames;
@@ -103,7 +110,8 @@ public final class OptiminiumRenderProfiler {
 			unknownVanillaUploadBytes,
 			totalUploadBytes,
 			largestUploadCategory.displayName(), optiminiumDrawCalls, optiminiumRenderTypeSwitches,
-			optiminiumEndBatchCalls, proxyDrawCalls, proxyBatches, debugDrawCalls, debugBatches
+			optiminiumEndBatchCalls, proxyDrawCalls, proxyBatches, debugDrawCalls, debugBatches,
+			topRenderLayers()
 		);
 	}
 
@@ -115,6 +123,7 @@ public final class OptiminiumRenderProfiler {
 		bufferUploadCount = 0L;
 		bufferUploadNanos = 0L;
 		renderLayerSwitchCount = 0L;
+		renderLayerCounts.clear();
 		translucentRenderFrames = 0L;
 		particleRenderFrames = 0L;
 		terrainRenderFrames = 0L;
@@ -183,9 +192,10 @@ public final class OptiminiumRenderProfiler {
 		}
 	}
 
-	public static void recordRenderLayerSwitch() {
+	public static void recordRenderLayerSwitch(Object renderType) {
 		if (isActive()) {
 			renderLayerSwitchCount++;
+			if (renderType != null) renderLayerCounts.merge(renderType, 1L, Long::sum);
 			frameRenderLayerSwitches++;
 			frameOpen = true;
 		}
@@ -254,6 +264,31 @@ public final class OptiminiumRenderProfiler {
 		if (!stack.isEmpty()) {
 			stack.pop();
 		}
+	}
+
+	private static String topRenderLayers() {
+		if (renderLayerCounts.isEmpty()) return "none";
+		var entries = new ArrayList<>(renderLayerCounts.entrySet());
+		entries.sort(Map.Entry.<Object, Long>comparingByValue(Comparator.reverseOrder()));
+		StringBuilder result = new StringBuilder();
+		for (int i = 0; i < Math.min(8, entries.size()); i++) {
+			if (i > 0) result.append(' ');
+			Map.Entry<Object, Long> entry = entries.get(i);
+			result.append(renderLayerName(entry.getKey())).append('=').append(entry.getValue());
+		}
+		return result.toString();
+	}
+
+	private static String renderLayerName(Object renderType) {
+		String value = String.valueOf(renderType);
+		if (!value.startsWith("RenderType[")) return value;
+		int start = "RenderType[".length();
+		int colon = value.indexOf(':', start);
+		int bracket = value.indexOf(']', start);
+		int end = colon >= 0 ? colon : bracket >= 0 ? bracket : value.length();
+		String name = value.substring(start, end);
+		var resource = RESOURCE_ID.matcher(value.substring(end));
+		return resource.find() ? name + "@" + resource.group() : name;
 	}
 
 	public static UploadCategory currentUploadCategory() {
@@ -455,7 +490,7 @@ public final class OptiminiumRenderProfiler {
 		String largestUploadSource,
 		long optiminiumDrawCalls, long optiminiumRenderTypeSwitches,
 		long optiminiumEndBatchCalls, long proxyDrawCalls, long proxyBatches,
-		long debugDrawCalls, long debugBatches
+		long debugDrawCalls, long debugBatches, String topRenderLayers
 	) {
 	}
 }

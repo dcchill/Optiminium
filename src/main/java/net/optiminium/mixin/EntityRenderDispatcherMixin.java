@@ -5,6 +5,7 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.optiminium.client.OptiminiumPersistentBlockEntityMeshes;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,6 +21,17 @@ public abstract class EntityRenderDispatcherMixin {
 		if (entity instanceof ArmorStand armorStand) {
 			@SuppressWarnings("unchecked")
 			EntityRenderer<? super ArmorStand> armorRenderer = (EntityRenderer<? super ArmorStand>)(EntityRenderer<?>)renderer;
+			MultiBufferSource exactSource = OptiminiumPersistentBlockEntityMeshes.beginArmorStandModel(
+				armorRenderer, armorStand, bufferSource);
+			if (OptiminiumPersistentBlockEntityMeshes.hasArmorStandModelPass()) {
+				long start = System.nanoTime();
+				try {
+					renderer.render(entity, yaw, partialTick, poseStack, exactSource, packedLight);
+				} finally {
+					OptiminiumPersistentBlockEntityMeshes.endArmorStandModel(System.nanoTime() - start);
+				}
+				return;
+			}
 			if (OptiminiumPersistentBlockEntityMeshes.tryRenderArmorStand(armorRenderer, armorStand,
 					yaw, partialTick, poseStack, packedLight)) {
 				return;
@@ -27,6 +39,20 @@ public abstract class EntityRenderDispatcherMixin {
 			long start = System.nanoTime();
 			renderer.render(entity, yaw, partialTick, poseStack, bufferSource, packedLight);
 			OptiminiumPersistentBlockEntityMeshes.recordArmorStandVanilla(armorStand, System.nanoTime() - start);
+			return;
+		}
+		if (entity instanceof Mob mob) {
+			if (!OptiminiumPersistentBlockEntityMeshes.shouldEvaluateMob(mob)) {
+				renderer.render(entity, yaw, partialTick, poseStack, bufferSource, packedLight);
+				return;
+			}
+			MultiBufferSource persistentSource = OptiminiumPersistentBlockEntityMeshes.beginMob(renderer, mob, bufferSource);
+			long start = System.nanoTime();
+			try {
+				renderer.render(entity, yaw, partialTick, poseStack, persistentSource, packedLight);
+			} finally {
+				OptiminiumPersistentBlockEntityMeshes.endMob(mob, System.nanoTime() - start);
+			}
 			return;
 		}
 		renderer.render(entity, yaw, partialTick, poseStack, bufferSource, packedLight);

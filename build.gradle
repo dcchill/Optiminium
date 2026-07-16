@@ -20,7 +20,7 @@ neoForge {
                 programArgument '--quickPlaySingleplayer'
                 programArgument quickPlayWorld.get()
             }
-            def persistentMeshMinInstances = providers.gradleProperty('optiminium.persistentMeshMinInstances')
+			def persistentMeshMinInstances = providers.gradleProperty('optiminium.persistentMeshMinInstances')
             if (persistentMeshMinInstances.isPresent()) {
                 systemProperty 'optiminium.persistentMeshMinInstances', persistentMeshMinInstances.get()
             }
@@ -41,6 +41,36 @@ neoForge {
             }
 			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkArmorStands').isPresent()) {
 				systemProperty 'optiminium.persistentMeshBenchmarkArmorStands', 'true'
+			}
+			def persistentMeshAdaptiveMinInstances = providers.gradleProperty('optiminium.persistentMeshAdaptiveMinInstances')
+			if (persistentMeshAdaptiveMinInstances.isPresent()) {
+				systemProperty 'optiminium.persistentMeshAdaptiveMinInstances', persistentMeshAdaptiveMinInstances.get()
+			}
+			def persistentMobAdaptiveMinInstances = providers.gradleProperty('optiminium.persistentMobAdaptiveMinInstances')
+			if (persistentMobAdaptiveMinInstances.isPresent()) {
+				systemProperty 'optiminium.persistentMobAdaptiveMinInstances', persistentMobAdaptiveMinInstances.get()
+			}
+			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkGenericBlockEntities').isPresent()) {
+				systemProperty 'optiminium.persistentMeshBenchmarkGenericBlockEntities', 'true'
+			}
+			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkMobs').isPresent()) {
+				systemProperty 'optiminium.persistentMeshBenchmarkMobs', 'true'
+			}
+			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkVariants').isPresent()) {
+				systemProperty 'optiminium.persistentMeshBenchmarkVariants', 'true'
+			}
+			def persistentMeshBenchmarkCount = providers.gradleProperty('optiminium.persistentMeshBenchmarkCount')
+			if (persistentMeshBenchmarkCount.isPresent()) {
+				systemProperty 'optiminium.persistentMeshBenchmarkCount', persistentMeshBenchmarkCount.get()
+			}
+			if (providers.gradleProperty('optiminium.autoBenchmark').isPresent()) {
+				systemProperty 'optiminium.autoBenchmark', 'true'
+			}
+			if (providers.gradleProperty('optiminium.persistenceOnlyBenchmark').isPresent()) {
+				systemProperty 'optiminium.persistenceOnlyBenchmark', 'true'
+			}
+			if (providers.gradleProperty('optiminium.autoExitAfterBenchmark').isPresent()) {
+				systemProperty 'optiminium.autoExitAfterBenchmark', 'true'
 			}
         }
         server {
@@ -71,6 +101,7 @@ test {
 
 dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testImplementation 'org.joml:joml:1.10.5'
 }
 
 def deleteStaleModidJar = tasks.register('deleteStaleModidJar', Delete) {

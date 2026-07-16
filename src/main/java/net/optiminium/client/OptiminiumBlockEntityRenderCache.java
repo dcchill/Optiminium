@@ -13,7 +13,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
-import net.minecraft.world.level.block.entity.LidBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.optiminium.optimization.OptiminiumSettings;
 
@@ -78,7 +77,6 @@ public final class OptiminiumBlockEntityRenderCache {
 
 	// --- Per-type stat tracking ---
 	private static final ConcurrentHashMap<BlockEntityType<?>, TypeStats> typeStatsMap = new ConcurrentHashMap<>();
-	private static final ConcurrentHashMap<BlockEntityType<?>, Boolean> staticTypeEligibility = new ConcurrentHashMap<>();
 
 	// --- Unstable entry detection ---
 	// If an entry is invalidated within UNSTABLE_FRAME_THRESHOLD frames of creation,
@@ -119,7 +117,7 @@ public final class OptiminiumBlockEntityRenderCache {
 	}
 
 	public static boolean isDispatcherHookActive() {
-		return cacheActiveThisFrame || hookMetricsThisFrame;
+		return hookMetricsThisFrame;
 	}
 
 	/**
@@ -308,7 +306,6 @@ public final class OptiminiumBlockEntityRenderCache {
 		totalReuses.reset();
 		totalInvalidatedEntries.reset();
 		typeStatsMap.clear();
-		staticTypeEligibility.clear();
 		unstableTypeCooldown.clear();
 		visibleThisFrame = 0;
 		lastVisibleBlockEntities = 0;
@@ -432,55 +429,12 @@ public final class OptiminiumBlockEntityRenderCache {
 	}
 
 	private static String rejectionReason(BlockEntity blockEntity, BlockState state, BlockEntityType<?> type, boolean count) {
-		if (blockEntity.isRemoved() || state.isRandomlyTicking()) {
+		if (blockEntity.isRemoved()) {
 			if (count) rejectedState++;
 			return "state";
 		}
-		if (type == BlockEntityType.BEACON || type == BlockEntityType.CONDUIT
-				|| type == BlockEntityType.END_PORTAL || type == BlockEntityType.END_GATEWAY
-				|| type == BlockEntityType.MOB_SPAWNER || type == BlockEntityType.TRIAL_SPAWNER
-				|| type == BlockEntityType.VAULT || type == BlockEntityType.PISTON
-				|| state.getLightEmission() > 0) {
-			if (count) rejectedType++;
-			return "type";
-		}
-		// Only cache chest-like block entities when they are fully closed
-		if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST
-				|| type == BlockEntityType.ENDER_CHEST || type == BlockEntityType.SHULKER_BOX) {
-			if (!(blockEntity instanceof LidBlockEntity lid)) {
-				if (count) rejectedAnimated++;
-				return "animated";
-			}
-			// getOpenNess with partialTick interpolates — use 1.0F (full tick) for stability
-			if (lid.getOpenNess(1.0F) != 0.0F) {
-				if (count) rejectedAnimated++;
-				return "animated";
-			}
-		}
-		// Skip modded block entities that don't look static
-		if (!isStaticCacheEligible(type)) {
-			if (count) rejectedType++;
-			return "modded_type";
-		}
+		// Renderer animation and modded payloads do not affect the position-based light lookup.
 		return null;
-	}
-
-	private static boolean isStaticCacheEligible(BlockEntityType<?> type) {
-		return staticTypeEligibility.computeIfAbsent(type, OptiminiumBlockEntityRenderCache::computeStaticCacheEligibility);
-	}
-
-	private static boolean computeStaticCacheEligibility(BlockEntityType<?> type) {
-		ResourceLocation id = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type);
-		return id == null || "minecraft".equals(id.getNamespace()) || looksStaticModded(id);
-	}
-
-	private static boolean looksStaticModded(ResourceLocation id) {
-		String path = id.getPath().toLowerCase(Locale.ROOT);
-		return path.contains("chest") || path.contains("barrel") || path.contains("sign")
-			|| path.contains("banner") || path.contains("skull") || path.contains("bed")
-			|| path.contains("shelf") || path.contains("pot") || path.contains("crate")
-			|| path.contains("decor") || path.contains("furnace") || path.contains("smoker")
-			|| path.contains("blast");
 	}
 
 	private static int size() {

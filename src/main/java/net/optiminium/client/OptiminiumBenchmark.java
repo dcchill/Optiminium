@@ -45,6 +45,7 @@ public final class OptiminiumBenchmark {
 	private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
 	private static boolean running;
 	private static boolean previousEnabled;
+	private static OptiminiumSettings.Snapshot previousSettings;
 	private static boolean cameraStable;
 	private static int ticks;
 	private static int normalBenchmarkStarts;
@@ -94,6 +95,9 @@ public final class OptiminiumBenchmark {
 	private static int repeatBenchmarkTarget;
 	private static OptiminiumSettings.Snapshot fullBenchmarkSettings;
 	private static String activeBenchmarkName;
+	private static int autoStartTicks;
+	private static boolean autoStarted;
+	private static boolean persistenceOnlyRequested;
 
 	private OptiminiumBenchmark() {
 	}
@@ -102,6 +106,13 @@ public final class OptiminiumBenchmark {
 		if (running) {
 			return;
 		}
+		startBenchmark(null, true);
+	}
+
+	/** Runs an A/B pass that changes only the applicable persistence feature. */
+	public static void startPersistence() {
+		if (running) return;
+		persistenceOnlyRequested = true;
 		startBenchmark(null, true);
 	}
 
@@ -131,6 +142,7 @@ public final class OptiminiumBenchmark {
 		running = true;
 		activeBenchmarkName = benchmarkName;
 		previousEnabled = OptiminiumSettings.isEnabled();
+		previousSettings = OptiminiumSettings.snapshot();
 		phaseSequence = phaseSequenceFor(benchmarkName);
 		phaseSequenceIndex = 0;
 		phase = phaseSequence[phaseSequenceIndex];
@@ -217,6 +229,17 @@ public final class OptiminiumBenchmark {
 
 	@SubscribeEvent
 	public static void onClientTick(ClientTickEvent.Post event) {
+		if (!running && !autoStarted && Boolean.getBoolean("optiminium.autoBenchmark")) {
+			Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft.level == null || minecraft.player == null) {
+				autoStartTicks = 0;
+				return;
+			}
+			if (++autoStartTicks >= 100) {
+				autoStarted = true;
+				start();
+			}
+		}
 		if (!running) {
 			return;
 		}
@@ -238,7 +261,11 @@ public final class OptiminiumBenchmark {
 			return;
 		}
 		running = false;
-		OptiminiumSettings.setEnabled(previousEnabled);
+		if (isPersistenceOnlyBenchmark() && previousSettings != null) {
+			OptiminiumSettings.restore(previousSettings);
+		} else {
+			OptiminiumSettings.setEnabled(previousEnabled);
+		}
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
 		OptiminiumVisualSignificance.setDetailedStatisticsEnabled(false);
@@ -279,6 +306,11 @@ public final class OptiminiumBenchmark {
 				message("Optiminium full benchmark HTML report: " + fullReport);
 			}
 			message("Optiminium full benchmark: complete.");
+		}
+		persistenceOnlyRequested = false;
+		if (Boolean.getBoolean("optiminium.autoExitAfterBenchmark")) {
+			message("Optiminium benchmark: automatic client shutdown requested.");
+			Minecraft.getInstance().stop();
 		}
 	}
 
@@ -344,7 +376,22 @@ public final class OptiminiumBenchmark {
 	}
 
 	private static void applyPhaseSettings() {
-		OptiminiumSettings.setEnabled(phase == Phase.ON);
+		if (!isPersistenceOnlyBenchmark()) {
+			OptiminiumSettings.setEnabled(phase == Phase.ON);
+			return;
+		}
+		OptiminiumSettings.setEnabled(true);
+		if (Boolean.getBoolean("optiminium.persistentMeshBenchmarkMobs")) {
+			OptiminiumSettings.setBlockEntityPersistenceEnabled(false);
+			OptiminiumSettings.setMobPersistenceEnabled(phase == Phase.ON);
+		} else {
+			OptiminiumSettings.setMobPersistenceEnabled(false);
+			OptiminiumSettings.setBlockEntityPersistenceEnabled(phase == Phase.ON);
+		}
+	}
+
+	private static boolean isPersistenceOnlyBenchmark() {
+		return persistenceOnlyRequested || Boolean.getBoolean("optiminium.persistenceOnlyBenchmark");
 	}
 
 	private static void captureMeasuredPhase() {
@@ -841,7 +888,7 @@ public final class OptiminiumBenchmark {
 
 	private static String renderProfileLine(OptiminiumRenderProfiler.Snapshot profile, int frames) {
 		double divisor = Math.max(1, frames);
-		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, textureBindsPerFrame=%.2f, shaderBindsPerFrame=%.2f, renderLayerSwitchesPerFrame=%.2f, bufferUploadsPerFrame=%.2f, maxTextureBindsPerFrame=%d, maxShaderBindsPerFrame=%d, maxBufferUploadsPerFrame=%d, maxRenderLayerSwitchesPerFrame=%d, maxBufferUploadMsPerFrame=%.3f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f, uploadBytes=%d, largestUploadSource=%s, proxyLodUploads=%d/%d, terrainChunkUploads=%d/%d, blockEntityUploads=%d/%d, particleUploads=%d/%d, unknownUploads=%d/%d, optiminiumDrawCalls=%d, optiminiumRenderTypeSwitches=%d, optiminiumEndBatchCalls=%d, proxyDrawCalls=%d, proxyBatches=%d, debugDrawCalls=%d, debugBatches=%d",
+		return String.format("renderLayerSwitchCount=%d, textureBindCount=%d, shaderBindCount=%d, framebufferBindCount=%d, bufferUploadCount=%d, bufferUploadMs=%.3f, textureBindsPerFrame=%.2f, shaderBindsPerFrame=%.2f, renderLayerSwitchesPerFrame=%.2f, bufferUploadsPerFrame=%.2f, maxTextureBindsPerFrame=%d, maxShaderBindsPerFrame=%d, maxBufferUploadsPerFrame=%d, maxRenderLayerSwitchesPerFrame=%d, maxBufferUploadMsPerFrame=%.3f, translucentRenderFrames=%d, particleRenderFrames=%d, terrainRenderFrames=%d, suspectedGlStallFrames=%d, totalRenderProfilingMs=%.3f, uploadBytes=%d, largestUploadSource=%s, proxyLodUploads=%d/%d, terrainChunkUploads=%d/%d, blockEntityUploads=%d/%d, particleUploads=%d/%d, unknownUploads=%d/%d, optiminiumDrawCalls=%d, optiminiumRenderTypeSwitches=%d, optiminiumEndBatchCalls=%d, proxyDrawCalls=%d, proxyBatches=%d, debugDrawCalls=%d, debugBatches=%d, renderLayerTop=%s",
 			profile.renderLayerSwitchCount(),
 			profile.textureBindCount(),
 			profile.shaderBindCount(),
@@ -875,7 +922,8 @@ public final class OptiminiumBenchmark {
 			profile.unknownVanillaUploadCount(),
 			profile.unknownVanillaUploadBytes(), profile.optiminiumDrawCalls(),
 			profile.optiminiumRenderTypeSwitches(), profile.optiminiumEndBatchCalls(),
-			profile.proxyDrawCalls(), profile.proxyBatches(), profile.debugDrawCalls(), profile.debugBatches()
+			profile.proxyDrawCalls(), profile.proxyBatches(), profile.debugDrawCalls(), profile.debugBatches(),
+			profile.topRenderLayers()
 		);
 	}
 
@@ -2342,7 +2390,7 @@ public final class OptiminiumBenchmark {
 		return new OptiminiumRenderProfiler.Snapshot(0L, 0L, 0L, 0L, 0.0D, 0L, 0L, 0L, 0L, 0L, 0.0D,
 			0, 0, 0, 0, 0.0D,
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "none",
-			0L, 0L, 0L, 0L, 0L, 0L, 0L);
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, "none");
 	}
 
 	private static double onePercentLowFps(List<Long> frames) {
