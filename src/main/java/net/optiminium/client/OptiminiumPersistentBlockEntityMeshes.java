@@ -218,6 +218,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static int wholeEntityCaptureDepth;
 	private static final PersistenceDiscoveryCooldown PERSISTENCE_DISCOVERY_COOLDOWN =
 		new PersistenceDiscoveryCooldown();
+	private static final PersistenceSafetySampleGate SAFETY_SAMPLE_GATE = new PersistenceSafetySampleGate();
 	private static final long GENERIC_ACTIVE_KEY_REFRESH_TICKS = 100L;
 	private static final long GENERIC_INACTIVE_KEY_REFRESH_TICKS = 100L;
 	private static final long FAILURE_COOLDOWN_FRAMES = 600L;
@@ -1648,6 +1649,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		long frameNanos = lastPolicyFrameNanos == 0L ? 0L : frameNow - lastPolicyFrameNanos;
 		lastPolicyFrameNanos = frameNow;
 		long gpuNanos = OptiminiumGpuTimer.getLatestGpuNanos();
+		var camera = Minecraft.getInstance().gameRenderer.getMainCamera();
+		var cameraPosition = camera.getPosition();
+		boolean representativeSafetyFrame = SAFETY_SAMPLE_GATE.observe(cameraPosition.x, cameraPosition.y,
+			cameraPosition.z, camera.getXRot(), camera.getYRot());
 		for (Map.Entry<Object, AdaptivePersistencePolicy> entry : ADAPTIVE_POLICIES.entrySet()) {
 			// Upload/build frames are warmup, not representative steady-state GPU evidence.
 			if (entry.getKey() instanceof ArmorStandWholePolicyKey && armorStandBuildsThisFrame > 0) continue;
@@ -1655,7 +1660,12 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			// attribution rejected glow frames despite an 86% measured CPU saving.
 			if (isEntityPolicyKey(entry.getKey())) continue;
 			AdaptivePersistencePolicy value = entry.getValue();
-			value.recordFrameSafety(gpuNanos, frameNanos, value.active() || value.trial());
+			// Camera motion adds terrain/chunk work to these whole-frame measurements. Mixing
+			// moving persistent frames with stationary vanilla frames can falsely veto a cache
+			// that is providing a large isolated CPU saving.
+			if (representativeSafetyFrame) {
+				value.recordFrameSafety(gpuNanos, frameNanos, value.active() || value.trial());
+			}
 		}
 		armorStandBuildsThisFrame = 0;
 		applyDormantGenericFamilyCounts();
@@ -2251,6 +2261,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		armorStandPersistenceActiveThisFrame = false;
 		mobPersistenceActiveThisFrame = false;
 		PERSISTENCE_DISCOVERY_COOLDOWN.reset();
+		SAFETY_SAMPLE_GATE.reset();
 		lastPolicyFrameNanos = 0L;
 		adaptiveSummary = "none";
 		gpuBytes = 0L;

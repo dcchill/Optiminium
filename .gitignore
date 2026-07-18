@@ -12,7 +12,7 @@ bin/
 .agents/
 .vscode/
 graphify-out/
-
+.agents/
 
 # Minecraft client/server files
 run/

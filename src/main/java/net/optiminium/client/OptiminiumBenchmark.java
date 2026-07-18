@@ -1284,7 +1284,7 @@ public final class OptiminiumBenchmark {
 		FullBenchmarkResult baseline = results.get(0);
 		StringBuilder html = new StringBuilder(24000);
 		html.append("<!doctype html><html><head><meta charset=\"utf-8\"><title>Optiminium Full Benchmark</title><style>");
-		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
+		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}table{width:100%;border-collapse:collapse;background:#171d25;border:1px solid #28313d}th,td{padding:8px;border-bottom:1px solid #28313d;text-align:left}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
 		html.append("<h1>Optiminium Full Benchmark</h1><p class=\"muted\">")
 			.append(escape(FORMAT_VERSION)).append(" | rendererCompatibilityMode=")
 			.append(escape(OptiminiumSodiumCompat.rendererModeString()))
@@ -1500,6 +1500,7 @@ public final class OptiminiumBenchmark {
 			.append("</p><p>")
 			.append(escape(historyTrend.line()))
 			.append("</p></div>");
+		appendFpsGainTimeline(html, offFrames, onFrames);
 		appendFramePacingDashboard(html, offFrames, onFrames, onBurstFrames);
 		html.append("<h2>Charts</h2>");
 		html.append(barChart("OFF vs ON FPS comparison", new String[]{"OFF avg FPS","ON avg FPS"}, new double[]{offFps, onFps}));
@@ -1636,6 +1637,36 @@ public final class OptiminiumBenchmark {
 		svg.append("</svg></div>");
 		return svg.toString();
 	}
+
+	private static void appendFpsGainTimeline(StringBuilder html, List<Long> offFrameTimes,
+			List<Long> onFrameTimes) {
+		List<FpsGainTimeline.Slice> slices = FpsGainTimeline.calculate(offFrameTimes, onFrameTimes, 10);
+		html.append("<h2>Where FPS Gains Happen</h2><p class=\"muted\">The measured portion of each phase is split into equal-duration windows. Positive values show where Optiminium gained FPS; negative values show where it regressed.</p>");
+		if (slices.isEmpty()) {
+			html.append("<div class=\"card warn\">Not enough frame samples to build the gain timeline.</div>");
+			return;
+		}
+		String[] labels = new String[slices.size()];
+		double[] gains = new double[slices.size()];
+		for (int i = 0; i < slices.size(); i++) {
+			FpsGainTimeline.Slice slice = slices.get(i);
+			labels[i] = slice.label();
+			gains[i] = slice.fpsGain();
+		}
+		html.append(barChart("FPS gain by measurement window", labels, gains));
+		html.append("<table><thead><tr><th>Measurement window</th><th>OFF FPS</th><th>ON FPS</th><th>FPS gain</th><th>Gain %</th></tr></thead><tbody>");
+		for (FpsGainTimeline.Slice slice : slices) {
+			boolean gain = slice.fpsGain() >= 0.0D;
+			html.append("<tr><td>").append(escape(slice.label())).append("</td><td>")
+				.append(format(slice.offFps())).append("</td><td>").append(format(slice.onFps()))
+				.append("</td><td class=\"").append(gain ? "good" : "bad").append("\">")
+				.append(format(slice.fpsGain())).append("</td><td class=\"")
+				.append(gain ? "good" : "bad").append("\">").append(format(slice.gainPercent()))
+				.append("%</td></tr>");
+		}
+		html.append("</tbody></table>");
+	}
+
 
 	private static void appendFramePacingDashboard(StringBuilder html, List<Long> offFrameTimes,
 			List<Long> onFrameTimes, List<FrameBurstSample> bursts) {
