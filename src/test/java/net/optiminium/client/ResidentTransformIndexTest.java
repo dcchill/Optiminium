@@ -44,4 +44,19 @@ class ResidentTransformIndexTest {
 		assertTrue(index.expire(1_100L, 600L).isEmpty());
 		assertEquals(-1, index.touch(new Object(), 1_101L));
 	}
+
+	@Test
+	void revisionedOwnersSkipComparisonButRefreshOnExactStateChange() {
+		ResidentTransformIndex index = new ResidentTransformIndex();
+		Object owner = new Object();
+		Matrix4f initial = new Matrix4f().translation(2.0F, 3.0F, 4.0F);
+		int slot = index.observeVersioned(owner, initial, 41L, 1L).slot();
+
+		assertEquals(slot, index.touchVersioned(owner, 41L, 2L));
+		assertEquals(-1, index.touchVersioned(owner, 42L, 3L));
+		ResidentTransformIndex.Update moved = index.observeVersioned(owner,
+			new Matrix4f().translation(8.0F, 3.0F, 4.0F), 42L, 3L);
+		assertEquals(slot, moved.slot());
+		assertTrue(moved.changed());
+	}
 }

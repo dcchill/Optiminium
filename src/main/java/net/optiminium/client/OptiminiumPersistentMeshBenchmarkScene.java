@@ -4,6 +4,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Rotations;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
@@ -15,9 +17,12 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.Cow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -162,7 +167,8 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 					ArmorStand stand = new ArmorStand(level, origin.getX() + x + 0.5D,
 						origin.getY(), origin.getZ() + z + 0.5D);
 					stand.setNoGravity(true);
-					stand.setYRot(0.0F);
+					stand.setYRot(VARIANTS ? (index & 7) * 45.0F : 0.0F);
+					if (VARIANTS) configureArmorStandVariant(stand, index);
 					level.addFreshEntity(stand);
 				}
 			} else {
@@ -188,5 +194,45 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 				BENCHMARK_COUNT, MOBS ? "exact mobs" : ARMOR_STANDS ? "armor stands"
 					: GENERIC_BLOCK_ENTITIES ? "generic shulker boxes" : "decorated pots", origin);
 		});
+	}
+
+	/** Scarland-style deterministic variety: unique poses plus common decorative display forms. */
+	private static void configureArmorStandVariant(ArmorStand stand, int index) {
+		stand.setShowArms((index & 1) != 0);
+		stand.setNoBasePlate((index & 2) != 0);
+		setSavedArmorStandFlags(stand, (index & 4) != 0, false);
+		stand.setHeadPose(new Rotations((index * 7) % 31 - 15, (index * 13) % 91 - 45, 0.0F));
+		stand.setBodyPose(new Rotations(0.0F, (index * 11) % 61 - 30, (index * 5) % 21 - 10));
+		stand.setLeftArmPose(new Rotations((index * 17) % 91 - 45, 0.0F, -10.0F));
+		stand.setRightArmPose(new Rotations((index * 19) % 91 - 45, 0.0F, 10.0F));
+
+		switch (index & 7) {
+			case 0 -> stand.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.CARVED_PUMPKIN));
+			case 1 -> stand.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.DIAMOND_SWORD));
+			case 2 -> stand.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.LANTERN));
+			case 3 -> stand.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.IRON_CHESTPLATE));
+			case 4 -> {
+				stand.setInvisible(true);
+				stand.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.ZOMBIE_HEAD));
+			}
+			case 5 -> {
+				setSavedArmorStandFlags(stand, stand.isSmall(), true);
+				stand.setInvisible(true);
+				stand.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.STICK));
+			}
+			case 6 -> stand.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.GLASS));
+			default -> {
+				stand.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.GOLDEN_HELMET));
+				stand.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.SHIELD));
+			}
+		}
+	}
+
+	private static void setSavedArmorStandFlags(ArmorStand stand, boolean small, boolean marker) {
+		CompoundTag tag = new CompoundTag();
+		stand.saveWithoutId(tag);
+		tag.putBoolean("Small", small);
+		tag.putBoolean("Marker", marker);
+		stand.load(tag);
 	}
 }

@@ -9,7 +9,10 @@ final class PersistentRenderTypeCompatibility {
 		"entity_cutout",
 		"entity_cutout_no_cull",
 		"entity_cutout_no_cull_z_offset",
-		"entity_smooth_cutout"
+		"entity_smooth_cutout",
+		// Vanilla HumanoidArmorLayer output uses the same NEW_ENTITY vertex contract and
+		// is unsorted. Glint remains rejected separately by its own render type.
+		"armor_cutout_no_cull"
 	);
 
 	private PersistentRenderTypeCompatibility() {

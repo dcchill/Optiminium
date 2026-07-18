@@ -12,13 +12,20 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.ChestRenderer;
 import net.minecraft.client.renderer.blockentity.DecoratedPotRenderer;
 import net.minecraft.client.renderer.blockentity.SignRenderer;
 import net.minecraft.client.renderer.blockentity.HangingSignRenderer;
 import net.minecraft.client.renderer.blockentity.BellRenderer;
+import net.minecraft.client.renderer.block.BlockRenderDispatcher;
+import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.layers.RenderLayer;
+import net.minecraft.client.model.Model;
+import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.resources.model.SimpleBakedModel;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.model.geom.ModelPart;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -32,13 +39,27 @@ import net.minecraft.world.level.block.entity.BellBlockEntity;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.entity.vehicle.AbstractMinecart;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.state.BlockState;
 import com.mojang.math.Axis;
 import net.optiminium.optimization.OptiminiumSettings;
 import net.optiminium.OptiminiumMod;
 import net.optiminium.mixin.ModelPartAccessor;
+import net.optiminium.client.persistence.PersistentRenderAdapter;
+import net.optiminium.client.persistence.PersistentRenderAdapterRegistry;
+import net.optiminium.client.persistence.VanillaPersistentRenderAdapters;
+import net.optiminium.client.persistence.PersistentEntityMetrics;
 import org.joml.Matrix4f;
+import org.joml.Matrix3f;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL;
@@ -68,6 +89,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 /**
  * Render-thread-owned, shared GPU meshes for block-entity renderers.
@@ -81,7 +103,10 @@ import java.util.UUID;
 	 * the cached model is built against an identity pose and the caller's pose is supplied only when drawing.</p>
  */
 public final class OptiminiumPersistentBlockEntityMeshes {
+	private static final String IMPLEMENTATION_REVISION = "exact-submesh-transform-isolation-v24";
+	private static final int ARMOR_STAND_BUILD_BUDGET_PER_FRAME = 8;
 	private static final Map<Object, CachedMesh> MESHES = new LinkedHashMap<>(32, 0.75F, true);
+	private static final Map<Object, EntityPolicyKey> ENTITY_POLICY_KEYS = new HashMap<>();
 	private static final List<AtlasPage> ATLAS_PAGES = new ArrayList<>();
 	private static final LongAdder hits = new LongAdder();
 	private static final LongAdder misses = new LongAdder();
@@ -108,6 +133,30 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static int lastInstanceUploadsThisFrame;
 	private static int fallbacksThisFrame;
 	private static int lastFallbacksThisFrame;
+	private static int itemFrameBackingCandidatesThisFrame;
+	private static int lastItemFrameBackingCandidates;
+	private static int itemFrameBackingCachedThisFrame;
+	private static int lastItemFrameBackingCached;
+	private static long itemFrameBackingBuilds;
+	private static long itemFrameBackingFailures;
+	private static int armorFeatureCandidatesThisFrame;
+	private static int lastArmorFeatureCandidates;
+	private static int armorFeatureCachedThisFrame;
+	private static int lastArmorFeatureCached;
+	private static long armorFeatureBuilds;
+	private static long armorFeatureFailures;
+	private static int minecartModelCandidatesThisFrame;
+	private static int lastMinecartModelCandidates;
+	private static int minecartModelCachedThisFrame;
+	private static int lastMinecartModelCached;
+	private static long minecartModelBuilds;
+	private static long minecartModelFailures;
+	private static int frameItemCandidatesThisFrame, lastFrameItemCandidates;
+	private static int frameItemCachedThisFrame, lastFrameItemCached;
+	private static long frameItemBuilds, frameItemFailures;
+	private static int displayBlockCandidatesThisFrame, lastDisplayBlockCandidates;
+	private static int displayBlockCachedThisFrame, lastDisplayBlockCached;
+	private static long displayBlockBuilds, displayBlockFailures;
 	private static final ThreadLocal<ChestPartContext> CHEST_PART_CONTEXT = new ThreadLocal<>();
 	private static final ThreadLocal<SignPartContext> SIGN_PART_CONTEXT = new ThreadLocal<>();
 	private static final ThreadLocal<MobRenderContext> MOB_RENDER_CONTEXT = new ThreadLocal<>();
@@ -116,16 +165,20 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static long lastDiagnosticNanos;
 	private static boolean metricsEnabled;
 	private static Map<Object, Integer> candidateCountsThisFrame = new HashMap<>();
-	private static Map<Object, Integer> candidateCountsLastFrame = Map.of();
+	private static Map<Object, Integer> candidateCountsLastFrame = new HashMap<>();
 	private static Map<GenericFamilyKey, Integer> genericFamilyCountsThisFrame = new HashMap<>();
-	private static Map<GenericFamilyKey, Integer> genericFamilyCountsLastFrame = Map.of();
+	private static Map<GenericFamilyKey, Integer> genericFamilyCountsLastFrame = new HashMap<>();
 	private static Map<ArmorStandBoneKey, Integer> armorStandCountsThisFrame = new HashMap<>();
-	private static Map<ArmorStandBoneKey, Integer> armorStandCountsLastFrame = Map.of();
+	private static Map<ArmorStandBoneKey, Integer> armorStandCountsLastFrame = new HashMap<>();
 	private static final Map<GenericFamilyKey, GenericFamilyDiscoveryPolicy> GENERIC_FAMILY_DISCOVERY = new HashMap<>();
 	private static final Map<ArmorStandBoneKey, ArmorStandFamilyState> ARMOR_STAND_FAMILIES = new HashMap<>();
+	private static long armorStandDormantUntilFrame;
+	private static String armorStandDormantReason = "none";
 	private static final Map<Object, AdaptivePersistencePolicy> ADAPTIVE_POLICIES = new HashMap<>();
 	private static final java.util.Set<Object> ACTIVE_KEYS = new java.util.HashSet<>();
 	private static final Map<Object, Long> FAILED_KEYS = new HashMap<>();
+	private static final Map<String, Long> ARMOR_CAPTURE_FAILURES = new HashMap<>();
+	private static final LinkedHashMap<ArmorStandPoseMeshKey, CpuArmorMesh> CPU_ARMOR_MESHES = new LinkedHashMap<>();
 	private static final Map<GenericSourceKey, GenericQualification> GENERIC_QUALIFICATIONS = new HashMap<>();
 	private static final Map<ExactGroupKey, MobTopologyPolicy> MOB_QUALIFICATIONS = new HashMap<>();
 	private static final Map<ExactGroupKey, String> MOB_FALLBACK_REASONS = new HashMap<>();
@@ -157,14 +210,21 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static boolean atlasActiveStatePendingUnbind;
 	private static boolean persistenceConfiguredThisFrame;
 	private static boolean persistenceActiveThisFrame;
+	private static boolean genericDiscoveryActiveThisFrame;
+	private static boolean armorStandPersistenceActiveThisFrame;
 	private static boolean mobPersistenceActiveThisFrame;
+	private static boolean modelPartContextActive;
+	private static int wholeEntityCaptureDepth;
 	private static final PersistenceDiscoveryCooldown PERSISTENCE_DISCOVERY_COOLDOWN =
 		new PersistenceDiscoveryCooldown();
 	private static final long GENERIC_ACTIVE_KEY_REFRESH_TICKS = 100L;
 	private static final long GENERIC_INACTIVE_KEY_REFRESH_TICKS = 100L;
 	private static final long FAILURE_COOLDOWN_FRAMES = 600L;
+	private static final String ARMOR_STAND_REJECTION_REASON_PREFIX = "armor_stand_rejection:";
 	private static final long GENERIC_SAMPLE_INTERVAL_FRAMES = 10L;
 	private static final long GENERIC_VALIDATION_INTERVAL_FRAMES = 120L;
+	private static final long ENTITY_VALIDATION_INTERVAL_FRAMES = Math.max(60L,
+		Long.getLong("optiminium.entityValidationIntervalFrames", 1_200L));
 	private static final int GENERIC_STABLE_SAMPLES = 3;
 	private static final int NORMALIZED_CAPTURE_LIGHT = 0x00F000F0;
 	private static long policyFrame;
@@ -176,14 +236,506 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static long meshRebuildsPerSecond;
 	private static long queueTimingCounter;
 	private static long armorPartTimingCounter;
+	private static int armorStandBuildsThisFrame;
 	private static final java.util.Set<CachedMesh> QUEUED_MESHES =
 		Collections.newSetFromMap(new IdentityHashMap<>());
+	private static final Set<Object> ENTITY_ANCHORS_THIS_FRAME = new java.util.HashSet<>();
+	private static final IdentityHashMap<Object, IdentityHashMap<Object, Object>> SUBMESH_TRANSFORM_OWNERS =
+		new IdentityHashMap<>();
+	private static final Object FRAME_BACKING_TRANSFORM = new Object();
+	private static final Object FRAME_ITEM_TRANSFORM = new Object();
+	private static final Object MINECART_MODEL_TRANSFORM = new Object();
+	private static final Object MINECART_DISPLAY_TRANSFORM = new Object();
 	private static final SharedInstanceStream SHARED_INSTANCES = new SharedInstanceStream();
 	private static final ResidentTransformStream RESIDENT_TRANSFORMS = new ResidentTransformStream();
 	private static final BonePaletteStream BONE_PALETTES = new BonePaletteStream();
 	private static final IndirectCommandStream INDIRECT_COMMANDS = new IndirectCommandStream();
 
 	private OptiminiumPersistentBlockEntityMeshes() {
+	}
+
+	static {
+		VanillaPersistentRenderAdapters.register();
+	}
+
+	/**
+	 * Attempts exact whole-render persistence for an explicitly registered entity adapter.
+	 * Unknown renderers never enter capture and therefore preserve mod render-event semantics.
+	 */
+	public static <E extends Entity> boolean tryRenderPersistentEntity(EntityRenderer<? super E> renderer,
+			E entity, float yaw, float partialTick, PoseStack instancePose, int packedLight) {
+		if (!OptiminiumSettings.isEnabled() || !OptiminiumSettings.isEntityPersistenceEnabled()
+				|| OptiminiumPersistentMeshShader.get() == null) return false;
+		PersistentRenderAdapter<E> adapter = PersistentRenderAdapterRegistry.find(entity);
+		if (adapter == null) return false;
+		Object adapterFamily = adapter.familyKey(entity, renderer);
+		PersistentEntityMetrics.eligible(adapterFamily);
+		if (!adapter.eligible(entity)) {
+			PersistentEntityMetrics.dynamicStateFallback(adapterFamily);
+			return false;
+		}
+		EntityPolicyKey family = entityPolicyKey(adapterFamily);
+		PersistentEntityMetrics.candidate(family.adapterFamily());
+		recordCandidate(family);
+		if (!ACTIVE_KEYS.contains(family)) return false;
+		PersistentEntityMetrics.active(family.adapterFamily());
+		// Keep one exact vanilla anchor per family. Besides validating behavior, this ensures
+		// renderer events are not silently eliminated from an active audited family.
+		boolean anchor = ENTITY_ANCHORS_THIS_FRAME.add(family);
+		if (anchor) {
+			PersistentEntityMetrics.anchor(family.adapterFamily());
+		}
+		long queueStart = queueTimingStart(family);
+		Object geometry = adapter.geometryKey(entity, renderer, yaw, partialTick);
+		if (geometry == null) {
+			PersistentEntityMetrics.unsupportedRenderType(family.adapterFamily());
+			return false;
+		}
+		EntityMeshKey key = new EntityMeshKey(family, geometry);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null && policyFrame < failedUntil) return false;
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh != null && policyFrame >= mesh.nextValidationFrame) {
+			validatePersistentEntityMesh(renderer, entity, yaw, partialTick,
+				packedLight, adapter.usesCapturedVertexLight(entity), key, mesh,
+				family.adapterFamily());
+			// The validation capture is deliberately not submitted. Let this exact instance
+			// render vanilla so validation never changes visible event/layer behavior.
+			return false;
+		}
+		if (anchor) {
+			return false;
+		}
+		if (mesh == null) {
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				wholeEntityCaptureDepth++;
+				try {
+					renderer.render(entity, yaw, partialTick, new PoseStack(), capture,
+						adapter.usesCapturedVertexLight(entity) ? packedLight : 0);
+				} finally {
+					wholeEntityCaptureDepth--;
+				}
+				mesh = capture.upload(key, family);
+			} catch (RuntimeException exception) {
+				capture.close();
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				recordFallback();
+				PersistentEntityMetrics.fallback(family.adapterFamily());
+				return false;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				return false;
+			}
+			long buildNanos = System.nanoTime() - buildStart;
+			policy(family).recordBuild(buildNanos, mesh.vertices);
+			PersistentEntityMetrics.build(family.adapterFamily(), buildNanos);
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		int instanceLight = adapter.usesCapturedVertexLight(entity) ? -1 : packedLight;
+		if (adapter.usesRevisionedTransform(entity)) {
+			mesh.queueRevisionedResident(entity, instancePose.last().pose(), true, instanceLight, 0,
+				adapter.transformRevision(entity, yaw, partialTick));
+		} else {
+			mesh.queueResident(entity, instancePose.last().pose(), true, instanceLight, 0);
+		}
+		recordQueueOverhead(family, queueStart);
+		PersistentEntityMetrics.cached(family.adapterFamily());
+		return true;
+	}
+
+	private static <E extends Entity> boolean validatePersistentEntityMesh(
+			EntityRenderer<? super E> renderer, E entity, float yaw, float partialTick,
+			int packedLight, boolean usesCapturedVertexLight, EntityMeshKey key,
+			CachedMesh mesh, Object family) {
+		CaptureSource capture = new CaptureSource();
+		long fingerprint;
+		try {
+			wholeEntityCaptureDepth++;
+			try {
+				renderer.render(entity, yaw, partialTick, new PoseStack(), capture,
+					usesCapturedVertexLight ? packedLight : 0);
+			} finally {
+				wholeEntityCaptureDepth--;
+			}
+			fingerprint = capture.captureFingerprint();
+		} catch (RuntimeException exception) {
+			capture.close();
+			FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+			PersistentEntityMetrics.safetyVeto(family, "validation_exception");
+			return false;
+		}
+		if (fingerprint != mesh.captureFingerprint) {
+			if (MESHES.remove(key, mesh)) mesh.close();
+			// The immutable adapter key failed to describe all emitted geometry. Do not cycle
+			// rebuilds for the same unchanged state; resource/world cleanup clears this veto,
+			// while a real tracked-state change naturally produces a different key.
+			FAILED_KEYS.put(key, Long.MAX_VALUE);
+			PersistentEntityMetrics.safetyVeto(family, "fingerprint_mismatch");
+			return false;
+		}
+		mesh.nextValidationFrame = nextEntityValidationFrame(key);
+		PersistentEntityMetrics.validationMatch(family);
+		return true;
+	}
+
+	private static long nextEntityValidationFrame(Object key) {
+		long stagger = Integer.toUnsignedLong(key.hashCode()) % ENTITY_VALIDATION_INTERVAL_FRAMES;
+		return policyFrame + ENTITY_VALIDATION_INTERVAL_FRAMES + stagger;
+	}
+
+	/** Records sampled vanilla CPU for a registered family so adaptive activation is evidence based. */
+	public static <E extends Entity> void recordPersistentEntityVanilla(EntityRenderer<? super E> renderer,
+			E entity, long elapsedNanos) {
+		if (elapsedNanos <= 0L || !OptiminiumSettings.isEntityPersistenceEnabled()) return;
+		PersistentRenderAdapter<E> adapter = PersistentRenderAdapterRegistry.find(entity);
+		if (adapter != null && adapter.eligible(entity)) {
+			Object adapterFamily = adapter.familyKey(entity, renderer);
+			policy(entityPolicyKey(adapterFamily)).recordVanilla(elapsedNanos, 1);
+			PersistentEntityMetrics.vanilla(adapterFamily, elapsedNanos);
+		}
+	}
+
+	/**
+	 * Persists only an ordinary item frame's shared wooden backing. The contained item, maps,
+	 * glint, frame render event and name tag remain in ItemFrameRenderer's vanilla control flow.
+	 */
+	public static void renderItemFrameBacking(ItemFrame frame, BakedModel model,
+			PoseStack.Pose instancePose, int packedLight, int packedOverlay,
+			VertexConsumer vanillaConsumer, BiConsumer<PoseStack.Pose, VertexConsumer> renderModel) {
+		if (wholeEntityCaptureDepth > 0
+				|| !OptiminiumSettings.isEnabled() || !OptiminiumSettings.isEntityPersistenceEnabled()
+				|| OptiminiumPersistentMeshShader.get() == null
+				|| frame.isInvisible()
+				|| Minecraft.getInstance().shouldEntityAppearGlowing(frame)
+				|| model == null || model.getClass() != SimpleBakedModel.class) {
+			renderModel.accept(instancePose, vanillaConsumer);
+			return;
+		}
+		Object policyKey = ItemFrameBackingPolicyKey.INSTANCE;
+		itemFrameBackingCandidatesThisFrame++;
+		recordCandidate(policyKey);
+		if (!ACTIVE_KEYS.contains(policyKey) || ENTITY_ANCHORS_THIS_FRAME.add(policyKey)) {
+			long start = System.nanoTime();
+			renderModel.accept(instancePose, vanillaConsumer);
+			policy(policyKey).recordVanilla(System.nanoTime() - start, 1);
+			return;
+		}
+		ItemFrameBackingMeshKey key = new ItemFrameBackingMeshKey(model);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null) {
+			if (policyFrame < failedUntil) {
+				renderModel.accept(instancePose, vanillaConsumer);
+				return;
+			}
+			FAILED_KEYS.remove(key);
+		}
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh == null) {
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				VertexConsumer captureConsumer = capture.getBuffer(Sheets.solidBlockSheet());
+				renderModel.accept(new PoseStack().last(), captureConsumer);
+				mesh = capture.upload(key, policyKey);
+			} catch (RuntimeException exception) {
+				capture.close();
+				itemFrameBackingFailures++;
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				recordFallback();
+				renderModel.accept(instancePose, vanillaConsumer);
+				return;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				renderModel.accept(instancePose, vanillaConsumer);
+				return;
+			}
+			policy(policyKey).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
+			itemFrameBackingBuilds++;
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		long queueStart = queueTimingStart(policyKey);
+		mesh.queueStaticResident(submeshTransformOwner(frame, FRAME_BACKING_TRANSFORM),
+			instancePose.pose(), true, packedLight, packedOverlay);
+		itemFrameBackingCachedThisFrame++;
+		recordQueueOverhead(policyKey, queueStart);
+	}
+
+	/**
+	 * Persists only the immutable minecart model emitted by vanilla's final model call. Rail
+	 * interpolation, entity jitter, damage wobble, display blocks and outline selection have
+	 * already run and remain represented by the supplied pose, light and render type.
+	 */
+	public static void renderMinecartModel(AbstractMinecart cart, Model model, PoseStack instancePose,
+			VertexConsumer vanillaConsumer, RenderType renderType, int packedLight, int packedOverlay,
+			MinecartModelRender renderModel) {
+		Object family = MinecartModelPolicyKey.INSTANCE;
+		PersistentEntityMetrics.eligible("minecart_model");
+		if (wholeEntityCaptureDepth > 0
+				|| !OptiminiumSettings.isEnabled() || !OptiminiumSettings.isEntityPersistenceEnabled()
+				|| OptiminiumPersistentMeshShader.get() == null || model == null || renderType == null
+				|| Minecraft.getInstance().shouldEntityAppearGlowing(cart)
+				|| !PersistentRenderTypeCompatibility.isCompatible(renderType.toString())) {
+			PersistentEntityMetrics.dynamicStateFallback("minecart_model");
+			renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+			return;
+		}
+		minecartModelCandidatesThisFrame++;
+		PersistentEntityMetrics.candidate("minecart_model");
+		recordCandidate(family);
+		boolean anchor = ENTITY_ANCHORS_THIS_FRAME.add(family);
+		if (!ACTIVE_KEYS.contains(family) || anchor) {
+			long start = System.nanoTime();
+			renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+			long elapsed = System.nanoTime() - start;
+			policy(family).recordVanilla(elapsed, 1);
+			PersistentEntityMetrics.vanilla("minecart_model", elapsed);
+			if (anchor) PersistentEntityMetrics.anchor("minecart_model");
+			return;
+		}
+		PersistentEntityMetrics.active("minecart_model");
+		MinecartModelMeshKey key = new MinecartModelMeshKey(model, renderType);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null && policyFrame < failedUntil) {
+			renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+			return;
+		}
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh != null && policyFrame >= mesh.nextValidationFrame) {
+			CaptureSource validation = new CaptureSource();
+			try {
+				renderModel.render(new PoseStack(), validation.getBuffer(renderType), 0, packedOverlay);
+				if (validation.captureFingerprint() != mesh.captureFingerprint) {
+					if (MESHES.remove(key, mesh)) mesh.close();
+					FAILED_KEYS.put(key, Long.MAX_VALUE);
+					PersistentEntityMetrics.safetyVeto("minecart_model", "fingerprint_mismatch");
+				} else {
+					mesh.nextValidationFrame = nextEntityValidationFrame(key);
+					PersistentEntityMetrics.validationMatch("minecart_model");
+				}
+			} catch (RuntimeException exception) {
+				validation.close();
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				PersistentEntityMetrics.safetyVeto("minecart_model", "validation_exception");
+			}
+			renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+			return;
+		}
+		if (mesh == null) {
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				renderModel.render(new PoseStack(), capture.getBuffer(renderType), 0, packedOverlay);
+				mesh = capture.upload(key, family);
+			} catch (RuntimeException exception) {
+				capture.close();
+				minecartModelFailures++;
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				recordFallback();
+				PersistentEntityMetrics.fallback("minecart_model");
+				renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+				return;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				renderModel.render(instancePose, vanillaConsumer, packedLight, packedOverlay);
+				return;
+			}
+			long buildNanos = System.nanoTime() - buildStart;
+			policy(family).recordBuild(buildNanos, mesh.vertices);
+			PersistentEntityMetrics.build("minecart_model", buildNanos);
+			minecartModelBuilds++;
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		long queueStart = queueTimingStart(family);
+		mesh.queueResident(submeshTransformOwner(cart, MINECART_MODEL_TRANSFORM),
+			instancePose.last().pose(), true, packedLight, packedOverlay);
+		recordQueueOverhead(family, queueStart);
+		minecartModelCachedThisFrame++;
+		PersistentEntityMetrics.cached("minecart_model");
+	}
+
+	@FunctionalInterface
+	public interface MinecartModelRender {
+		void render(PoseStack pose, VertexConsumer consumer, int packedLight, int packedOverlay);
+	}
+
+	/** Persists an audited vanilla frame item's resolved fixed-display model. */
+	public static void renderItemFrameItem(ItemFrame frame, ItemRenderer renderer, ItemStack stack,
+			PoseStack instancePose, MultiBufferSource vanillaBuffers, int packedLight, int packedOverlay,
+			Level level, int modelSeed, ItemFrameItemRender renderItem) {
+		Object family = ItemFrameItemPolicyKey.INSTANCE;
+		if (wholeEntityCaptureDepth > 0 || !OptiminiumSettings.isEnabled()
+				|| !OptiminiumSettings.isEntityPersistenceEnabled()
+				|| OptiminiumPersistentMeshShader.get() == null || stack.isEmpty() || stack.hasFoil()
+				|| !BuiltInRegistries.ITEM.getKey(stack.getItem()).getNamespace().equals("minecraft")) {
+			renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		BakedModel model = renderer.getModel(stack, level, null, modelSeed);
+		if (model == null || model.isCustomRenderer() || model.getClass() != SimpleBakedModel.class) {
+			renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		frameItemCandidatesThisFrame++;
+		recordCandidate(family);
+		if (!ACTIVE_KEYS.contains(family) || ENTITY_ANCHORS_THIS_FRAME.add(family)) {
+			long start = System.nanoTime();
+			renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			policy(family).recordVanilla(System.nanoTime() - start, 1);
+			return;
+		}
+		ItemFrameItemMeshKey key = new ItemFrameItemMeshKey(model, stack);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null && policyFrame < failedUntil) {
+			renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh != null && policyFrame >= mesh.nextValidationFrame) {
+			CaptureSource validation = new CaptureSource();
+			try {
+				renderItem.render(new PoseStack(), validation, 0, packedOverlay);
+				if (validation.captureFingerprint() != mesh.captureFingerprint) {
+					if (MESHES.remove(key, mesh)) mesh.close();
+					FAILED_KEYS.put(key, Long.MAX_VALUE);
+				} else mesh.nextValidationFrame = nextEntityValidationFrame(key);
+			} catch (RuntimeException exception) {
+				validation.close();
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+			}
+			renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		if (mesh == null) {
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				renderItem.render(new PoseStack(), capture, 0, packedOverlay);
+				mesh = capture.upload(key, family);
+			} catch (RuntimeException exception) {
+				capture.close();
+				frameItemFailures++;
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				recordFallback();
+				renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+				return;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				renderItem.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+				return;
+			}
+			policy(family).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
+			frameItemBuilds++;
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		long queueStart = queueTimingStart(family);
+		mesh.queueResident(submeshTransformOwner(frame, FRAME_ITEM_TRANSFORM),
+			instancePose.last().pose(), true, packedLight, packedOverlay);
+		recordQueueOverhead(family, queueStart);
+		frameItemCachedThisFrame++;
+	}
+
+	@FunctionalInterface
+	public interface ItemFrameItemRender {
+		void render(PoseStack pose, MultiBufferSource buffers, int packedLight, int packedOverlay);
+	}
+
+	/** Persists the deterministic model block displayed by ordinary/hopper minecarts. */
+	public static void renderMinecartDisplayBlock(AbstractMinecart cart, BlockRenderDispatcher renderer,
+			BlockState state, PoseStack instancePose, MultiBufferSource vanillaBuffers,
+			int packedLight, int packedOverlay, MinecartDisplayBlockRender renderBlock) {
+		Object family = MinecartDisplayBlockPolicyKey.INSTANCE;
+		if (wholeEntityCaptureDepth > 0 || !OptiminiumSettings.isEnabled()
+				|| !OptiminiumSettings.isEntityPersistenceEnabled()
+				|| OptiminiumPersistentMeshShader.get() == null
+				|| state.getRenderShape() != RenderShape.MODEL) {
+			renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		BakedModel model = renderer.getBlockModel(state);
+		displayBlockCandidatesThisFrame++;
+		recordCandidate(family);
+		if (!ACTIVE_KEYS.contains(family) || ENTITY_ANCHORS_THIS_FRAME.add(family)) {
+			long start = System.nanoTime();
+			renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			policy(family).recordVanilla(System.nanoTime() - start, 1);
+			return;
+		}
+		MinecartDisplayBlockMeshKey key = new MinecartDisplayBlockMeshKey(state, model);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null && policyFrame < failedUntil) {
+			renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh != null && policyFrame >= mesh.nextValidationFrame) {
+			CaptureSource validation = new CaptureSource();
+			try {
+				renderBlock.render(new PoseStack(), validation, 0, packedOverlay);
+				if (validation.captureFingerprint() != mesh.captureFingerprint) {
+					if (MESHES.remove(key, mesh)) mesh.close();
+					FAILED_KEYS.put(key, Long.MAX_VALUE);
+				} else mesh.nextValidationFrame = nextEntityValidationFrame(key);
+			} catch (RuntimeException exception) {
+				validation.close();
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+			}
+			renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+			return;
+		}
+		if (mesh == null) {
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				renderBlock.render(new PoseStack(), capture, 0, packedOverlay);
+				mesh = capture.upload(key, family);
+			} catch (RuntimeException exception) {
+				capture.close();
+				displayBlockFailures++;
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				recordFallback();
+				renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+				return;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				renderBlock.render(instancePose, vanillaBuffers, packedLight, packedOverlay);
+				return;
+			}
+			policy(family).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
+			displayBlockBuilds++;
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		long queueStart = queueTimingStart(family);
+		mesh.queueResident(submeshTransformOwner(cart, MINECART_DISPLAY_TRANSFORM),
+			instancePose.last().pose(), true, packedLight, packedOverlay);
+		recordQueueOverhead(family, queueStart);
+		displayBlockCachedThisFrame++;
+	}
+
+	@FunctionalInterface
+	public interface MinecartDisplayBlockRender {
+		void render(PoseStack pose, MultiBufferSource buffers, int packedLight, int packedOverlay);
 	}
 
 	public static <E extends BlockEntity> boolean tryRender(BlockEntityRenderer<E> renderer, E blockEntity,
@@ -193,6 +745,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 		lastGenericEntity = null;
 		lastGenericKey = null;
+		if (!genericDiscoveryActiveThisFrame && !isAuditedPersistenceType(blockEntity.getType())) {
+			genericFamilyDormantSkips++;
+			return false;
+		}
 		// Signs already have a safer audited split path which persists only the static board.
 		// Running the whole renderer through generic qualification as well serializes sign NBT
 		// and captures text geometry that the split path deliberately leaves to vanilla.
@@ -231,6 +787,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 
 	private static <E extends BlockEntity> boolean tryRenderGeneric(BlockEntityRenderer<E> renderer, E blockEntity,
 			float partialTick, PoseStack instancePose, int packedLight, int packedOverlay) {
+		if (!genericDiscoveryActiveThisFrame) {
+			genericFamilyDormantSkips++;
+			return false;
+		}
 		GenericFamilyKey family = genericFamily(renderer, blockEntity);
 		genericFamilyCountsThisFrame.merge(family, 1, Integer::sum);
 		if (!GenericCandidateGate.shouldBuildKey(genericFamilyCountsLastFrame.getOrDefault(family, 0),
@@ -422,21 +982,46 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	/** Queues a stable armor stand through the same measured persistent-mesh policy. */
 	public static boolean tryRenderArmorStand(EntityRenderer<? super ArmorStand> renderer, ArmorStand armorStand,
 			float yaw, float partialTick, PoseStack instancePose, int packedLight) {
-		if (!isPersistenceActive() || !OptiminiumSettings.isArmorStandPersistenceEnabled()
-				|| OptiminiumPersistentMeshShader.get() == null || !isStableArmorStand(armorStand)) {
+		Object policyKey = ArmorStandWholePolicyKey.INSTANCE;
+		PersistentEntityMetrics.eligible("armor_stand_whole");
+		if (!isArmorStandWholeCacheEnabled() || !isArmorStandPersistenceActive()
+				|| !isStableArmorStand(armorStand)) {
+			PersistentEntityMetrics.dynamicStateFallback("armor_stand_whole");
 			return false;
 		}
-		ArmorStandKey key = new ArmorStandKey(armorStand);
-		if (!recordCandidateAndIsDense(key)) return false;
+		// Do not reject invisible decorative stands as a class. Most emit only exact unsorted
+		// equipment/feature geometry and dominate dense builds. If a player-visible body really
+		// emits a sorted translucent layer, CaptureSource rejects that exact key and vanilla wins.
+		recordCandidate(policyKey);
+		if (!ACTIVE_KEYS.contains(policyKey)) return false;
+		PersistentEntityMetrics.active("armor_stand_whole");
+		if (ENTITY_ANCHORS_THIS_FRAME.add(policyKey)) {
+			PersistentEntityMetrics.anchor("armor_stand_whole");
+			return false;
+		}
+		ArmorStandKey key = armorStandKey(armorStand);
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null) {
+			if (policyFrame < failedUntil) return false;
+			FAILED_KEYS.remove(key);
+		}
 		CachedMesh mesh = MESHES.get(key);
 		if (mesh == null) {
+			if (armorStandBuildsThisFrame >= ARMOR_STAND_BUILD_BUDGET_PER_FRAME) return false;
+			armorStandBuildsThisFrame++;
 			long buildStart = System.nanoTime();
 			CaptureSource capture = new CaptureSource();
 			try {
-				renderer.render(armorStand, 0.0F, partialTick, new PoseStack(), capture, packedLight);
-				mesh = capture.upload(key);
+				wholeEntityCaptureDepth++;
+				try {
+					renderer.render(armorStand, 0.0F, partialTick, new PoseStack(), capture, packedLight);
+				} finally {
+					wholeEntityCaptureDepth--;
+				}
+				mesh = capture.upload(key, policyKey);
 			} catch (RuntimeException exception) {
 				capture.close();
+				ARMOR_CAPTURE_FAILURES.merge(captureFailureReason(exception), 1L, Long::sum);
 				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
 				recordFallback();
 				return false;
@@ -445,26 +1030,155 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
 				return false;
 			}
-			policy(key).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
+			policy(policyKey).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
 			MESHES.put(key, mesh);
 			gpuBytes += mesh.bytes;
 			recordUpload();
 			evictIfNeeded();
 		}
-		long queueStart = queueTimingStart(key);
+		long queueStart = queueTimingStart(policyKey);
 		instancePose.pushPose();
 		instancePose.mulPose(Axis.YP.rotationDegrees(-yaw));
 		mesh.queueResident(armorStand, instancePose.last().pose(), true, packedLight, 0);
 		instancePose.popPose();
-		recordQueueOverhead(key, queueStart);
+		recordQueueOverhead(policyKey, queueStart);
+		PersistentEntityMetrics.cached("armor_stand_whole");
 		return true;
 	}
 
 	public static void recordArmorStandVanilla(ArmorStand armorStand, long elapsedNanos) {
-		if (isPersistenceActive() && OptiminiumSettings.isArmorStandPersistenceEnabled()
+		if (isArmorStandWholeCacheEnabled() && isArmorStandPersistenceActive()
 				&& isStableArmorStand(armorStand)) {
-			policy(new ArmorStandKey(armorStand)).recordVanilla(elapsedNanos, 1);
+			policy(ArmorStandWholePolicyKey.INSTANCE).recordVanilla(elapsedNanos, 1);
+			PersistentEntityMetrics.vanilla("armor_stand_whole", elapsedNanos);
 		}
+	}
+
+	/**
+	 * Caches only the exact opaque/cutout armor feature output. The translucent wooden body
+	 * remains in vanilla's globally sorted buffer, preserving invisible-stand blending order.
+	 */
+	public static void renderArmorStandFeatureLayer(RenderLayer<?, ?> layer, ArmorStand stand,
+			PoseStack instancePose, MultiBufferSource vanillaBuffers, int packedLight,
+			java.util.function.BiConsumer<PoseStack, MultiBufferSource> renderLayer) {
+		if (wholeEntityCaptureDepth > 0
+				|| !isAuditedArmorStandFeatureLayer(layer)
+				|| !isArmorStandWholeCacheEnabled() || !isArmorStandPersistenceActive()
+				|| !isStableArmorStandFeatures(stand)) {
+			renderLayer.accept(instancePose, vanillaBuffers);
+			return;
+		}
+		ArmorStandFeaturePolicyKey policyKey = new ArmorStandFeaturePolicyKey(layer.getClass());
+		armorFeatureCandidatesThisFrame++;
+		recordCandidate(policyKey);
+		if (!ACTIVE_KEYS.contains(policyKey) || ENTITY_ANCHORS_THIS_FRAME.add(policyKey)) {
+			long start = System.nanoTime();
+			renderLayer.accept(instancePose, vanillaBuffers);
+			policy(policyKey).recordVanilla(System.nanoTime() - start, 1);
+			return;
+		}
+		ArmorStandFeatureMeshKey key = new ArmorStandFeatureMeshKey(layer, armorStandKey(stand), stand.getId());
+		Long failedUntil = FAILED_KEYS.get(key);
+		if (failedUntil != null) {
+			if (policyFrame < failedUntil) {
+				renderLayer.accept(instancePose, vanillaBuffers);
+				return;
+			}
+			FAILED_KEYS.remove(key);
+		}
+		CachedMesh mesh = MESHES.get(key);
+		if (mesh == null) {
+			if (armorStandBuildsThisFrame >= ARMOR_STAND_BUILD_BUDGET_PER_FRAME) {
+				renderLayer.accept(instancePose, vanillaBuffers);
+				return;
+			}
+			armorStandBuildsThisFrame++;
+			long buildStart = System.nanoTime();
+			CaptureSource capture = new CaptureSource();
+			try {
+				renderLayer.accept(new PoseStack(), capture);
+				mesh = capture.upload(key, policyKey);
+			} catch (RuntimeException exception) {
+				capture.close();
+				armorFeatureFailures++;
+				ARMOR_CAPTURE_FAILURES.merge("feature:" + captureFailureReason(exception), 1L, Long::sum);
+				// Exact equipment/pose/layer keys cannot become compatible without producing a
+				// different key or a resource reload. Avoid retrying known sorted/unsupported output.
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				recordFallback();
+				renderLayer.accept(instancePose, vanillaBuffers);
+				return;
+			}
+			if (mesh == null) {
+				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				renderLayer.accept(instancePose, vanillaBuffers);
+				return;
+			}
+			policy(policyKey).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
+			armorFeatureBuilds++;
+			MESHES.put(key, mesh);
+			gpuBytes += mesh.bytes;
+			recordUpload();
+			evictIfNeeded();
+		}
+		long queueStart = queueTimingStart(policyKey);
+		mesh.queueStaticResident(submeshTransformOwner(stand, layer),
+			instancePose.last().pose(), true, packedLight, 0);
+		recordQueueOverhead(policyKey, queueStart);
+		armorFeatureCachedThisFrame++;
+	}
+
+	private static boolean isAuditedArmorStandFeatureLayer(RenderLayer<?, ?> layer) {
+		// Limit automatic replacement to Minecraft's known LivingEntityRenderer feature stack.
+		// Modded/custom layers retain their Java traversal and event behavior unless adapted later.
+		return layer.getClass().getName().startsWith("net.minecraft.client.renderer.entity.layers.");
+	}
+
+	private static boolean isStableArmorStandFeatures(ArmorStand stand) {
+		// Custom-name rendering happens after these layers in EntityRenderer and remains vanilla.
+		return stand.isAlive() && !stand.displayFireAnimation()
+			&& !Minecraft.getInstance().shouldEntityAppearGlowing(stand)
+			&& stand.level().getGameTime() - stand.lastHit >= 5L;
+	}
+
+	private static ArmorStandKey armorStandKey(ArmorStand stand) {
+		PersistentArmorStandKeyHolder holder = (PersistentArmorStandKeyHolder)(Object)stand;
+		long revision = holder.optiminium$getPersistentArmorRevision();
+		Object cachedValue = holder.optiminium$getPersistentArmorKeyCache();
+		if (cachedValue instanceof ArmorStandKeyCache cached && cached.revision == revision) {
+			return cached.key;
+		}
+		ArmorStandKey key = new ArmorStandKey(stand);
+		holder.optiminium$setPersistentArmorKeyCache(new ArmorStandKeyCache(revision, key));
+		return key;
+	}
+
+	private static String captureFailureReason(RuntimeException exception) {
+		String message = exception.getMessage();
+		if (message == null || message.isBlank()) return exception.getClass().getSimpleName();
+		if (message.startsWith("Sorted render type: ")) {
+			String type = message.substring("Sorted render type: ".length());
+			return "sorted:" + type.substring(0, Math.min(120, type.length()));
+		}
+		if (message.startsWith("Incompatible persistent mesh primitive")) return "primitive_mode";
+		if (message.startsWith("Incompatible persistent mesh vertex format")) return "vertex_format";
+		if (message.startsWith("Incompatible persistent mesh shader/state")) return "shader_state";
+		return exception.getClass().getSimpleName() + ":" + message.substring(0, Math.min(80, message.length()));
+	}
+
+	/** Avoids all persistence bookkeeping while armor-stand persistence is under a safety cooldown. */
+	public static boolean shouldEvaluateArmorStand() {
+		return armorStandDormantUntilFrame <= policyFrame;
+	}
+
+	public static boolean isArmorStandWholeCacheEnabled() {
+		return OptiminiumSettings.isEntityPersistenceEnabled()
+			&& OptiminiumSettings.isArmorStandPersistenceEnabled();
+	}
+
+	/** Keeps the complete-render trial isolated from the older per-part experiment. */
+	public static boolean isWholeArmorStandPolicySelected() {
+		return ACTIVE_KEYS.contains(ArmorStandWholePolicyKey.INSTANCE);
 	}
 
 	/** Begins an exact ModelPart-based mob pass. Unsupported output is forwarded unchanged. */
@@ -480,22 +1194,29 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	 * are deliberately excluded from the key and continue through vanilla unchanged.
 	 */
 	public static MultiBufferSource beginArmorStandModel(EntityRenderer<?> renderer, ArmorStand stand,
-			MultiBufferSource delegate) {
-		if (!persistenceConfiguredThisFrame || !OptiminiumSettings.isArmorStandPersistenceEnabled()
-				|| !isStableArmorStandModel(stand)) return delegate;
+			MultiBufferSource delegate, PoseStack instancePose) {
+		if (delegate instanceof CaptureSource || !isArmorStandPersistenceActive()
+				|| armorStandDormantUntilFrame > policyFrame
+				|| !isStableArmorStandModel(stand)) {
+			PersistentEntityMetrics.dynamicStateFallback("armor_stand_parts");
+			return delegate;
+		}
+		PersistentEntityMetrics.eligible("armor_stand_parts");
 		ArmorStandBoneKey key = new ArmorStandBoneKey(stand.getType(), renderer.getClass(), stand.isSmall(),
-			armorStandTexture(renderer, stand));
-		armorStandCountsThisFrame.merge(key, 1, Integer::sum);
-		if (armorStandCountsLastFrame.getOrDefault(key, 0) < adaptiveMinThreshold()) return delegate;
-		MobRenderContext context = new MobRenderContext(key, stand.getUUID(), delegate, false);
-		context.partPersistence = true;
-		context.armorStandFamily = ARMOR_STAND_FAMILIES.computeIfAbsent(key, ArmorStandFamilyState::new);
-		MOB_RENDER_CONTEXT.set(context);
-		return context.buffers;
+			stand.isShowArms(), stand.isNoBasePlate(), armorStandTexture(renderer, stand));
+		// The shared topology mesh stays model-local; exact per-part pose matrices are uploaded
+		// through the bone palette. This avoids the slower CPU vertex replay path.
+		return beginExactModel(stand.getUUID(), key, delegate, false);
 	}
 
 	private static MultiBufferSource beginExactModel(UUID entityId, ExactGroupKey key,
 			MultiBufferSource delegate, boolean candidateAlreadyRecorded) {
+		return beginExactModel(entityId, key, delegate, candidateAlreadyRecorded, null, null, null);
+	}
+
+	private static MultiBufferSource beginExactModel(UUID entityId, ExactGroupKey key,
+			MultiBufferSource delegate, boolean candidateAlreadyRecorded, Object staticOwner,
+			Matrix4f staticInstancePose, ArmorStandPoseMeshKey staticMeshKey) {
 		if (!candidateAlreadyRecorded) recordCandidate(key);
 		MobTopologyPolicy qualification = MOB_QUALIFICATIONS.computeIfAbsent(key, ignored -> new MobTopologyPolicy());
 		qualification.lastSeenFrame = policyFrame;
@@ -508,7 +1229,14 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			return delegate;
 		}
 		MobRenderContext context = new MobRenderContext(key, entityId, delegate, selected);
+		if (staticOwner != null && staticInstancePose != null && staticMeshKey != null) {
+			context.staticOwner = staticOwner;
+			context.staticInstancePose = new Matrix4f(staticInstancePose);
+			context.staticRootInverse = new Matrix4f(staticInstancePose).invert();
+			context.staticMeshKey = staticMeshKey;
+		}
 		MOB_RENDER_CONTEXT.set(context);
+		modelPartContextActive = true;
 		return context.buffers;
 	}
 
@@ -534,6 +1262,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static void endExactModel(long elapsedNanos) {
 		MobRenderContext context = MOB_RENDER_CONTEXT.get();
 		MOB_RENDER_CONTEXT.remove();
+		modelPartContextActive = false;
 		if (context == null) {
 			ExactGroupKey key = MOB_FAST_VANILLA_KEY.get();
 			MOB_FAST_VANILLA_KEY.remove();
@@ -550,6 +1279,23 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 				mobFallbacks++;
 				MOB_FALLBACK_REASONS.put(context.key, "topology_changed");
 			}
+		}
+		if (context.staticMeshKey != null) {
+			CpuArmorMesh mesh = CPU_ARMOR_MESHES.get(context.staticMeshKey);
+			if (mesh == null && context.cpuCapture != null && !context.cpuCapture.vertices.isEmpty()) {
+				mesh = new CpuArmorMesh(List.copyOf(context.cpuCapture.vertices), context.primaryRenderType);
+				CPU_ARMOR_MESHES.put(context.staticMeshKey, mesh);
+				while (CPU_ARMOR_MESHES.size() > 256) {
+					CPU_ARMOR_MESHES.remove(CPU_ARMOR_MESHES.keySet().iterator().next());
+				}
+			}
+			if (context.suppressedParts > 0) {
+				MOB_FALLBACK_REASONS.remove(context.key);
+				policy(context.key).recordPersistent(elapsedNanos, 1);
+			} else {
+				policy(context.key).recordVanilla(elapsedNanos, 1);
+			}
+			return;
 		}
 		if (context.suppressedParts > 0 && context.atlasCompatible
 				&& context.poseCount == context.compatibleParts) {
@@ -591,6 +1337,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		MobRenderContext context = MOB_RENDER_CONTEXT.get();
 		if (context == null) return false;
 		RenderType renderType = context.renderTypes.get(consumer);
+		if (context.staticMeshKey != null) {
+			return tryRenderStaticArmorStandPart(context, part, pose, consumer, renderType,
+				packedLight, packedOverlay, color);
+		}
 		if (context.partPersistence) {
 			return tryRenderArmorStandPart(context, part, pose, renderType, packedLight, packedOverlay, color);
 		}
@@ -654,12 +1404,66 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		return true;
 	}
 
+	private static boolean tryRenderStaticArmorStandPart(MobRenderContext context, ModelPart part,
+			PoseStack.Pose pose, VertexConsumer consumer, RenderType renderType,
+			int packedLight, int packedOverlay, int color) {
+		if (renderType == null || renderType.sortOnUpload()
+				|| renderType.format() != DefaultVertexFormat.NEW_ENTITY
+				|| !isCompatiblePersistentRenderType(renderType)
+				|| renderType != context.primaryRenderType || color != -1) {
+			mobVanillaParts++;
+			return false;
+		}
+		context.compatibleParts++;
+		context.mixTopology(part, renderType, true);
+		if (!context.persist) {
+			mobVanillaParts++;
+			return false;
+		}
+		CpuArmorMesh mesh = CPU_ARMOR_MESHES.get(context.staticMeshKey);
+		context.packedLight = packedLight;
+		context.packedOverlay = packedOverlay;
+		if (mesh == null) {
+			if (context.cpuCapture == null) context.cpuCapture = new RecordingVertexConsumer();
+			try {
+				Matrix4f localPose = new Matrix4f(context.staticRootInverse).mul(pose.pose());
+				PoseStack normalized = new PoseStack();
+				normalized.mulPose(localPose);
+				for (ModelPart.Cube cube : ((ModelPartAccessor)(Object)part).optiminium$getCubes()) {
+					cube.compile(normalized.last(), context.cpuCapture,
+						NORMALIZED_CAPTURE_LIGHT, packedOverlay, color);
+				}
+			} catch (RuntimeException exception) {
+				context.atlasCompatible = false;
+				context.fallbackReason = "static_pose_capture_incompatible";
+				MOB_FALLBACK_REASONS.put(context.key, context.fallbackReason);
+				mobFallbacks++;
+			}
+			// The build frame remains vanilla; suppression begins only after the complete pose mesh exists.
+			return false;
+		}
+		if (!context.staticReplayComplete) {
+			mesh.replay(consumer, context.staticInstancePose, packedLight, packedOverlay);
+			context.staticReplayComplete = true;
+		}
+		context.suppressedParts++;
+		mobPartsSuppressed++;
+		return true;
+	}
+
+	public static boolean hasActiveModelPartContext() {
+		return modelPartContextActive;
+	}
+
 	private static boolean tryRenderArmorStandPart(MobRenderContext context, ModelPart part,
 			PoseStack.Pose pose, RenderType renderType, int packedLight, int packedOverlay, int color) {
 		if (renderType == null || renderType.sortOnUpload()
 				|| renderType.format() != DefaultVertexFormat.NEW_ENTITY
 				|| !isCompatiblePersistentRenderType(renderType)) {
 			mobVanillaParts++;
+			if (context.key instanceof ArmorStandBoneKey) {
+				PersistentEntityMetrics.unsupportedRenderType("armor_stand_parts");
+			}
 			return false;
 		}
 		ArmorStandPartKey key = context.armorStandFamily.partKey(part, renderType);
@@ -669,6 +1473,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			candidateCountsLastFrame.getOrDefault(policyKey, 0));
 		boolean sampleTiming = PersistenceTimingSampler.shouldSample(++armorPartTimingCounter, timingStride);
 		long start = sampleTiming ? System.nanoTime() : 0L;
+		PersistentEntityMetrics.active("armor_stand_parts");
 		if (!ACTIVE_KEYS.contains(policyKey)) {
 			if (sampleTiming) PART_VANILLA_TIMING.set(new PartVanillaTiming(policyKey, start, timingStride));
 			mobVanillaParts++;
@@ -700,9 +1505,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 		}
 		if (mesh == null) return false;
-		int paletteOffset = BONE_PALETTES.matrixCount();
-		BONE_PALETTES.append(pose.pose());
-		mesh.queueBone(packedLight, packedOverlay, color, paletteOffset);
+		PersistentEntityMetrics.anchor("armor_stand_parts");
+		mesh.queueDirectBone(packedLight, packedOverlay, color, pose.pose());
+		PersistentEntityMetrics.cached("armor_stand_parts");
 		if (sampleTiming) policy(policyKey).recordPersistent(
 			(System.nanoTime() - start) * timingStride, timingStride);
 		mobPartsSuppressed++;
@@ -720,10 +1525,23 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private static boolean isStableArmorStand(ArmorStand stand) {
-		return stand.isAlive() && !stand.isMarker() && !stand.isInvisible()
-			&& !stand.isCustomNameVisible() && !stand.displayFireAnimation()
+		// Invisible/marker stands still render equipped head/hand feature layers and are
+		// especially common in decorative worlds. A complete-render capture preserves
+		// that exact output without ever introducing the hidden wooden base model.
+		return stand.isAlive() && !stand.isCustomNameVisible() && !stand.displayFireAnimation()
 			&& !Minecraft.getInstance().shouldEntityAppearGlowing(stand)
 			&& stand.level().getGameTime() - stand.lastHit >= 5L;
+	}
+
+	private static String armorStandRejectionReason(ArmorStand stand) {
+		if (!stand.isAlive()) return "not_alive";
+		if (stand.isMarker()) return "marker";
+		if (stand.isInvisible()) return "invisible";
+		if (stand.isCustomNameVisible()) return "custom_name_visible";
+		if (stand.displayFireAnimation()) return "fire_animation";
+		if (Minecraft.getInstance().shouldEntityAppearGlowing(stand)) return "glowing";
+		if (stand.level().getGameTime() - stand.lastHit < 5L) return "recent_hit";
+		return "unknown";
 	}
 
 	private static boolean isStableArmorStandModel(ArmorStand stand) {
@@ -765,6 +1583,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		return mobPersistenceActiveThisFrame;
 	}
 
+	private static boolean isArmorStandPersistenceActive() {
+		return armorStandPersistenceActiveThisFrame;
+	}
+
 	public static void onFrameStart() {
 		RenderSystem.assertOnRenderThread();
 		persistenceConfiguredThisFrame = OptiminiumSettings.isEnabled()
@@ -772,16 +1594,22 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			&& OptiminiumSettings.isBlockEntityPersistenceEnabled()
 			&& !Boolean.getBoolean("optiminium.persistentMeshBenchmarkMobs")
 			&& OptiminiumPersistentMeshShader.get() != null;
-		persistenceActiveThisFrame = PERSISTENCE_DISCOVERY_COOLDOWN.beginFrame(
+		persistenceActiveThisFrame = persistenceConfiguredThisFrame;
+		genericDiscoveryActiveThisFrame = PERSISTENCE_DISCOVERY_COOLDOWN.beginFrame(
 			policyFrame, persistenceConfiguredThisFrame);
+		armorStandPersistenceActiveThisFrame = OptiminiumSettings.isEnabled()
+			&& OptiminiumSettings.isArmorStandPersistenceEnabled()
+			&& OptiminiumPersistentMeshShader.get() != null;
 		mobPersistenceActiveThisFrame = OptiminiumSettings.isEnabled()
 			&& OptiminiumSettings.isMobPersistenceEnabled()
 			&& OptiminiumPersistentMeshShader.get() != null;
 		if (atlasActiveStatePendingUnbind) finishAtlasStateAfterVanillaDraw();
-		if (!persistenceConfiguredThisFrame && !isMobPersistenceActive()
+		if (!persistenceConfiguredThisFrame && !isArmorStandPersistenceActive() && !isMobPersistenceActive()
 				&& (!MESHES.isEmpty() || !ADAPTIVE_POLICIES.isEmpty() || gpuBytes > 0L)) clear();
 		if (!isMobPersistenceActive() && hasMobQualificationState()) clearMobState();
-		if (!persistenceConfiguredThisFrame && isMobPersistenceActive() && hasBlockEntityState()) clearBlockEntityState();
+		if (!isArmorStandPersistenceActive() && hasArmorStandState()) clearArmorStandState();
+		if (!persistenceConfiguredThisFrame && (isArmorStandPersistenceActive() || isMobPersistenceActive())
+				&& hasBlockEntityState()) clearBlockEntityState();
 		evictIfNeeded();
 		// A normal frame flushes at the end of the block-entity pass. Discard stale instances if
 		// rendering aborted before that hook (world switch, exception, or minimized-frame edge case).
@@ -792,6 +1620,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		BONE_PALETTES.reset();
 		RESIDENT_TRANSFORMS.expire(policyFrame);
 		MOB_ANCHORS_THIS_FRAME.clear();
+		ENTITY_ANCHORS_THIS_FRAME.clear();
 		BLOCK_ENTITY_ANCHORS_THIS_FRAME.clear();
 		metricsEnabled = OptiminiumSettings.isBlockEntityRenderCacheDebug() || OptiminiumRenderProfiler.isEnabled();
 		lastHitsThisFrame = hitsThisFrame;
@@ -803,23 +1632,46 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		lastCulledThisFrame = culledThisFrame;
 		lastInstanceUploadsThisFrame = instanceUploadsThisFrame;
 		lastFallbacksThisFrame = fallbacksThisFrame;
+		lastItemFrameBackingCandidates = itemFrameBackingCandidatesThisFrame;
+		lastItemFrameBackingCached = itemFrameBackingCachedThisFrame;
+		lastArmorFeatureCandidates = armorFeatureCandidatesThisFrame;
+		lastArmorFeatureCached = armorFeatureCachedThisFrame;
+		lastMinecartModelCandidates = minecartModelCandidatesThisFrame;
+		lastMinecartModelCached = minecartModelCachedThisFrame;
+		lastFrameItemCandidates = frameItemCandidatesThisFrame;
+		lastFrameItemCached = frameItemCachedThisFrame;
+		lastDisplayBlockCandidates = displayBlockCandidatesThisFrame;
+		lastDisplayBlockCached = displayBlockCachedThisFrame;
 		long frameNow = System.nanoTime();
 		long frameNanos = lastPolicyFrameNanos == 0L ? 0L : frameNow - lastPolicyFrameNanos;
 		lastPolicyFrameNanos = frameNow;
 		long gpuNanos = OptiminiumGpuTimer.getLatestGpuNanos();
-		for (AdaptivePersistencePolicy value : ADAPTIVE_POLICIES.values()) {
+		for (Map.Entry<Object, AdaptivePersistencePolicy> entry : ADAPTIVE_POLICIES.entrySet()) {
+			// Upload/build frames are warmup, not representative steady-state GPU evidence.
+			if (entry.getKey() instanceof ArmorStandWholePolicyKey && armorStandBuildsThisFrame > 0) continue;
+			// Whole-frame GPU timing cannot be attributed to one entity family. The previous
+			// attribution rejected glow frames despite an 86% measured CPU saving.
+			if (isEntityPolicyKey(entry.getKey())) continue;
+			AdaptivePersistencePolicy value = entry.getValue();
 			value.recordFrameSafety(gpuNanos, frameNanos, value.active() || value.trial());
 		}
+		armorStandBuildsThisFrame = 0;
 		applyDormantGenericFamilyCounts();
 		policyFrame++;
 		updateAdaptivePolicies(candidateCountsThisFrame);
 		updatePersistenceDiscoveryCooldown();
+		Map<Object, Integer> reusableCandidateCounts = candidateCountsLastFrame;
 		candidateCountsLastFrame = candidateCountsThisFrame;
-		candidateCountsThisFrame = new HashMap<>(Math.max(16, candidateCountsLastFrame.size() * 2));
+		candidateCountsThisFrame = reusableCandidateCounts;
+		candidateCountsThisFrame.clear();
+		Map<GenericFamilyKey, Integer> reusableFamilyCounts = genericFamilyCountsLastFrame;
 		genericFamilyCountsLastFrame = genericFamilyCountsThisFrame;
-		genericFamilyCountsThisFrame = new HashMap<>(Math.max(16, genericFamilyCountsLastFrame.size() * 2));
+		genericFamilyCountsThisFrame = reusableFamilyCounts;
+		genericFamilyCountsThisFrame.clear();
+		Map<ArmorStandBoneKey, Integer> reusableArmorCounts = armorStandCountsLastFrame;
 		armorStandCountsLastFrame = armorStandCountsThisFrame;
-		armorStandCountsThisFrame = new HashMap<>(Math.max(4, armorStandCountsLastFrame.size() * 2));
+		armorStandCountsThisFrame = reusableArmorCounts;
+		armorStandCountsThisFrame.clear();
 		lastHottestCandidateCount = hottestCandidateCount;
 		hottestCandidateCount = 0;
 		hitsThisFrame = 0;
@@ -831,6 +1683,16 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		culledThisFrame = 0;
 		instanceUploadsThisFrame = 0;
 		fallbacksThisFrame = 0;
+		itemFrameBackingCandidatesThisFrame = 0;
+		itemFrameBackingCachedThisFrame = 0;
+		armorFeatureCandidatesThisFrame = 0;
+		armorFeatureCachedThisFrame = 0;
+		minecartModelCandidatesThisFrame = 0;
+		minecartModelCachedThisFrame = 0;
+		frameItemCandidatesThisFrame = 0;
+		frameItemCachedThisFrame = 0;
+		displayBlockCandidatesThisFrame = 0;
+		displayBlockCachedThisFrame = 0;
 		if (OptiminiumSettings.isBlockEntityRenderCacheDebug()) {
 			long now = System.nanoTime();
 			if (now - lastDiagnosticNanos >= 1_000_000_000L) {
@@ -909,6 +1771,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	/** Runs vanilla chest animation while exposing its static bottom ModelPart to ChestRendererMixin. */
 	public static <E extends BlockEntity> void renderVanillaWithSplit(BlockEntityRenderer<E> renderer, E blockEntity,
 			float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
+		if (!genericDiscoveryActiveThisFrame && !isAuditedPersistenceType(blockEntity.getType())) {
+			renderer.render(blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			return;
+		}
 		if (isAuditedSignRenderer(renderer, blockEntity) && OptiminiumPersistentMeshShader.get() != null
 				&& isPersistenceActive()) {
 			renderSignWithSplit(renderer, blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
@@ -1167,7 +2033,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					List<QueuedLayer> pageDraws = pageEntry.getValue();
 					if (PersistentDrawBatchPlanner.choose(sharedInstances, supportsMultiDrawIndirect(),
 							pageDraws.size()) == PersistentDrawBatchPlanner.Mode.INDIRECT) {
-						pageEntry.getKey().bind(SHARED_INSTANCES.currentGpuBuffer());
+						pageEntry.getKey().bind(SHARED_INSTANCES.currentGpuBuffer(),
+							SHARED_INSTANCES.currentDirectMatrixGpuBuffer());
 						INDIRECT_COMMANDS.draw(pageDraws);
 						atlasIndirectDraws++;
 						if (metricsEnabled) drawCallsThisFrame++;
@@ -1241,6 +2108,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			|| type == BlockEntityType.ENDER_CHEST) && renderer.getClass() == ChestRenderer.class;
 	}
 
+	private static boolean isAuditedPersistenceType(BlockEntityType<?> type) {
+		return type == BlockEntityType.SIGN || type == BlockEntityType.HANGING_SIGN
+			|| type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST
+			|| type == BlockEntityType.ENDER_CHEST || type == BlockEntityType.BELL
+			|| type == BlockEntityType.DECORATED_POT;
+	}
+
 	private static boolean isAuditedSignRenderer(BlockEntityRenderer<?> renderer, BlockEntity blockEntity) {
 		return blockEntity.getType() == BlockEntityType.SIGN && renderer.getClass() == SignRenderer.class
 			|| blockEntity.getType() == BlockEntityType.HANGING_SIGN
@@ -1297,19 +2171,28 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		ADAPTIVE_POLICIES.clear();
 		ACTIVE_KEYS.clear();
 		FAILED_KEYS.clear();
+		ARMOR_CAPTURE_FAILURES.clear();
+		CPU_ARMOR_MESHES.clear();
 		GENERIC_QUALIFICATIONS.clear();
 		MOB_QUALIFICATIONS.clear();
 		MOB_FALLBACK_REASONS.clear();
 		MOB_ANCHORS_THIS_FRAME.clear();
+		ENTITY_ANCHORS_THIS_FRAME.clear();
 		BLOCK_ENTITY_ANCHORS_THIS_FRAME.clear();
+		SUBMESH_TRANSFORM_OWNERS.clear();
 		MOB_RENDER_CONTEXT.remove();
+		modelPartContextActive = false;
 		MOB_FAST_VANILLA_KEY.remove();
+		candidateCountsThisFrame.clear();
+		candidateCountsLastFrame.clear();
 		genericFamilyCountsThisFrame.clear();
-		genericFamilyCountsLastFrame = Map.of();
+		genericFamilyCountsLastFrame.clear();
 		armorStandCountsThisFrame.clear();
-		armorStandCountsLastFrame = Map.of();
+		armorStandCountsLastFrame.clear();
 		GENERIC_FAMILY_DISCOVERY.clear();
 		ARMOR_STAND_FAMILIES.clear();
+		armorStandDormantUntilFrame = 0L;
+		armorStandDormantReason = "none";
 		lastGenericEntity = null;
 		lastGenericKey = null;
 		pendingGenericVanillaWeight = 1;
@@ -1326,6 +2209,30 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		mobBoneUploads = 0L;
 		residentTransformUploads = 0L;
 		residentTransformUploadBytes = 0L;
+		itemFrameBackingCandidatesThisFrame = 0;
+		lastItemFrameBackingCandidates = 0;
+		itemFrameBackingCachedThisFrame = 0;
+		lastItemFrameBackingCached = 0;
+		itemFrameBackingBuilds = 0L;
+		itemFrameBackingFailures = 0L;
+		armorFeatureCandidatesThisFrame = 0;
+		lastArmorFeatureCandidates = 0;
+		armorFeatureCachedThisFrame = 0;
+		lastArmorFeatureCached = 0;
+		armorFeatureBuilds = 0L;
+		armorFeatureFailures = 0L;
+		minecartModelCandidatesThisFrame = 0;
+		lastMinecartModelCandidates = 0;
+		minecartModelCachedThisFrame = 0;
+		lastMinecartModelCached = 0;
+		minecartModelBuilds = 0L;
+		minecartModelFailures = 0L;
+		frameItemCandidatesThisFrame = lastFrameItemCandidates = 0;
+		frameItemCachedThisFrame = lastFrameItemCached = 0;
+		frameItemBuilds = frameItemFailures = 0L;
+		displayBlockCandidatesThisFrame = lastDisplayBlockCandidates = 0;
+		displayBlockCachedThisFrame = lastDisplayBlockCached = 0;
+		displayBlockBuilds = displayBlockFailures = 0L;
 		mobSummary = "none";
 		armorStandSummary = "none";
 		atlasStateSetups = 0L;
@@ -1334,11 +2241,18 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		atlasActiveStatePendingUnbind = false;
 		persistenceConfiguredThisFrame = false;
 		persistenceActiveThisFrame = false;
+		armorStandPersistenceActiveThisFrame = false;
 		mobPersistenceActiveThisFrame = false;
 		PERSISTENCE_DISCOVERY_COOLDOWN.reset();
 		lastPolicyFrameNanos = 0L;
 		adaptiveSummary = "none";
 		gpuBytes = 0L;
+	}
+
+	private static Object submeshTransformOwner(Object renderedObject, Object renderPart) {
+		return SUBMESH_TRANSFORM_OWNERS
+			.computeIfAbsent(renderedObject, ignored -> new IdentityHashMap<>())
+			.computeIfAbsent(renderPart, ignored -> new Object());
 	}
 
 	private static void evictIfNeeded() {
@@ -1361,46 +2275,87 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		ADAPTIVE_POLICIES.keySet().removeIf(key -> key instanceof MobGroupKey);
 		ACTIVE_KEYS.removeIf(key -> key instanceof MobGroupKey);
 		MOB_RENDER_CONTEXT.remove();
+		modelPartContextActive = false;
 		MOB_FAST_VANILLA_KEY.remove();
 		PART_VANILLA_TIMING.remove();
 		mobSummary = "none";
 	}
 
 	private static boolean hasMobQualificationState() {
-		return MOB_QUALIFICATIONS.keySet().stream().anyMatch(key -> key instanceof MobGroupKey);
+		for (ExactGroupKey key : MOB_QUALIFICATIONS.keySet()) {
+			if (key instanceof MobGroupKey) return true;
+		}
+		return false;
 	}
 
 	private static boolean hasBlockEntityState() {
-		return !GENERIC_QUALIFICATIONS.isEmpty()
-			|| ADAPTIVE_POLICIES.keySet().stream().anyMatch(key -> !(key instanceof MobGroupKey))
-			|| MESHES.values().stream().anyMatch(mesh -> !(mesh.policyKey instanceof MobGroupKey));
+		if (!GENERIC_QUALIFICATIONS.isEmpty()) return true;
+		for (Object key : ADAPTIVE_POLICIES.keySet()) {
+			if (!isEntityPolicyKey(key)) return true;
+		}
+		for (CachedMesh mesh : MESHES.values()) {
+			if (!isEntityPolicyKey(mesh.policyKey)) return true;
+		}
+		return false;
+	}
+
+	private static boolean hasArmorStandState() {
+		if (!ARMOR_STAND_FAMILIES.isEmpty()) return true;
+		for (Object key : ADAPTIVE_POLICIES.keySet()) {
+			if (isArmorStandPolicyKey(key)) return true;
+		}
+		return false;
+	}
+
+	private static boolean isEntityPolicyKey(Object key) {
+		return key instanceof EntityPolicyKey || key instanceof MobGroupKey
+			|| key instanceof ItemFrameBackingPolicyKey || key instanceof ItemFrameItemPolicyKey
+			|| key instanceof MinecartModelPolicyKey || key instanceof MinecartDisplayBlockPolicyKey
+			|| isArmorStandPolicyKey(key);
+	}
+
+	private static boolean isArmorStandPolicyKey(Object key) {
+		// Armor feature layers are independently qualified because their cutout output can be
+		// batched while the invisible stand's wooden body must remain globally sorted.
+		return key instanceof ArmorStandWholePolicyKey || key instanceof ArmorStandBoneKey
+			|| key instanceof ArmorStandLayerKey
+			|| key instanceof ArmorStandFeaturePolicyKey;
+	}
+
+	private static void clearArmorStandState() {
+		for (Object key : List.copyOf(ADAPTIVE_POLICIES.keySet())) {
+			if (!isArmorStandPolicyKey(key)) continue;
+			removeMeshesForPolicy(key);
+			ADAPTIVE_POLICIES.remove(key);
+			ACTIVE_KEYS.remove(key);
+		}
+		ARMOR_STAND_FAMILIES.clear();
+		armorStandCountsThisFrame.clear();
+		armorStandCountsLastFrame.clear();
+		armorStandDormantUntilFrame = 0L;
+		armorStandDormantReason = "none";
+		FAILED_KEYS.keySet().removeIf(key -> key instanceof ArmorStandKey
+			|| key instanceof ArmorStandPartKey || key instanceof ArmorStandFeatureMeshKey);
+		candidateCountsThisFrame.keySet().removeIf(OptiminiumPersistentBlockEntityMeshes::isArmorStandPolicyKey);
+		candidateCountsLastFrame.keySet().removeIf(OptiminiumPersistentBlockEntityMeshes::isArmorStandPolicyKey);
+		MOB_RENDER_CONTEXT.remove();
+		modelPartContextActive = false;
+		MOB_FAST_VANILLA_KEY.remove();
+		PART_VANILLA_TIMING.remove();
+		armorStandSummary = "none";
 	}
 
 	private static void clearBlockEntityState() {
 		for (Object key : List.copyOf(ADAPTIVE_POLICIES.keySet())) {
-			if (key instanceof MobGroupKey) continue;
+			if (isEntityPolicyKey(key)) continue;
 			removeMeshesForPolicy(key);
 			ADAPTIVE_POLICIES.remove(key);
 			ACTIVE_KEYS.remove(key);
 		}
 		GENERIC_QUALIFICATIONS.clear();
 		GENERIC_FAMILY_DISCOVERY.clear();
-		for (Object key : List.copyOf(ADAPTIVE_POLICIES.keySet())) {
-			if (key instanceof ArmorStandLayerKey) removeMeshesForPolicy(key);
-		}
-		ADAPTIVE_POLICIES.keySet().removeIf(key -> key instanceof ArmorStandLayerKey);
-		ACTIVE_KEYS.removeIf(key -> key instanceof ArmorStandLayerKey);
-		ARMOR_STAND_FAMILIES.clear();
-		armorStandCountsThisFrame.clear();
-		armorStandCountsLastFrame = Map.of();
-		FAILED_KEYS.clear();
-		RESIDENT_TRANSFORMS.close();
-		candidateCountsThisFrame.keySet().removeIf(key -> !(key instanceof MobGroupKey));
-		Map<Object, Integer> retained = new HashMap<>();
-		candidateCountsLastFrame.forEach((key, count) -> {
-			if (key instanceof MobGroupKey) retained.put(key, count);
-		});
-		candidateCountsLastFrame = retained;
+		candidateCountsThisFrame.keySet().removeIf(key -> !isEntityPolicyKey(key));
+		candidateCountsLastFrame.keySet().removeIf(key -> !isEntityPolicyKey(key));
 	}
 
 	private static void removeMesh(Object key) {
@@ -1421,8 +2376,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private static int adaptiveMinThreshold() {
-		return Math.max(4, Math.min(128, Integer.getInteger("optiminium.persistentMeshAdaptiveMinInstances",
-			OptiminiumSettings.getBlockEntityPersistenceAdaptiveMinInstances())));
+		int configured = Math.max(4, Math.min(128,
+			Integer.getInteger("optiminium.persistentMeshAdaptiveMinInstances",
+				OptiminiumSettings.getBlockEntityPersistenceAdaptiveMinInstances())));
+		// Sparse mixed scenes lose to key discovery, mesh setup and extra atlas draws even
+		// when a short CPU-only trial looks promising. Persistence is a dense-scene tool:
+		// never let adaptive pressure bypass the user's guaranteed density threshold.
+		return Math.max(configured, densityThreshold());
 	}
 
 	private static int mobAdaptiveMinThreshold() {
@@ -1434,6 +2394,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		return ADAPTIVE_POLICIES.computeIfAbsent(key, ignored -> new AdaptivePersistencePolicy());
 	}
 
+	private static EntityPolicyKey entityPolicyKey(Object adapterFamily) {
+		return ENTITY_POLICY_KEYS.computeIfAbsent(adapterFamily, EntityPolicyKey::new);
+	}
+
 	private static void updateAdaptivePolicies(Map<Object, Integer> counts) {
 		ACTIVE_KEYS.clear();
 		boolean adaptive = OptiminiumSettings.isBlockEntityPersistenceAdaptive();
@@ -1441,11 +2405,36 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		int guaranteed = densityThreshold();
 		for (Map.Entry<Object, Integer> entry : counts.entrySet()) {
 			AdaptivePersistencePolicy value = policy(entry.getKey());
-			boolean mob = entry.getKey() instanceof MobGroupKey;
-			int effectiveMin = mob ? mobAdaptiveMinThreshold() : adaptiveMin;
-			int effectiveGuaranteed = mob ? Integer.MAX_VALUE : guaranteed;
-			if (value.beginFrame(policyFrame, entry.getValue(), mob || adaptive, effectiveMin, effectiveGuaranteed)) {
+			boolean entityPolicy = isEntityPolicyKey(entry.getKey());
+			boolean mobPolicy = entry.getKey() instanceof MobGroupKey
+				|| entry.getKey() instanceof ArmorStandBoneKey
+				|| entry.getKey() instanceof ArmorStandWholePolicyKey
+				|| entry.getKey() instanceof ArmorStandLayerKey
+				|| entry.getKey() instanceof ArmorStandFeaturePolicyKey;
+			int effectiveMin = mobPolicy ? mobAdaptiveMinThreshold()
+				: entityPolicy ? OptiminiumSettings.getBlockEntityPersistenceAdaptiveMinInstances() : adaptiveMin;
+			int effectiveGuaranteed = mobPolicy ? Integer.MAX_VALUE : guaranteed;
+			if (value.beginFrame(policyFrame, entry.getValue(), mobPolicy || adaptive,
+					effectiveMin, effectiveGuaranteed, entityPolicy)) {
 				ACTIVE_KEYS.add(entry.getKey());
+			} else if (entry.getKey() instanceof ArmorStandWholePolicyKey
+					&& isHardSafetyVeto(value.reason())) {
+				removeMeshesForPolicy(entry.getKey());
+				armorStandDormantUntilFrame = Math.max(armorStandDormantUntilFrame,
+					policyFrame + AdaptivePersistencePolicy.SAFETY_VETO_INTERVAL_FRAMES);
+				armorStandDormantReason = value.reason();
+			} else if (entry.getKey() instanceof ArmorStandLayerKey layerKey
+					&& isHardSafetyVeto(value.reason())) {
+				removeMeshesForPolicy(layerKey);
+				armorStandDormantUntilFrame = Math.max(armorStandDormantUntilFrame,
+					policyFrame + AdaptivePersistencePolicy.SAFETY_VETO_INTERVAL_FRAMES);
+				armorStandDormantReason = value.reason();
+				ArmorStandFamilyState family = ARMOR_STAND_FAMILIES.get(layerKey.family());
+				if (family != null) {
+					family.dormantUntilFrame = Math.max(family.dormantUntilFrame,
+						policyFrame + AdaptivePersistencePolicy.SAFETY_VETO_INTERVAL_FRAMES);
+					family.dormantReason = value.reason();
+				}
 			}
 		}
 		ADAPTIVE_POLICIES.entrySet().removeIf(entry -> {
@@ -1475,6 +2464,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			ADAPTIVE_POLICIES.remove(oldest.getKey());
 			ACTIVE_KEYS.remove(oldest.getKey());
 		}
+		mobQualifiedGroups = 0L;
+		for (Map.Entry<ExactGroupKey, MobTopologyPolicy> entry : MOB_QUALIFICATIONS.entrySet()) {
+			if (entry.getKey() instanceof MobGroupKey && entry.getValue().qualified()) mobQualifiedGroups++;
+		}
+	}
+
+	private static void updateDiagnosticSummaries() {
 		adaptiveSummary = ADAPTIVE_POLICIES.entrySet().stream()
 			.max(java.util.Comparator.comparingInt(entry -> entry.getValue().lastCount()))
 			.map(entry -> {
@@ -1484,8 +2480,6 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					value.vanillaPerInstanceNanos(), value.persistentPerInstanceNanos(), value.trials(), value.reason(), value.meshVertices(), value.builds());
 			})
 			.orElse("none");
-		mobQualifiedGroups = MOB_QUALIFICATIONS.entrySet().stream()
-			.filter(entry -> entry.getKey() instanceof MobGroupKey && entry.getValue().qualified()).count();
 		mobSummary = ADAPTIVE_POLICIES.entrySet().stream()
 			.filter(entry -> entry.getKey() instanceof MobGroupKey)
 			.max(java.util.Comparator.comparingInt(entry -> entry.getValue().lastCount()))
@@ -1500,25 +2494,58 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					MOB_FALLBACK_REASONS.getOrDefault(entry.getKey(), "none"));
 			}).orElse("none");
 		armorStandSummary = ADAPTIVE_POLICIES.entrySet().stream()
-			.filter(entry -> entry.getKey() instanceof ArmorStandLayerKey)
-			.max(java.util.Comparator.comparingInt(entry -> entry.getValue().lastCount()))
+			.filter(entry -> entry.getKey() instanceof ArmorStandWholePolicyKey
+				|| entry.getKey() instanceof ArmorStandBoneKey
+				|| entry.getKey() instanceof ArmorStandLayerKey)
+			.max(java.util.Comparator.<Map.Entry<Object, AdaptivePersistencePolicy>>comparingInt(
+				entry -> entry.getKey() instanceof ArmorStandWholePolicyKey ? 1 : 0)
+				.thenComparingInt(entry -> entry.getValue().lastCount()))
 			.map(entry -> {
 				AdaptivePersistencePolicy value = entry.getValue();
-				return String.format(Locale.ROOT, "%s count=%d mode=%s cpuVanilla=%.0fns cpuPersistent=%.0fns reason=%s",
+				return String.format(Locale.ROOT, "%s count=%d mode=%s cpuVanilla=%.0fns cpuPersistent=%.0fns reason=%s builds=%d",
 					keyName(entry.getKey()), value.lastCount(), value.active() ? "persistent" : value.trial() ? "trial" : "vanilla",
-					value.vanillaPerInstanceNanos(), value.persistentPerInstanceNanos(), value.reason());
+					value.vanillaPerInstanceNanos(), value.persistentPerInstanceNanos(), value.reason(), value.builds());
 			}).orElse("none");
 	}
 
 	private static void updatePersistenceDiscoveryCooldown() {
-		boolean activeOrTrial = ACTIVE_KEYS.stream().anyMatch(key -> !(key instanceof MobGroupKey));
-		boolean qualifying = GENERIC_QUALIFICATIONS.values().stream().anyMatch(value -> value.qualifying);
-		boolean measuredFallback = ADAPTIVE_POLICIES.entrySet().stream()
-			.filter(entry -> !(entry.getKey() instanceof MobGroupKey))
-			.map(entry -> entry.getValue().reason())
-			.anyMatch(reason -> reason.equals("gpu_safety_veto")
-				|| reason.equals("p95_safety_veto") || reason.equals("measured_regression"));
-		PERSISTENCE_DISCOVERY_COOLDOWN.considerSleep(policyFrame, activeOrTrial, qualifying, measuredFallback);
+		boolean activeOrTrial = false;
+		for (Object key : ACTIVE_KEYS) {
+			if (key instanceof GenericSourceKey) {
+				activeOrTrial = true;
+				break;
+			}
+		}
+		boolean qualifying = false;
+		for (GenericQualification value : GENERIC_QUALIFICATIONS.values()) {
+			if (value.qualifying) {
+				qualifying = true;
+				break;
+			}
+		}
+		boolean measuredFallback = false;
+		for (Map.Entry<Object, AdaptivePersistencePolicy> entry : ADAPTIVE_POLICIES.entrySet()) {
+			if (!(entry.getKey() instanceof GenericSourceKey)) continue;
+			String reason = entry.getValue().reason();
+			if ("gpu_safety_veto".equals(reason) || "p95_safety_veto".equals(reason)
+					|| "measured_regression".equals(reason)) {
+				measuredFallback = true;
+				break;
+			}
+		}
+		int minimumFamilySize = OptiminiumSettings.isBlockEntityPersistenceAdaptive()
+			? adaptiveMinThreshold() : densityThreshold();
+		int largestFamily = 0;
+		for (int count : genericFamilyCountsThisFrame.values()) {
+			if (count > largestFamily) largestFamily = count;
+		}
+		boolean sparseScene = largestFamily < minimumFamilySize;
+		PERSISTENCE_DISCOVERY_COOLDOWN.considerSleep(
+			policyFrame, activeOrTrial, qualifying, measuredFallback, sparseScene);
+	}
+
+	private static boolean isHardSafetyVeto(String reason) {
+		return "gpu_safety_veto".equals(reason) || "p95_safety_veto".equals(reason);
 	}
 
 	private static void removeMeshesForPolicy(Object policyKey) {
@@ -1537,7 +2564,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (key instanceof MeshKey meshKey) return meshKey.type().toString();
 		if (key instanceof GenericSourceKey genericKey) return genericKey.type().toString();
 		if (key instanceof MobGroupKey mobKey) return mobKey.type().toString();
+		if (key instanceof ArmorStandWholePolicyKey) return "armor_stand_whole";
+		if (key instanceof ArmorStandBoneKey) return "armor_stand_base_model";
+		if (key instanceof ItemFrameBackingPolicyKey) return "item_frame_backing";
+		if (key instanceof ItemFrameItemPolicyKey) return "item_frame_item";
+		if (key instanceof MinecartModelPolicyKey) return "minecart_model";
+		if (key instanceof MinecartDisplayBlockPolicyKey) return "minecart_display_block";
 		if (key instanceof ArmorStandLayerKey) return "armor_stand_layer";
+		if (key instanceof ArmorStandFeaturePolicyKey) return "armor_stand_armor_layer";
+		if (key instanceof EntityPolicyKey entityKey) return String.valueOf(entityKey.adapterFamily());
 		return "armor_stand";
 	}
 
@@ -1549,7 +2584,12 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			lastFallbacksThisFrame, meshRebuildsPerSecond, adaptiveSummary);
 	}
 
+	public static PersistentEntityMetrics.Snapshot entityMetricsSnapshot() {
+		return PersistentEntityMetrics.snapshot();
+	}
+
 	public static String diagnosticLine() {
+		updateDiagnosticSummaries();
 		Snapshot value = snapshot();
 		String base = String.format(Locale.ROOT,
 			"persistentBeMeshes=%d, persistentBeMeshHits=%d, persistentBeMeshMisses=%d, persistentBeMeshUploads=%d, persistentBeMeshRebuildsPerSecond=%d, persistentBeInstanceUploadsFrame=%d, persistentBeInstancesFrame=%d, persistentBeCulledFrame=%d, persistentBeVerticesAvoidedFrame=%d, persistentBeDrawCallsFrame=%d, persistentBeGpuBytes=%d, persistentBeFallbacks=%d, persistentBeFallbacksFrame=%d, persistentBeCandidatesFrame=%d, persistentBeDensityThreshold=%d, persistentBeAdaptiveMin=%d, persistentBeAdaptive=%s, persistentBeShaderLoaded=%s, persistentBeGenericGroups=%d, persistentBeGenericQualified=%d, persistentBeGenericFamilies=%d, persistentBeGenericFamilyRejects=%d, persistentBeGenericKeyLookups=%d, persistentBeGenericKeySerializations=%d, persistentBeGenericKeyCacheHits=%d, persistentBeGenericKeyAvgNs=%.0f, persistentAtlasPages=%d, persistentAtlasStateSetups=%d, persistentAtlasIndirectDraws=%d, persistentAtlasFallbackDraws=%d, persistentTransformSlots=%d, persistentTransformUploads=%d, persistentTransformUploadBytes=%d, persistentMobEnabled=%s, persistentMobAdaptiveMin=%d, persistentMobGroups=%d, persistentMobQualified=%d, persistentMobPartsSuppressed=%d, persistentMobVanillaParts=%d, persistentMobBoneUploads=%d, persistentMobFallbacks=%d, persistentMobPolicy=%s, persistentArmorStandPolicy=%s, persistentBePolicy=%s, beDispatcherAverageMs=%.6f, clientFps=%d, clientCpuFrameMs=%.3f",
@@ -1572,9 +2612,29 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			OptiminiumBlockEntityVirtualizer.snapshot().averageFullRendererMs(),
 			Minecraft.getInstance().getFps(),
 			OptiminiumGpuOptimizer.getLatestCpuFrameNanos() / 1_000_000.0D);
+		PersistentEntityMetrics.Snapshot entityMetrics = PersistentEntityMetrics.snapshot();
 		return base + String.format(Locale.ROOT,
-			", persistentDiscovery=%s, persistentGenericDormantSkips=%d",
-			PERSISTENCE_DISCOVERY_COOLDOWN.state(policyFrame), genericFamilyDormantSkips);
+			", persistentDiscovery=%s, persistentGenericDormantSkips=%d, persistentArmorStandDormant=%s, persistentArmorCaptureFailures=%s, persistentEntityEnabled=%s, persistentEntityFamilies=%d, persistentEntityEligible=%d, persistentEntityActive=%d, persistentEntityCandidates=%d, persistentEntityCachedDraws=%d, persistentEntityAnchors=%d, persistentEntityUnsupportedRenderTypes=%d, persistentEntityDynamicStateFallbacks=%d, persistentEntitySafetyVetoes=%d, persistentEntityVanillaDraws=%d, persistentEntityFallbacks=%d, persistentEntityBuilds=%d, persistentEntityVanillaMs=%.3f, persistentEntityBuildMs=%.3f, persistentItemFrameBackingCandidates=%d, persistentItemFrameBackingCached=%d, persistentItemFrameBackingBuilds=%d, persistentItemFrameBackingFailures=%d, persistentArmorFeatureCandidates=%d, persistentArmorFeatureCached=%d, persistentArmorFeatureBuilds=%d, persistentArmorFeatureFailures=%d, persistentMinecartModelCandidates=%d, persistentMinecartModelCached=%d, persistentMinecartModelBuilds=%d, persistentMinecartModelFailures=%d, persistentFrameItemCandidates=%d, persistentFrameItemCached=%d, persistentFrameItemBuilds=%d, persistentFrameItemFailures=%d, persistentDisplayBlockCandidates=%d, persistentDisplayBlockCached=%d, persistentDisplayBlockBuilds=%d, persistentDisplayBlockFailures=%d, persistentImplementationRevision=%s",
+			PERSISTENCE_DISCOVERY_COOLDOWN.state(policyFrame), genericFamilyDormantSkips,
+			armorStandDormantUntilFrame > policyFrame
+				? armorStandDormantReason + ":" + (armorStandDormantUntilFrame - policyFrame)
+				: "none",
+			ARMOR_CAPTURE_FAILURES.isEmpty() ? "none" : ARMOR_CAPTURE_FAILURES,
+			OptiminiumSettings.isEntityPersistenceEnabled(), entityMetrics.families(), entityMetrics.eligible(),
+			entityMetrics.active(), entityMetrics.candidates(), entityMetrics.cachedDraws(),
+			entityMetrics.anchors(), entityMetrics.unsupportedRenderTypes(),
+			entityMetrics.dynamicStateFallbacks(), entityMetrics.safetyVetoes(), entityMetrics.vanillaDraws(),
+			entityMetrics.fallbacks(), entityMetrics.builds(), entityMetrics.vanillaNanos() / 1_000_000.0D,
+			entityMetrics.buildNanos() / 1_000_000.0D,
+			lastItemFrameBackingCandidates, lastItemFrameBackingCached,
+			itemFrameBackingBuilds, itemFrameBackingFailures,
+			lastArmorFeatureCandidates, lastArmorFeatureCached,
+			armorFeatureBuilds, armorFeatureFailures,
+			lastMinecartModelCandidates, lastMinecartModelCached,
+			minecartModelBuilds, minecartModelFailures,
+			lastFrameItemCandidates, lastFrameItemCached, frameItemBuilds, frameItemFailures,
+			lastDisplayBlockCandidates, lastDisplayBlockCached, displayBlockBuilds, displayBlockFailures,
+			IMPLEMENTATION_REVISION);
 	}
 
 	private record MeshKey(BlockEntityType<?> type, int stateId, Object variant, Class<?> renderer) {
@@ -1594,11 +2654,99 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private record ArmorStandBoneKey(net.minecraft.world.entity.EntityType<?> type, Class<?> renderer,
-		boolean small, ResourceLocation texture) implements ExactGroupKey {
+		boolean small, boolean showArms, boolean noBasePlate, ResourceLocation texture) implements ExactGroupKey {
 	}
 
 	private record ArmorStandLayerKey(ArmorStandBoneKey family, RenderType renderType) {
 	}
+
+	private record ArmorStandPoseMeshKey(ArmorStandBoneKey family, Object headPose, Object bodyPose,
+		Object leftArmPose, Object rightArmPose, Object leftLegPose, Object rightLegPose) {
+	}
+
+	private record ArmorStandKeyCache(long revision, ArmorStandKey key) {
+	}
+
+	private enum ArmorStandWholePolicyKey {
+		INSTANCE
+	}
+
+	private record ArmorStandFeaturePolicyKey(Class<?> layerClass) {
+	}
+
+	private record ArmorStandFeatureMeshKey(Object layer, ArmorStandKey state, int modelSeed) {
+		@Override public boolean equals(Object other) {
+			return other instanceof ArmorStandFeatureMeshKey key
+				&& layer == key.layer && modelSeed == key.modelSeed && state.equals(key.state);
+		}
+
+		@Override public int hashCode() {
+			return 31 * (31 * System.identityHashCode(layer) + state.hashCode()) + modelSeed;
+		}
+	}
+
+	private enum ItemFrameBackingPolicyKey {
+		INSTANCE
+	}
+
+	private enum MinecartModelPolicyKey {
+		INSTANCE
+	}
+
+	private enum ItemFrameItemPolicyKey { INSTANCE }
+	private enum MinecartDisplayBlockPolicyKey { INSTANCE }
+
+	private static final class ItemFrameItemMeshKey {
+		final BakedModel model;
+		final ItemStack stack;
+		final int hash;
+		ItemFrameItemMeshKey(BakedModel model, ItemStack stack) {
+			this.model = model;
+			this.stack = stack.copy();
+			this.hash = 31 * System.identityHashCode(model) + ItemStack.hashItemAndComponents(this.stack);
+		}
+		@Override public int hashCode() { return hash; }
+		@Override public boolean equals(Object other) {
+			return other instanceof ItemFrameItemMeshKey key && model == key.model
+				&& ItemStack.isSameItemSameComponents(stack, key.stack);
+		}
+	}
+
+	private record MinecartDisplayBlockMeshKey(BlockState state, BakedModel model) {
+		@Override public boolean equals(Object other) {
+			return other instanceof MinecartDisplayBlockMeshKey key
+				&& state.equals(key.state) && model == key.model;
+		}
+		@Override public int hashCode() {
+			return 31 * state.hashCode() + System.identityHashCode(model);
+		}
+	}
+
+	/** Model and render type use identity semantics within one resource generation. */
+	private record MinecartModelMeshKey(Model model, RenderType renderType) {
+		@Override public boolean equals(Object other) {
+			return other instanceof MinecartModelMeshKey key
+				&& model == key.model && renderType == key.renderType;
+		}
+
+		@Override public int hashCode() {
+			return 31 * System.identityHashCode(model) + System.identityHashCode(renderType);
+		}
+	}
+
+	/** Baked models intentionally retain identity semantics across one resource generation. */
+	private record ItemFrameBackingMeshKey(BakedModel model) {
+		@Override public boolean equals(Object other) {
+			return other instanceof ItemFrameBackingMeshKey key && model == key.model;
+		}
+
+		@Override public int hashCode() {
+			return System.identityHashCode(model);
+		}
+	}
+
+	private record EntityPolicyKey(Object adapterFamily) {}
+	private record EntityMeshKey(EntityPolicyKey family, Object geometry) {}
 
 	private record ArmorStandPartKey(ArmorStandLayerKey policyKey, ModelPart part) {
 	}
@@ -1610,6 +2758,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		final ArmorStandBoneKey family;
 		final IdentityHashMap<RenderType, ArmorStandLayerKey> layers = new IdentityHashMap<>();
 		final IdentityHashMap<RenderType, IdentityHashMap<ModelPart, ArmorStandPartKey>> parts = new IdentityHashMap<>();
+		long dormantUntilFrame;
+		String dormantReason = "none";
 
 		ArmorStandFamilyState(ArmorStandBoneKey family) {
 			this.family = family;
@@ -1672,6 +2822,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		final MultiBufferSource buffers;
 		final boolean persist;
 		RenderType primaryRenderType;
+		VertexConsumer primaryConsumer;
 		CaptureSource capture;
 		int packedLight;
 		int packedOverlay;
@@ -1684,6 +2835,12 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		int suppressedParts;
 		boolean partPersistence;
 		ArmorStandFamilyState armorStandFamily;
+		Object staticOwner;
+		Matrix4f staticInstancePose;
+		Matrix4f staticRootInverse;
+		ArmorStandPoseMeshKey staticMeshKey;
+		RecordingVertexConsumer cpuCapture;
+		boolean staticReplayComplete;
 
 		MobRenderContext(ExactGroupKey key, UUID entityId, MultiBufferSource delegate, boolean persist) {
 			this.key = key;
@@ -1692,7 +2849,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			this.buffers = renderType -> {
 				VertexConsumer consumer = delegate.getBuffer(renderType);
 				renderTypes.put(consumer, renderType);
-				if (primaryRenderType == null) primaryRenderType = renderType;
+				if (primaryRenderType == null) {
+					primaryRenderType = renderType;
+					primaryConsumer = consumer;
+				}
 				return consumer;
 			};
 		}
@@ -1704,8 +2864,101 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 	}
 
+	private static final class RecordingVertexConsumer implements VertexConsumer {
+		final List<CpuVertex> vertices = new ArrayList<>();
+		float x;
+		float y;
+		float z;
+		int red = 255;
+		int green = 255;
+		int blue = 255;
+		int alpha = 255;
+		float u;
+		float v;
+		int overlayU;
+		int overlayV;
+		int lightU;
+		int lightV;
+
+		@Override public VertexConsumer addVertex(float x, float y, float z) {
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			return this;
+		}
+
+		@Override public VertexConsumer setColor(int red, int green, int blue, int alpha) {
+			this.red = red;
+			this.green = green;
+			this.blue = blue;
+			this.alpha = alpha;
+			return this;
+		}
+
+		@Override public VertexConsumer setUv(float u, float v) {
+			this.u = u;
+			this.v = v;
+			return this;
+		}
+
+		@Override public VertexConsumer setUv1(int u, int v) {
+			overlayU = u;
+			overlayV = v;
+			return this;
+		}
+
+		@Override public VertexConsumer setUv2(int u, int v) {
+			lightU = u;
+			lightV = v;
+			return this;
+		}
+
+		@Override public VertexConsumer setNormal(float normalX, float normalY, float normalZ) {
+			vertices.add(new CpuVertex(x, y, z, red, green, blue, alpha, u, v,
+				overlayU, overlayV, lightU, lightV, normalX, normalY, normalZ));
+			return this;
+		}
+	}
+
+	private record CpuVertex(float x, float y, float z, int red, int green, int blue, int alpha,
+		float u, float v, int overlayU, int overlayV, int lightU, int lightV,
+		float normalX, float normalY, float normalZ) {
+	}
+
+	private static final class CpuArmorMesh {
+		final List<CpuVertex> vertices;
+		final RenderType renderType;
+
+		CpuArmorMesh(List<CpuVertex> vertices, RenderType renderType) {
+			this.vertices = vertices;
+			this.renderType = renderType;
+		}
+
+		void replay(VertexConsumer output, Matrix4f pose, int packedLight, int packedOverlay) {
+			Matrix3f normalMatrix = new Matrix3f(pose).invert().transpose();
+			Vector3f position = new Vector3f();
+			Vector3f normal = new Vector3f();
+			int overlayU = packedOverlay & 0xFFFF;
+			int overlayV = packedOverlay >>> 16 & 0xFFFF;
+			int lightU = packedLight & 0xFFFF;
+			int lightV = packedLight >>> 16 & 0xFFFF;
+			for (CpuVertex vertex : vertices) {
+				pose.transformPosition(vertex.x, vertex.y, vertex.z, position);
+				normalMatrix.transform(vertex.normalX, vertex.normalY, vertex.normalZ, normal).normalize();
+				output.addVertex(position.x, position.y, position.z)
+					.setColor(vertex.red, vertex.green, vertex.blue, vertex.alpha)
+					.setUv(vertex.u, vertex.v)
+					.setUv1(overlayU, overlayV)
+					.setUv2(lightU, lightV)
+					.setNormal(normal.x, normal.y, normal.z);
+			}
+		}
+	}
+
 	private static final class ArmorStandKey {
 		private final boolean small;
+		private final boolean marker;
+		private final boolean invisible;
 		private final boolean arms;
 		private final boolean noBasePlate;
 		private final Object headPose;
@@ -1719,6 +2972,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 
 		ArmorStandKey(ArmorStand stand) {
 			small = stand.isSmall();
+			marker = stand.isMarker();
+			invisible = stand.isInvisible();
 			arms = stand.isShowArms();
 			noBasePlate = stand.isNoBasePlate();
 			headPose = stand.getHeadPose();
@@ -1730,6 +2985,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			EquipmentSlot[] slots = EquipmentSlot.values();
 			equipment = new ItemStack[slots.length];
 			int value = Boolean.hashCode(small);
+			value = 31 * value + Boolean.hashCode(marker);
+			value = 31 * value + Boolean.hashCode(invisible);
 			value = 31 * value + Boolean.hashCode(arms);
 			value = 31 * value + Boolean.hashCode(noBasePlate);
 			value = 31 * value + headPose.hashCode();
@@ -1750,7 +3007,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		@Override public boolean equals(Object object) {
 			if (this == object) return true;
 			if (!(object instanceof ArmorStandKey other) || hash != other.hash
-					|| small != other.small || arms != other.arms || noBasePlate != other.noBasePlate
+					|| small != other.small || marker != other.marker || invisible != other.invisible
+					|| arms != other.arms || noBasePlate != other.noBasePlate
 					|| !headPose.equals(other.headPose) || !bodyPose.equals(other.bodyPose)
 					|| !leftArmPose.equals(other.leftArmPose) || !rightArmPose.equals(other.rightArmPose)
 					|| !leftLegPose.equals(other.leftLegPose) || !rightLegPose.equals(other.rightLegPose)) return false;
@@ -1767,7 +3025,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		@Override
 		public BufferBuilder getBuffer(RenderType renderType) {
 			if (renderType.sortOnUpload()) {
-				throw new IllegalArgumentException("Sorted render types are not persistent-mesh safe");
+				throw new IllegalArgumentException("Sorted render type: " + renderType);
 			}
 			if (renderType.mode() != VertexFormat.Mode.QUADS
 				&& renderType.mode() != VertexFormat.Mode.TRIANGLES) {
@@ -1793,16 +3051,23 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		CachedMesh upload(Object key, Object policyKey, int boneCount) {
 			List<CachedLayer> uploaded = new ArrayList<>(layers.size());
 			long vertices = 0L;
+			long fingerprint = 0xcbf29ce484222325L;
 			try {
 				for (LayerBuilder layer : layers.values()) {
 					try (MeshData data = layer.builder.build()) {
 						if (data == null) continue;
 						vertices += data.drawState().vertexCount();
+						fingerprint = fingerprintMix(fingerprint, data.drawState().vertexCount());
+						fingerprint = fingerprintMix(fingerprint, data.drawState().indexCount());
+						fingerprint = fingerprintMix(fingerprint, data.drawState().mode().ordinal());
+						fingerprint = fingerprintMix(fingerprint, data.vertexBuffer());
+						if (data.indexBuffer() != null) fingerprint = fingerprintMix(fingerprint, data.indexBuffer());
 						uploaded.add(new CachedLayer(layer.renderType, allocateAtlasSlice(layer.renderType, data)));
 					}
 				}
 				if (uploaded.isEmpty()) return null;
-				return new CachedMesh(key, policyKey, List.copyOf(uploaded), 0L, vertices, boneCount);
+				return new CachedMesh(key, policyKey, List.copyOf(uploaded), 0L, vertices,
+					boneCount, fingerprint, nextEntityValidationFrame(key));
 			} catch (RuntimeException exception) {
 				for (CachedLayer layer : uploaded) layer.close();
 				throw exception;
@@ -1815,7 +3080,6 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			long hash = 0xcbf29ce484222325L;
 			try {
 				for (LayerBuilder layer : layers.values()) {
-					hash = fingerprintMix(hash, System.identityHashCode(layer.renderType));
 					try (MeshData data = layer.builder.build()) {
 						if (data == null) continue;
 						hash = fingerprintMix(hash, data.drawState().vertexCount());
@@ -1926,6 +3190,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		int indexUsedBytes;
 		int allocations;
 		int configuredInstanceBuffer;
+		int configuredDirectMatrixBuffer;
 		boolean closed;
 
 		AtlasPage(RenderType renderType, int vertexCapacityBytes, int indexCapacityBytes) {
@@ -1962,12 +3227,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			return new AtlasSlice(this, indexOffset, indexCount, mode);
 		}
 
-		void bind(int instanceBuffer) {
+		void bind(int instanceBuffer, int directMatrixBuffer) {
 			bindAtlasVertexArray(0);
 			bindAtlasVertexArray(vao);
-			if (configuredInstanceBuffer != instanceBuffer) {
-				InstanceBatch.configureAttributes(OptiminiumPersistentMeshShader.get(), instanceBuffer);
+			if (configuredInstanceBuffer != instanceBuffer
+					|| configuredDirectMatrixBuffer != directMatrixBuffer) {
+				InstanceBatch.configureAttributes(OptiminiumPersistentMeshShader.get(),
+					instanceBuffer, directMatrixBuffer);
 				configuredInstanceBuffer = instanceBuffer;
+				configuredDirectMatrixBuffer = directMatrixBuffer;
 			}
 		}
 
@@ -2015,16 +3283,21 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		final long bytes;
 		final long vertices;
 		final int boneCount;
+		final long captureFingerprint;
 		final InstanceBatch instances = new InstanceBatch();
+		long nextValidationFrame;
 		int sharedBaseInstance;
 
-		CachedMesh(Object key, Object policyKey, List<CachedLayer> layers, long bytes, long vertices, int boneCount) {
+		CachedMesh(Object key, Object policyKey, List<CachedLayer> layers, long bytes, long vertices,
+				int boneCount, long captureFingerprint, long nextValidationFrame) {
 			this.key = key;
 			this.policyKey = policyKey;
 			this.layers = layers;
 			this.bytes = bytes;
 			this.vertices = vertices;
 			this.boneCount = boneCount;
+			this.captureFingerprint = captureFingerprint;
+			this.nextValidationFrame = nextValidationFrame;
 		}
 
 		void queueResident(Object owner, Matrix4f pose, boolean worldSpace,
@@ -2041,12 +3314,24 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			if (instances.count == 1) QUEUED_MESHES.add(this);
 		}
 
+		void queueRevisionedResident(Object owner, Matrix4f pose, boolean worldSpace,
+				int packedLight, int packedOverlay, long revision) {
+			int transformIndex = RESIDENT_TRANSFORMS.indexForRevision(owner, pose, worldSpace, revision, policyFrame);
+			instances.add(transformIndex, worldSpace, packedLight, packedOverlay, -1, -1);
+			if (instances.count == 1) QUEUED_MESHES.add(this);
+		}
+
 		void queueBone(int packedLight, int packedOverlay, int paletteOffset) {
 			queueBone(packedLight, packedOverlay, -1, paletteOffset);
 		}
 
 		void queueBone(int packedLight, int packedOverlay, int color, int paletteOffset) {
 			instances.add(0, false, packedLight, packedOverlay, color, paletteOffset);
+			if (instances.count == 1) QUEUED_MESHES.add(this);
+		}
+
+		void queueDirectBone(int packedLight, int packedOverlay, int color, Matrix4f pose) {
+			instances.addDirect(packedLight, packedOverlay, color, pose);
 			if (instances.count == 1) QUEUED_MESHES.add(this);
 		}
 
@@ -2066,8 +3351,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 
 		void drawInstancedRaw(InstanceBatch instances, boolean sharedInstances, int baseInstance) {
+			OptiminiumRenderProfiler.recordOptiminiumDraw(renderType, false, false);
 			int instanceBuffer = sharedInstances ? SHARED_INSTANCES.currentGpuBuffer() : instances.currentGpuBuffer();
-			slice.page.bind(instanceBuffer);
+			int directMatrixBuffer = sharedInstances
+				? SHARED_INSTANCES.currentDirectMatrixGpuBuffer() : instances.currentDirectMatrixGpuBuffer();
+			slice.page.bind(instanceBuffer, directMatrixBuffer);
 			if (sharedInstances) {
 				if (GL.getCapabilities().OpenGL42) {
 					GL42.glDrawElementsInstancedBaseInstance(slice.mode.asGLMode,
@@ -2091,11 +3379,16 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		// transform index, light, overlay, color, bone-palette offset, world-space flag
 		private static final int FLOATS_PER_INSTANCE = 11;
 		private static final int BYTES_PER_INSTANCE = FLOATS_PER_INSTANCE * Float.BYTES;
+		private static final int MATRIX_BYTES = 16 * Float.BYTES;
 		private static final int GPU_RING_SIZE = 3;
 		private ByteBuffer data = MemoryUtil.memAlloc(BYTES_PER_INSTANCE * 64).order(ByteOrder.nativeOrder());
+		private ByteBuffer directMatrices;
 		private final int[] gpuBuffers = new int[GPU_RING_SIZE];
+		private final int[] directMatrixGpuBuffers = new int[GPU_RING_SIZE];
 		private int currentGpuSlot = -1;
 		private int gpuCapacityBytes;
+		private int directMatrixGpuCapacityBytes;
+		private boolean hasDirectMatrices;
 		int count;
 
 		void add(int transformIndex, boolean worldSpace, int packedLight,
@@ -2116,6 +3409,16 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			count++;
 		}
 
+		void addDirect(int packedLight, int packedOverlay, int color, Matrix4f pose) {
+			if (count > 0 && !hasDirectMatrices) {
+				throw new IllegalStateException("Cannot mix direct and palette/resident instances");
+			}
+			add(0, false, packedLight, packedOverlay, color, -2);
+			hasDirectMatrices = true;
+			ensureDirectMatrixCpuCapacity(count * MATRIX_BYTES);
+			pose.get((count - 1) * MATRIX_BYTES, directMatrices);
+		}
+
 		void upload() {
 			int bytes = count * BYTES_PER_INSTANCE;
 			if (gpuCapacityBytes < bytes) {
@@ -2133,6 +3436,26 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			ByteBuffer upload = data.duplicate().order(ByteOrder.nativeOrder());
 			upload.position(0).limit(bytes);
 			GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, upload);
+			if (hasDirectMatrices) {
+				int matrixBytes = count * MATRIX_BYTES;
+				if (directMatrixGpuCapacityBytes < matrixBytes) {
+					int oldCapacity = directMatrixGpuCapacityBytes;
+					directMatrixGpuCapacityBytes = nextPowerOfTwo(matrixBytes);
+					gpuBytes += (long)(directMatrixGpuCapacityBytes - oldCapacity) * GPU_RING_SIZE;
+					for (int i = 0; i < GPU_RING_SIZE; i++) {
+						if (directMatrixGpuBuffers[i] == 0) {
+							directMatrixGpuBuffers[i] = GL15.glGenBuffers();
+						}
+						GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, directMatrixGpuBuffers[i]);
+						GL15.glBufferData(GL15.GL_ARRAY_BUFFER,
+							directMatrixGpuCapacityBytes, GL15.GL_STREAM_DRAW);
+					}
+				}
+				GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, directMatrixGpuBuffers[currentGpuSlot]);
+				ByteBuffer matrixUpload = directMatrices.duplicate().order(ByteOrder.nativeOrder());
+				matrixUpload.position(0).limit(matrixBytes);
+				GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, matrixUpload);
+			}
 			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
 			if (metricsEnabled) {
 				instanceUploads.increment();
@@ -2140,7 +3463,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 		}
 
-		static void configureAttributes(net.minecraft.client.renderer.ShaderInstance shader, int buffer) {
+		static void configureAttributes(net.minecraft.client.renderer.ShaderInstance shader,
+				int buffer, int directMatrixBuffer) {
 			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, buffer);
 			configure(shader, "InstanceTransformIndex", 1, 0L);
 			configure(shader, "InstanceLight", 2, 4L);
@@ -2148,11 +3472,16 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			configure(shader, "InstanceColor", 4, 20L);
 			configure(shader, "InstancePaletteOffset", 1, 36L);
 			configure(shader, "InstanceWorldSpace", 1, 40L);
+			configureDirectMatrix(shader, directMatrixBuffer);
 			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
 		}
 
 		int currentGpuBuffer() {
 			return currentGpuSlot < 0 ? 0 : gpuBuffers[currentGpuSlot];
+		}
+
+		int currentDirectMatrixGpuBuffer() {
+			return !hasDirectMatrices || currentGpuSlot < 0 ? 0 : directMatrixGpuBuffers[currentGpuSlot];
 		}
 
 		private static void configure(net.minecraft.client.renderer.ShaderInstance shader,
@@ -2162,6 +3491,33 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			GL20.glEnableVertexAttribArray(location);
 			GL20.glVertexAttribPointer(location, components, GL11.GL_FLOAT, false, BYTES_PER_INSTANCE, offset);
 			GL33.glVertexAttribDivisor(location, 1);
+		}
+
+		private static void configureDirectMatrix(net.minecraft.client.renderer.ShaderInstance shader,
+				int buffer) {
+			String[] names = {"InstanceDirectMatrix0", "InstanceDirectMatrix1",
+				"InstanceDirectMatrix2", "InstanceDirectMatrix3"};
+			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, buffer);
+			for (int column = 0; column < names.length; column++) {
+				int location = GL20.glGetAttribLocation(shader.getId(), names[column]);
+				if (location < 0) {
+					throw new IllegalStateException("Missing persistent mesh attribute " + names[column]);
+				}
+				if (buffer != 0) {
+					GL20.glEnableVertexAttribArray(location);
+					GL20.glVertexAttribPointer(location, 4, GL11.GL_FLOAT, false,
+						MATRIX_BYTES, (long)column * 4L * Float.BYTES);
+					GL33.glVertexAttribDivisor(location, 1);
+				} else {
+					GL20.glDisableVertexAttribArray(location);
+					GL33.glVertexAttribDivisor(location, 0);
+					GL20.glVertexAttrib4f(location,
+						column == 0 ? 1.0F : 0.0F,
+						column == 1 ? 1.0F : 0.0F,
+						column == 2 ? 1.0F : 0.0F,
+						column == 3 ? 1.0F : 0.0F);
+				}
+			}
 		}
 
 		private void ensureCpuCapacity(int required) {
@@ -2177,12 +3533,40 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			data = grown;
 		}
 
-		void reset() { count = 0; }
+		private void ensureDirectMatrixCpuCapacity(int required) {
+			if (directMatrices != null && directMatrices.capacity() >= required) return;
+			int capacity = nextPowerOfTwo(Math.max(required, MATRIX_BYTES * 64));
+			ByteBuffer grown = MemoryUtil.memAlloc(capacity).order(ByteOrder.nativeOrder());
+			if (directMatrices != null) {
+				ByteBuffer old = directMatrices.duplicate();
+				old.position(0).limit((count - 1) * MATRIX_BYTES);
+				grown.put(old);
+				grown.clear();
+				MemoryUtil.memFree(directMatrices);
+			}
+			directMatrices = grown;
+		}
+
+		void reset() {
+			count = 0;
+			hasDirectMatrices = false;
+		}
 
 		ByteBuffer dataView() {
 			ByteBuffer view = data.duplicate().order(ByteOrder.nativeOrder());
 			view.position(0).limit(count * BYTES_PER_INSTANCE);
 			return view;
+		}
+
+		ByteBuffer directMatrixDataView() {
+			if (!hasDirectMatrices || directMatrices == null) return null;
+			ByteBuffer view = directMatrices.duplicate().order(ByteOrder.nativeOrder());
+			view.position(0).limit(count * MATRIX_BYTES);
+			return view;
+		}
+
+		boolean hasDirectMatrices() {
+			return hasDirectMatrices;
 		}
 
 		@Override public void close() {
@@ -2191,12 +3575,22 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 					GL15.glDeleteBuffers(gpuBuffers[i]);
 					gpuBuffers[i] = 0;
 				}
+				if (directMatrixGpuBuffers[i] != 0) {
+					GL15.glDeleteBuffers(directMatrixGpuBuffers[i]);
+					directMatrixGpuBuffers[i] = 0;
+				}
 			}
 			gpuBytes -= (long)gpuCapacityBytes * GPU_RING_SIZE;
+			gpuBytes -= (long)directMatrixGpuCapacityBytes * GPU_RING_SIZE;
 			gpuCapacityBytes = 0;
+			directMatrixGpuCapacityBytes = 0;
 			if (data != null) {
 				MemoryUtil.memFree(data);
 				data = null;
+			}
+			if (directMatrices != null) {
+				MemoryUtil.memFree(directMatrices);
+				directMatrices = null;
 			}
 		}
 	}
@@ -2205,14 +3599,21 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static final class SharedInstanceStream implements AutoCloseable {
 		private ByteBuffer data = MemoryUtil.memAlloc(InstanceBatch.BYTES_PER_INSTANCE * 256)
 			.order(ByteOrder.nativeOrder());
+		private ByteBuffer directMatrices = MemoryUtil.memAlloc(InstanceBatch.MATRIX_BYTES * 256)
+			.order(ByteOrder.nativeOrder());
 		private final int[] gpuBuffers = new int[3];
+		private final int[] directMatrixGpuBuffers = new int[3];
 		private int currentSlot = -1;
 		private int gpuCapacityBytes;
+		private int directMatrixGpuCapacityBytes;
 		private int count;
+		private boolean hasDirectMatrices;
 
 		void begin() {
 			count = 0;
+			hasDirectMatrices = false;
 			data.clear();
+			directMatrices.clear();
 		}
 
 		int append(InstanceBatch batch) {
@@ -2222,8 +3623,24 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			ByteBuffer source = batch.dataView();
 			data.position(count * InstanceBatch.BYTES_PER_INSTANCE);
 			data.put(source);
+			appendDirectMatrices(batch, base);
 			count += batch.count;
 			return base;
+		}
+
+		private void appendDirectMatrices(InstanceBatch batch, int base) {
+			if (!batch.hasDirectMatrices() && !hasDirectMatrices) return;
+			ensureDirectMatrixCapacity((base + batch.count) * InstanceBatch.MATRIX_BYTES);
+			if (batch.hasDirectMatrices()) {
+				if (!hasDirectMatrices) {
+					for (int index = 0; index < base; index++) writeIdentity(index);
+					hasDirectMatrices = true;
+				}
+				directMatrices.position(base * InstanceBatch.MATRIX_BYTES);
+				directMatrices.put(batch.directMatrixDataView());
+			} else {
+				for (int index = base; index < base + batch.count; index++) writeIdentity(index);
+			}
 		}
 
 		void upload() {
@@ -2243,6 +3660,27 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			ByteBuffer upload = data.duplicate().order(ByteOrder.nativeOrder());
 			upload.position(0).limit(bytes);
 			GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, upload);
+			if (hasDirectMatrices) {
+				int matrixBytes = count * InstanceBatch.MATRIX_BYTES;
+				if (directMatrixGpuCapacityBytes < matrixBytes) {
+					int oldCapacity = directMatrixGpuCapacityBytes;
+					directMatrixGpuCapacityBytes = nextPowerOfTwo(matrixBytes);
+					gpuBytes += (long)(directMatrixGpuCapacityBytes - oldCapacity)
+						* directMatrixGpuBuffers.length;
+					for (int i = 0; i < directMatrixGpuBuffers.length; i++) {
+						if (directMatrixGpuBuffers[i] == 0) {
+							directMatrixGpuBuffers[i] = GL15.glGenBuffers();
+						}
+						GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, directMatrixGpuBuffers[i]);
+						GL15.glBufferData(GL15.GL_ARRAY_BUFFER,
+							directMatrixGpuCapacityBytes, GL15.GL_STREAM_DRAW);
+					}
+				}
+				GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, directMatrixGpuBuffers[currentSlot]);
+				ByteBuffer matrixUpload = directMatrices.duplicate().order(ByteOrder.nativeOrder());
+				matrixUpload.position(0).limit(matrixBytes);
+				GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, 0L, matrixUpload);
+			}
 			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
 			if (metricsEnabled) {
 				instanceUploads.increment();
@@ -2251,6 +3689,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 
 		int currentGpuBuffer() { return currentSlot < 0 ? 0 : gpuBuffers[currentSlot]; }
+
+		int currentDirectMatrixGpuBuffer() {
+			return !hasDirectMatrices || currentSlot < 0 ? 0 : directMatrixGpuBuffers[currentSlot];
+		}
 
 		private void ensureCapacity(int required) {
 			if (data.capacity() >= required) return;
@@ -2263,16 +3705,47 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			data = grown;
 		}
 
+		private void ensureDirectMatrixCapacity(int required) {
+			if (directMatrices.capacity() >= required) return;
+			int capacity = nextPowerOfTwo(Math.max(required, InstanceBatch.MATRIX_BYTES * 256));
+			ByteBuffer grown = MemoryUtil.memAlloc(capacity).order(ByteOrder.nativeOrder());
+			ByteBuffer old = directMatrices.duplicate().order(ByteOrder.nativeOrder());
+			old.position(0).limit(count * InstanceBatch.MATRIX_BYTES);
+			grown.put(old);
+			grown.clear();
+			MemoryUtil.memFree(directMatrices);
+			directMatrices = grown;
+		}
+
+		private void writeIdentity(int index) {
+			int base = index * InstanceBatch.MATRIX_BYTES;
+			for (int component = 0; component < 16; component++) {
+				directMatrices.putFloat(base + component * Float.BYTES,
+					component % 5 == 0 ? 1.0F : 0.0F);
+			}
+		}
+
 		@Override public void close() {
 			for (int i = 0; i < gpuBuffers.length; i++) {
 				if (gpuBuffers[i] != 0) GL15.glDeleteBuffers(gpuBuffers[i]);
 				gpuBuffers[i] = 0;
+				if (directMatrixGpuBuffers[i] != 0) {
+					GL15.glDeleteBuffers(directMatrixGpuBuffers[i]);
+				}
+				directMatrixGpuBuffers[i] = 0;
 			}
 			gpuBytes -= (long)gpuCapacityBytes * gpuBuffers.length;
+			gpuBytes -= (long)directMatrixGpuCapacityBytes * directMatrixGpuBuffers.length;
 			gpuCapacityBytes = 0;
+			directMatrixGpuCapacityBytes = 0;
 			currentSlot = -1;
 			if (data != null) MemoryUtil.memFree(data);
+			if (directMatrices != null) MemoryUtil.memFree(directMatrices);
 			data = MemoryUtil.memAlloc(InstanceBatch.BYTES_PER_INSTANCE * 256).order(ByteOrder.nativeOrder());
+			directMatrices = MemoryUtil.memAlloc(InstanceBatch.MATRIX_BYTES * 256)
+				.order(ByteOrder.nativeOrder());
+			hasDirectMatrices = false;
+			count = 0;
 		}
 	}
 
@@ -2283,6 +3756,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		private int capacityBytes;
 
 		void draw(List<QueuedLayer> draws) {
+			OptiminiumRenderProfiler.recordOptiminiumDraw(draws.get(0).layer.renderType, false, false);
 			int bytes = draws.size() * COMMAND_BYTES;
 			ByteBuffer commands = MemoryUtil.memAlloc(bytes).order(ByteOrder.nativeOrder());
 			try {
@@ -2354,6 +3828,26 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		int indexForStatic(Object owner, Matrix4f pose, boolean worldSpace, long frame) {
 			int resident = index.touch(owner, frame);
 			return resident >= 0 ? resident : indexFor(owner, pose, worldSpace, frame);
+		}
+
+		int indexForRevision(Object owner, Matrix4f pose, boolean worldSpace, long revision, long frame) {
+			int resident = index.touchVersioned(owner, revision, frame);
+			if (resident >= 0) return resident;
+			Matrix4f stored = worldMatrix(pose, worldSpace);
+			ResidentTransformIndex.Update update = index.observeVersioned(owner, stored, revision, frame);
+			if (update.changed()) write(update.slot(), update.matrix());
+			return update.slot();
+		}
+
+		private Matrix4f worldMatrix(Matrix4f pose, boolean worldSpace) {
+			Matrix4f stored = new Matrix4f(pose);
+			if (worldSpace) {
+				var camera = Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+				stored.m30(stored.m30() + (float)camera.x);
+				stored.m31(stored.m31() + (float)camera.y);
+				stored.m32(stored.m32() + (float)camera.z);
+			}
+			return stored;
 		}
 
 		private void write(int slot, Matrix4f matrix) {

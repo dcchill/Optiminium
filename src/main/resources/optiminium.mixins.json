@@ -4,9 +4,13 @@
   "package": "net.optiminium.mixin",
   "mixins": [],
   "client": [
+	"ArmorStandMixin",
 	"BlockEntityMixin",
     "BlockEntityRenderDispatcherMixin",
 	"EntityRenderDispatcherMixin",
+	"ItemFrameRendererMixin",
+	"LivingEntityRendererMixin",
+	"MinecartRendererMixin",
 	"ModelPartAccessor",
     "ModelPartMixin",
     "RenderTypeMixin",

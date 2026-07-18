@@ -15,5 +15,6 @@ public final class OptiminiumFpsOptimizer {
 		OptiminiumGlStateTracker.onFrameStart();
 		OptiminiumGpuOptimizer.onFrameStart();
 		OptiminiumRenderProfiler.onFrameStart();
+		OptiminiumSceneInvestigator.onFrameStart();
 	}
 }

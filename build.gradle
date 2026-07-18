@@ -72,6 +72,13 @@ neoForge {
 			if (providers.gradleProperty('optiminium.autoExitAfterBenchmark').isPresent()) {
 				systemProperty 'optiminium.autoExitAfterBenchmark', 'true'
 			}
+			if (providers.gradleProperty('optiminium.visualAuditScreenshots').isPresent()) {
+				systemProperty 'optiminium.visualAuditScreenshots', 'true'
+			}
+			def entityValidationIntervalFrames = providers.gradleProperty('optiminium.entityValidationIntervalFrames')
+			if (entityValidationIntervalFrames.isPresent()) {
+				systemProperty 'optiminium.entityValidationIntervalFrames', entityValidationIntervalFrames.get()
+			}
         }
         server {
             server()

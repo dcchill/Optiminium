@@ -15,15 +15,26 @@ final class ResidentTransformIndex {
 	private int nextSlot;
 
 	Update observe(Object owner, Matrix4f matrix, long frame) {
+		return observe(owner, matrix, frame, 0L, false);
+	}
+
+	Update observeVersioned(Object owner, Matrix4f matrix, long revision, long frame) {
+		return observe(owner, matrix, frame, revision, true);
+	}
+
+	private Update observe(Object owner, Matrix4f matrix, long frame, long revision, boolean versioned) {
 		Entry entry = entries.get(owner);
 		if (entry == null) {
 			int slot = freeSlots.isEmpty() ? nextSlot++ : freeSlots.removeFirst();
-			entry = new Entry(slot, new Matrix4f(matrix), frame);
+			entry = new Entry(slot, new Matrix4f(matrix), frame, revision, versioned);
 			entries.put(owner, entry);
 			return new Update(slot, entry.matrix, true);
 		}
 		entry.lastSeenFrame = frame;
-		if (!entry.matrix.equals(matrix, MATRIX_EPSILON)) {
+		boolean revisionChanged = versioned && (!entry.versioned || entry.revision != revision);
+		entry.revision = revision;
+		entry.versioned = versioned;
+		if (revisionChanged || !entry.matrix.equals(matrix, MATRIX_EPSILON)) {
 			entry.matrix.set(matrix);
 			return new Update(entry.slot, entry.matrix, true);
 		}
@@ -37,6 +48,13 @@ final class ResidentTransformIndex {
 	int touch(Object owner, long frame) {
 		Entry entry = entries.get(owner);
 		if (entry == null) return -1;
+		entry.lastSeenFrame = frame;
+		return entry.slot;
+	}
+
+	int touchVersioned(Object owner, long revision, long frame) {
+		Entry entry = entries.get(owner);
+		if (entry == null || !entry.versioned || entry.revision != revision) return -1;
 		entry.lastSeenFrame = frame;
 		return entry.slot;
 	}
@@ -70,11 +88,15 @@ final class ResidentTransformIndex {
 		final int slot;
 		final Matrix4f matrix;
 		long lastSeenFrame;
+		long revision;
+		boolean versioned;
 
-		Entry(int slot, Matrix4f matrix, long lastSeenFrame) {
+		Entry(int slot, Matrix4f matrix, long lastSeenFrame, long revision, boolean versioned) {
 			this.slot = slot;
 			this.matrix = matrix;
 			this.lastSeenFrame = lastSeenFrame;
+			this.revision = revision;
+			this.versioned = versioned;
 		}
 	}
 }

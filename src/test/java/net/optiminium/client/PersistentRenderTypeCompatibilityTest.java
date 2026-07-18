@@ -13,6 +13,8 @@ class PersistentRenderTypeCompatibilityTest {
 			"RenderType[entity_cutout_no_cull:CompositeState[texture=minecraft:cow]]"));
 		assertTrue(PersistentRenderTypeCompatibility.isCompatible(
 			"RenderType[entity_solid]"));
+		assertTrue(PersistentRenderTypeCompatibility.isCompatible(
+			"RenderType[armor_cutout_no_cull:CompositeState[texture=minecraft:leather_layer_1]]"));
 	}
 
 	@Test

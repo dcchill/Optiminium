@@ -23,6 +23,7 @@ public final class OptiminiumSettings {
 	private static volatile int blockEntityPersistenceAdaptiveMinInstances = 8;
 	private static volatile int blockEntityPersistenceMaxMeshes = 256;
 	private static volatile boolean armorStandPersistenceEnabled = true;
+	private static volatile boolean entityPersistenceEnabled = true;
 	private static volatile boolean mobPersistenceEnabled = true;
 	private static volatile int mobPersistenceAdaptiveMinInstances = 8;
 	private static volatile boolean blockEntityVirtualizationEnabled = false;
@@ -59,7 +60,7 @@ public final class OptiminiumSettings {
 		return new Snapshot(enabled, framePacing,
 			blockEntityRenderCache, blockEntityPersistenceEnabled, blockEntityPersistenceMinInstances,
 			blockEntityPersistenceAdaptive, blockEntityPersistenceAdaptiveMinInstances,
-			blockEntityPersistenceMaxMeshes, armorStandPersistenceEnabled,
+			blockEntityPersistenceMaxMeshes, entityPersistenceEnabled, armorStandPersistenceEnabled,
 			mobPersistenceEnabled, mobPersistenceAdaptiveMinInstances,
 			blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
 			blockEntityVirtualizationAggressiveness, enableOpenGlTweaks, openGlOptimizationMode);
@@ -74,6 +75,7 @@ public final class OptiminiumSettings {
 		blockEntityPersistenceAdaptive = snapshot.blockEntityPersistenceAdaptive;
 		blockEntityPersistenceAdaptiveMinInstances = snapshot.blockEntityPersistenceAdaptiveMinInstances;
 		blockEntityPersistenceMaxMeshes = snapshot.blockEntityPersistenceMaxMeshes;
+		entityPersistenceEnabled = snapshot.entityPersistenceEnabled;
 		armorStandPersistenceEnabled = snapshot.armorStandPersistenceEnabled;
 		mobPersistenceEnabled = snapshot.mobPersistenceEnabled;
 		mobPersistenceAdaptiveMinInstances = snapshot.mobPersistenceAdaptiveMinInstances;
@@ -89,6 +91,7 @@ public final class OptiminiumSettings {
 		framePacing = false;
 		blockEntityRenderCache = false;
 		blockEntityPersistenceEnabled = false;
+		entityPersistenceEnabled = false;
 		armorStandPersistenceEnabled = false;
 		mobPersistenceEnabled = false;
 		blockEntityVirtualizationEnabled = false;
@@ -264,13 +267,25 @@ public final class OptiminiumSettings {
 	}
 
 	public static boolean isArmorStandPersistenceEnabled() {
-		return armorStandPersistenceEnabled;
+		return entityPersistenceEnabled && armorStandPersistenceEnabled;
 	}
 
 	public static boolean toggleArmorStandPersistenceEnabled() {
 		armorStandPersistenceEnabled = !armorStandPersistenceEnabled;
 		save();
 		return armorStandPersistenceEnabled;
+	}
+
+	public static boolean isEntityPersistenceEnabled() { return entityPersistenceEnabled; }
+
+	public static void setEntityPersistenceEnabled(boolean value) {
+		entityPersistenceEnabled = value;
+		save();
+	}
+
+	public static boolean toggleEntityPersistenceEnabled() {
+		setEntityPersistenceEnabled(!entityPersistenceEnabled);
+		return entityPersistenceEnabled;
 	}
 
 	public static void setArmorStandPersistenceEnabled(boolean value) {
@@ -409,6 +424,7 @@ public final class OptiminiumSettings {
 			blockEntityPersistenceAdaptiveMinInstances = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceAdaptiveMinInstances", Integer.toString(blockEntityPersistenceAdaptiveMinInstances))), 4, 128);
 			blockEntityPersistenceMaxMeshes = clamp(Integer.parseInt(properties.getProperty("blockEntityPersistenceMaxMeshes", Integer.toString(blockEntityPersistenceMaxMeshes))), 16, 4096);
 			armorStandPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("armorStandPersistenceEnabled", Boolean.toString(armorStandPersistenceEnabled)));
+			entityPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("entityPersistenceEnabled", Boolean.toString(entityPersistenceEnabled)));
 			mobPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("mobPersistenceEnabled", Boolean.toString(mobPersistenceEnabled)));
 			mobPersistenceAdaptiveMinInstances = clamp(Integer.parseInt(properties.getProperty("mobPersistenceAdaptiveMinInstances", Integer.toString(mobPersistenceAdaptiveMinInstances))), 2, 128);
 			blockEntityVirtualizationEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationEnabled",
@@ -438,6 +454,7 @@ public final class OptiminiumSettings {
 		properties.setProperty("blockEntityPersistenceAdaptiveMinInstances", Integer.toString(blockEntityPersistenceAdaptiveMinInstances));
 		properties.setProperty("blockEntityPersistenceMaxMeshes", Integer.toString(blockEntityPersistenceMaxMeshes));
 		properties.setProperty("armorStandPersistenceEnabled", Boolean.toString(armorStandPersistenceEnabled));
+		properties.setProperty("entityPersistenceEnabled", Boolean.toString(entityPersistenceEnabled));
 		properties.setProperty("mobPersistenceEnabled", Boolean.toString(mobPersistenceEnabled));
 		properties.setProperty("mobPersistenceAdaptiveMinInstances", Integer.toString(mobPersistenceAdaptiveMinInstances));
 		properties.setProperty("blockEntityVirtualizationEnabled", Boolean.toString(blockEntityVirtualizationEnabled));
@@ -503,7 +520,8 @@ public final class OptiminiumSettings {
 			boolean blockEntityRenderCache,
 			boolean blockEntityPersistenceEnabled, int blockEntityPersistenceMinInstances,
 			boolean blockEntityPersistenceAdaptive, int blockEntityPersistenceAdaptiveMinInstances,
-			int blockEntityPersistenceMaxMeshes, boolean armorStandPersistenceEnabled,
+			int blockEntityPersistenceMaxMeshes, boolean entityPersistenceEnabled,
+			boolean armorStandPersistenceEnabled,
 			boolean mobPersistenceEnabled, int mobPersistenceAdaptiveMinInstances,
 			boolean blockEntityVirtualizationEnabled,
 			boolean blockEntityVirtualizationDebugProxies,

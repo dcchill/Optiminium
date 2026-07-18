@@ -26,6 +26,7 @@ class GenericFamilyDiscoveryPolicyTest {
 		GenericFamilyDiscoveryPolicy policy = new GenericFamilyDiscoveryPolicy();
 		policy.observe(4L, "a");
 		policy.observe(4L, "b");
+		assertFalse(policy.shouldScan(4L, false, false));
 		policy.finishFrame(4L);
 		assertNull(policy.stableKey());
 	}

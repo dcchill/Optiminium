@@ -29,6 +29,7 @@ final class GenericFamilyDiscoveryPolicy {
 
 	boolean shouldScan(long frame, boolean active, boolean qualifying) {
 		lastSeenFrame = frame;
+		if (observationFrame == frame && diverse) return false;
 		return active || qualifying || frame >= nextScanFrame;
 	}
 

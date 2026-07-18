@@ -1,6 +1,7 @@
 package net.optiminium.client;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.api.distmarker.Dist;
@@ -12,7 +13,7 @@ import net.optiminium.OptiminiumMod;
 import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
 import net.optiminium.optimization.OptiminiumSettings;
-
+import net.optiminium.client.persistence.PersistentEntityMetrics;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.io.IOException;
@@ -29,7 +30,8 @@ import java.util.Locale;
 
 @EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBenchmark {
-	private static final String FORMAT_VERSION = "scene-v5";
+	private static final String FORMAT_VERSION = "scene-v6";
+	private static final String IMPLEMENTATION_AUDIT_TAG = "v24";
 	private static final int PREFLIGHT_TICKS = 20 * 2;
 	private static final int WARMUP_TICKS = 20 * 4;
 	private static final int MEASURE_START_TICKS = PREFLIGHT_TICKS + WARMUP_TICKS;
@@ -76,6 +78,8 @@ public final class OptiminiumBenchmark {
 	private static OptiminiumVisualSignificance.Snapshot offSignificanceEnd;
 	private static OptiminiumVisualSignificance.Snapshot onSignificanceStart;
 	private static OptiminiumVisualSignificance.Snapshot onSignificanceEnd;
+	private static PersistentEntityMetrics.Snapshot offEntityMetrics = PersistentEntityMetrics.Snapshot.empty();
+	private static PersistentEntityMetrics.Snapshot onEntityMetrics = PersistentEntityMetrics.Snapshot.empty();
 	private static OptiminiumVisualSignificance.SchedulerSnapshot offScheduler;
 	private static OptiminiumVisualSignificance.SchedulerSnapshot onScheduler;
 	private static OptiminiumGpuOptimizer.ParticleProfileSnapshot offParticleProfile;
@@ -98,6 +102,8 @@ public final class OptiminiumBenchmark {
 	private static int autoStartTicks;
 	private static boolean autoStarted;
 	private static boolean persistenceOnlyRequested;
+	private static int visualAuditFrames;
+	private static String visualAuditName;
 
 	private OptiminiumBenchmark() {
 	}
@@ -106,6 +112,7 @@ public final class OptiminiumBenchmark {
 		if (running) {
 			return;
 		}
+		persistenceOnlyRequested = false;
 		startBenchmark(null, true);
 	}
 
@@ -180,6 +187,7 @@ public final class OptiminiumBenchmark {
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
 		OptiminiumGpuOptimizer.setProfilingEnabled(true);
 		OptiminiumRenderProfiler.setEnabled(true);
+		OptiminiumRenderProfiler.setSceneTimingEnabled(false);
 		OptiminiumVisualSignificance.setDetailedStatisticsEnabled(true);
 		applyPhaseSettings();
 		settleBeforeWarmup();
@@ -228,6 +236,16 @@ public final class OptiminiumBenchmark {
 	}
 
 	@SubscribeEvent
+	public static void onFrameComplete(RenderFrameEvent.Post event) {
+		if (visualAuditFrames <= 0 || --visualAuditFrames > 0) return;
+		Minecraft minecraft = Minecraft.getInstance();
+		Screenshot.grab(minecraft.gameDirectory, visualAuditName, minecraft.getMainRenderTarget(),
+			message -> OptiminiumMod.LOGGER.info("Optiminium visual audit screenshot: {}", message.getString()));
+		visualAuditName = null;
+		if (Boolean.getBoolean("optiminium.autoExitAfterBenchmark")) minecraft.stop();
+	}
+
+	@SubscribeEvent
 	public static void onClientTick(ClientTickEvent.Post event) {
 		if (!running && !autoStarted && Boolean.getBoolean("optiminium.autoBenchmark")) {
 			Minecraft minecraft = Minecraft.getInstance();
@@ -267,6 +285,7 @@ public final class OptiminiumBenchmark {
 			OptiminiumSettings.setEnabled(previousEnabled);
 		}
 		OptiminiumGpuOptimizer.setProfilingEnabled(false);
+		OptiminiumRenderProfiler.setSceneTimingEnabled(false);
 		OptiminiumRenderProfiler.setEnabled(false);
 		OptiminiumVisualSignificance.setDetailedStatisticsEnabled(false);
 		if (fullBenchmarkSettings != null) {
@@ -309,8 +328,19 @@ public final class OptiminiumBenchmark {
 		}
 		persistenceOnlyRequested = false;
 		if (Boolean.getBoolean("optiminium.autoExitAfterBenchmark")) {
-			message("Optiminium benchmark: automatic client shutdown requested.");
-			Minecraft.getInstance().stop();
+			if (Boolean.getBoolean("optiminium.visualAuditScreenshots")) {
+				String finalPhase = phase.name();
+				OptiminiumRenderProfiler.Snapshot profile = phase == Phase.ON ? onRenderProfile : offRenderProfile;
+				Minecraft.getInstance().setScreen(new OptiminiumSceneInvestigationScreen(null, profile,
+					phase == Phase.ON ? onMeasuredTicks : offMeasuredTicks,
+					"Visual audit after measured " + finalPhase + " phase"));
+				visualAuditName = "optiminium-visual-audit-" + IMPLEMENTATION_AUDIT_TAG + "-" + finalPhase + ".png";
+				visualAuditFrames = 3;
+				message("Optiminium benchmark: visual audit capture queued before shutdown.");
+			} else {
+				message("Optiminium benchmark: automatic client shutdown requested.");
+				Minecraft.getInstance().stop();
+			}
 		}
 	}
 
@@ -383,9 +413,15 @@ public final class OptiminiumBenchmark {
 		OptiminiumSettings.setEnabled(true);
 		if (Boolean.getBoolean("optiminium.persistentMeshBenchmarkMobs")) {
 			OptiminiumSettings.setBlockEntityPersistenceEnabled(false);
+			OptiminiumSettings.setArmorStandPersistenceEnabled(false);
 			OptiminiumSettings.setMobPersistenceEnabled(phase == Phase.ON);
+		} else if (Boolean.getBoolean("optiminium.persistentMeshBenchmarkArmorStands")) {
+			OptiminiumSettings.setBlockEntityPersistenceEnabled(false);
+			OptiminiumSettings.setMobPersistenceEnabled(false);
+			OptiminiumSettings.setArmorStandPersistenceEnabled(phase == Phase.ON);
 		} else {
 			OptiminiumSettings.setMobPersistenceEnabled(false);
+			OptiminiumSettings.setArmorStandPersistenceEnabled(false);
 			OptiminiumSettings.setBlockEntityPersistenceEnabled(phase == Phase.ON);
 		}
 	}
@@ -407,7 +443,7 @@ public final class OptiminiumBenchmark {
 			offRenderProfile = OptiminiumRenderProfiler.snapshot();
 			offGlTracker = OptiminiumGlStateTracker.snapshot();
 			offMetrics = delta(offMetricStart, OptiminiumMetrics.snapshot());
-			offCameraSnapshot = offCameraSnapshot.finish();
+			offEntityMetrics = PersistentEntityMetrics.snapshot();
 		} else {
 			onMeasuredTicks = measuredTicksThisPhase();
 			onSignificanceEnd = OptiminiumVisualSignificance.snapshot();
@@ -419,7 +455,9 @@ public final class OptiminiumBenchmark {
 			onRenderProfile = OptiminiumRenderProfiler.snapshot();
 			onGlTracker = OptiminiumGlStateTracker.snapshot();
 			onMetrics = delta(onMetricStart, OptiminiumMetrics.snapshot());
+			onEntityMetrics = PersistentEntityMetrics.snapshot();
 		}
+		OptiminiumRenderProfiler.setSceneTimingEnabled(false);
 	}
 
 	private static boolean advancePhase() {
@@ -473,6 +511,13 @@ public final class OptiminiumBenchmark {
 		OptiminiumGpuOptimizer.flushPendingMetrics();
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
 		OptiminiumBlockEntityRenderCache.resetForBenchmark();
+		if (isPersistenceOnlyBenchmark()) {
+			// Every phase must begin from the same persistence state. Otherwise an ON-first
+			// run can inherit gameplay-warmed meshes while an OFF-first run clears them before
+			// ON, making the reported FPS gain alternate with phase order.
+			OptiminiumPersistentBlockEntityMeshes.clear();
+			PersistentEntityMetrics.reset();
+		}
 		OptiminiumRenderProfiler.reset();
 		OptiminiumVisualSignificance.reset();
 		System.gc();
@@ -490,7 +535,12 @@ public final class OptiminiumBenchmark {
 		lastFrameNanos = 0L;
 		lastThreadCpuNanos = readThreadCpuNanos();
 		lastGpuSample = OptiminiumGpuTimer.getSampleCount();
-		offCameraSnapshot = offCameraSnapshot.finish();
+		// Ignore setup movement caused by closing the settings screen or releasing the
+		// benchmark button. The stable scene begins after the explicit preflight period.
+		if (phaseSequenceIndex == 0) {
+			offCameraSnapshot = CameraSnapshot.capture();
+			cameraStable = true;
+		}
 		message(benchmarkPrefix() + ": " + phase.name() + " warmup started after "
 			+ ticksToSeconds(PREFLIGHT_TICKS) + "s preflight.");
 	}
@@ -498,7 +548,10 @@ public final class OptiminiumBenchmark {
 	private static void beginMeasuredPhase() {
 		OptiminiumGpuOptimizer.flushPendingMetrics();
 		OptiminiumGpuOptimizer.resetAdaptiveStats();
+		PersistentEntityMetrics.reset();
 		OptiminiumRenderProfiler.reset();
+		OptiminiumRenderProfiler.setSceneTimingStride(16);
+		OptiminiumRenderProfiler.setSceneTimingEnabled(true);
 		OptiminiumVisualSignificance.reset();
 		stableTicksThisPhase = 0;
 		lastFrameNanos = 0L;
@@ -934,6 +987,42 @@ public final class OptiminiumBenchmark {
 			+ ", texture binds " + deltaWord(offProfile.textureBindCount(), onProfile.textureBindCount())
 			+ ", shader binds " + deltaWord(offProfile.shaderBindCount(), onProfile.shaderBindCount())
 			+ ", suspected GL stalls " + deltaWord(offProfile.suspectedGlStallFrames(), onProfile.suspectedGlStallFrames());
+	}
+
+	private static String sceneCostLine(OptiminiumRenderProfiler.Snapshot profile) {
+		if (profile.sceneItems().isEmpty()) return "none";
+		StringBuilder line = new StringBuilder();
+		int added = 0;
+		for (OptiminiumRenderProfiler.SceneItem item : profile.sceneItems()) {
+			if (item.impactScore() <= 0.0D) continue;
+			if (added++ > 0) line.append(" | ");
+			line.append(item.category()).append(':').append(item.name())
+				.append(" cpuMs=").append(String.format(Locale.ROOT, "%.3f", item.impactScore()))
+				.append(" calls=").append(item.renderCount())
+				.append(" avgUs=").append(String.format(Locale.ROOT, "%.3f", item.averageCpuMicros()));
+			if (added >= 12) break;
+		}
+		return added == 0 ? "none" : line.toString();
+	}
+
+	private static String entityPersistenceLine(PersistentEntityMetrics.Snapshot snapshot) {
+		StringBuilder line = new StringBuilder(String.format(Locale.ROOT,
+			"families=%d eligible=%d active=%d candidates=%d cached=%d anchors=%d vanilla=%d unsupported=%d dynamic=%d vetoes=%d builds=%d validations=%d",
+			snapshot.families(), snapshot.eligible(), snapshot.active(), snapshot.candidates(),
+			snapshot.cachedDraws(), snapshot.anchors(), snapshot.vanillaDraws(),
+			snapshot.unsupportedRenderTypes(), snapshot.dynamicStateFallbacks(),
+			snapshot.safetyVetoes(), snapshot.builds(), snapshot.validationMatches()));
+		for (PersistentEntityMetrics.FamilySnapshot family : snapshot.familiesByName().values()) {
+			line.append(" | ").append(family.family())
+				.append(" active=").append(family.active())
+				.append(" cached=").append(family.cached())
+				.append(" vanilla=").append(family.vanillaDraws())
+				.append(" unsupported=").append(family.unsupportedRenderTypes())
+				.append(" dynamic=").append(family.dynamicStateFallbacks());
+			if (family.validationMatches() > 0) line.append(" validations=").append(family.validationMatches());
+			if (!family.safetyVetoReasons().isEmpty()) line.append(" reasons=").append(family.safetyVetoReasons());
+		}
+		return line.toString();
 	}
 
 	private static String glTrackerLine(OptiminiumGlStateTracker.DiagnosticSnapshot tracker) {
@@ -1492,6 +1581,10 @@ public final class OptiminiumBenchmark {
 				+ "\nON significance: " + significanceLine(onBands, onMetrics, onScene)
 				+ "\nOFF render: " + renderProfileLine(offRenderProfile, offFrames.size())
 				+ "\nON render: " + renderProfileLine(onRenderProfile, onFrames.size())
+				+ "\nOFF renderer costs: " + sceneCostLine(offRenderProfile)
+				+ "\nON renderer costs: " + sceneCostLine(onRenderProfile)
+				+ "\nOFF entity persistence: " + entityPersistenceLine(offEntityMetrics)
+				+ "\nON entity persistence: " + entityPersistenceLine(onEntityMetrics)
 				+ "\nRender delta: " + renderDeltaLine(offRenderProfile, onRenderProfile)
 				+ "\nOFF gl tracker: " + glTrackerLine(offGlTracker)
 				+ "\nON gl tracker: " + glTrackerLine(onGlTracker)
@@ -2390,7 +2483,7 @@ public final class OptiminiumBenchmark {
 		return new OptiminiumRenderProfiler.Snapshot(0L, 0L, 0L, 0L, 0.0D, 0L, 0L, 0L, 0L, 0L, 0.0D,
 			0, 0, 0, 0, 0.0D,
 			0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "none",
-			0L, 0L, 0L, 0L, 0L, 0L, 0L, "none");
+			0L, 0L, 0L, 0L, 0L, 0L, 0L, "none", List.of());
 	}
 
 	private static double onePercentLowFps(List<Long> frames) {

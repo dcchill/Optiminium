@@ -21,6 +21,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(BlockEntityRenderDispatcher.class)
 public abstract class BlockEntityRenderDispatcherMixin {
+	private static final ThreadLocal<Long> optiminium$sceneTimingStart = new ThreadLocal<>();
+
 	@Redirect(method = "setupAndRender(Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderer;Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;)V",
 		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderer;render(Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;II)V"))
 	private static <E extends BlockEntity> void optiminium$renderPersistentMesh(BlockEntityRenderer<E> renderer,
@@ -42,6 +44,9 @@ public abstract class BlockEntityRenderDispatcherMixin {
 	}
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
 	private <E extends BlockEntity> void optiminium$virtualizeBlockEntityRender(E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, CallbackInfo callback) {
+		OptiminiumRenderProfiler.recordRenderedBlockEntity(blockEntity);
+		long sceneTimingStart = OptiminiumRenderProfiler.beginSceneRenderTiming();
+		if (sceneTimingStart != 0L) optiminium$sceneTimingStart.set(sceneTimingStart);
 		if (OptiminiumBlockEntityRenderCache.isDispatcherHookActive()) {
 			OptiminiumBlockEntityRenderCache.recordDispatcherHook(blockEntity);
 		}
@@ -56,6 +61,7 @@ public abstract class BlockEntityRenderDispatcherMixin {
 		BlockEntityRenderer<E> renderer = ((BlockEntityRenderDispatcher)(Object)this).getRenderer(blockEntity);
 		if (OptiminiumBlockEntityVirtualizer.tryVirtualize(blockEntity, partialTick, poseStack, bufferSource, renderer)) {
 			OptiminiumRenderProfiler.popUploadCategory();
+			optiminium$finishSceneTiming(blockEntity);
 			callback.cancel();
 			return;
 		}
@@ -64,9 +70,18 @@ public abstract class BlockEntityRenderDispatcherMixin {
 
 	@Inject(method = "render", at = @At("RETURN"))
 	private <E extends BlockEntity> void optiminium$popBlockEntityUploadCategory(E blockEntity, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, CallbackInfo callback) {
+		optiminium$finishSceneTiming(blockEntity);
 		OptiminiumBlockEntityVirtualizer.finishFullRenderer();
 		if (OptiminiumRenderProfiler.areUploadCategoriesActive()) {
 			OptiminiumRenderProfiler.popUploadCategory();
+		}
+	}
+
+	private static void optiminium$finishSceneTiming(BlockEntity blockEntity) {
+		Long sceneTimingStart = optiminium$sceneTimingStart.get();
+		if (sceneTimingStart != null) {
+			optiminium$sceneTimingStart.remove();
+			OptiminiumRenderProfiler.finishRenderedBlockEntity(blockEntity, sceneTimingStart);
 		}
 	}
 

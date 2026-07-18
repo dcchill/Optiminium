@@ -26,13 +26,25 @@ class OptiminiumPersistentMeshResourcesTest {
 		assertTrue(vertex.contains("uniform samplerBuffer BonePalette"));
 		assertTrue(vertex.contains("in float InstancePaletteOffset"));
 		assertTrue(vertex.contains("UV1.x") && vertex.contains("texelFetch(BonePalette"));
+		assertTrue(vertex.contains("in vec4 InstanceDirectMatrix0"));
+		assertTrue(vertex.contains("in vec4 InstanceDirectMatrix3"));
+		assertTrue(vertex.contains("InstancePaletteOffset < -1.5"));
+		assertTrue(vertex.contains("mat4(InstanceDirectMatrix0"));
 		assertTrue(descriptor.contains("\"name\": \"BonePalette\""));
 		assertTrue(descriptor.contains("\"name\": \"TransformPalette\""));
-		assertTrue(vertex.contains("texelFetch(Sampler2, ivec2(InstanceLight) / 16, 0)"));
+		assertTrue(vertex.contains("InstanceLight.x > 65500.0 ? UV2 : ivec2(InstanceLight)"));
+		assertTrue(vertex.contains("texelFetch(Sampler2, lightCoords / 16, 0)"));
 		assertTrue(vertex.contains("fog_distance(viewPosition.xyz, FogShape)"));
 		assertTrue(vertex.contains("transpose(inverse(mat3(instanceModel))) * Normal"));
 		assertTrue(!descriptor.contains("\"name\": \"InstanceLight\""));
 		assertTrue(fragment.contains("if (color.a < 0.1) discard"));
+	}
+
+	@Test
+	void itemFrameBackingSplitMixinIsPackaged() throws IOException {
+		String mixins = resource("/optiminium.mixins.json");
+		assertTrue(mixins.contains("\"ItemFrameRendererMixin\""));
+		assertTrue(mixins.contains("\"MinecartRendererMixin\""));
 	}
 
 	private static String resource(String path) throws IOException {

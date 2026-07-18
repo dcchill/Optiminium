@@ -65,16 +65,27 @@ public final class OptiminiumSettingsScreen extends Screen {
 			.build());
 		this.addRenderableWidget(new SettingsSlider(x, y + 104, OptiminiumSettings::getBlockEntityPersistenceAdaptiveMinInstances, OptiminiumSettings::setBlockEntityPersistenceAdaptiveMinInstances, 4, 128, "BE Adaptive Minimum"));
 		this.addRenderableWidget(new SettingsSlider(x, y + 130, OptiminiumSettings::getBlockEntityPersistenceMaxMeshes, OptiminiumSettings::setBlockEntityPersistenceMaxMeshes, 16, 4096, "BE Persistent Meshes"));
-		this.addRenderableWidget(Button.builder(armorStandPersistenceLabel(), button -> { OptiminiumSettings.toggleArmorStandPersistenceEnabled(); button.setMessage(armorStandPersistenceLabel()); })
-			.bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT)
-			.build());
+		this.addRenderableWidget(Button.builder(entityPersistenceLabel(), button -> {
+			OptiminiumSettings.toggleEntityPersistenceEnabled();
+			button.setMessage(entityPersistenceLabel());
+		}).bounds(x, y + 156, BUTTON_WIDTH, BUTTON_HEIGHT).build());
+		Button armorStandPersistence = Button.builder(armorStandPersistenceLabel(), button -> {
+			OptiminiumSettings.toggleArmorStandPersistenceEnabled();
+			button.setMessage(armorStandPersistenceLabel());
+		})
+			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT).build();
+		armorStandPersistence.active = OptiminiumSettings.isEntityPersistenceEnabled();
+		this.addRenderableWidget(armorStandPersistence);
 		this.addRenderableWidget(Button.builder(mobPersistenceLabel(), button -> { OptiminiumSettings.toggleMobPersistenceEnabled(); button.setMessage(mobPersistenceLabel()); })
-			.bounds(x, y + 182, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.bounds(x, y + 208, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
-		this.addRenderableWidget(new SettingsSlider(x, y + 208, OptiminiumSettings::getMobPersistenceAdaptiveMinInstances,
+		this.addRenderableWidget(new SettingsSlider(x, y + 234, OptiminiumSettings::getMobPersistenceAdaptiveMinInstances,
 			OptiminiumSettings::setMobPersistenceAdaptiveMinInstances, 2, 128, "Mob Adaptive Minimum"));
-		this.addRenderableWidget(Button.builder(Component.literal("Benchmark Persistence"), button -> OptiminiumBenchmark.startPersistence())
-			.bounds(x, y + 234, BUTTON_WIDTH, BUTTON_HEIGHT)
+		this.addRenderableWidget(Button.builder(Component.literal("Benchmark Optiminium"), button -> OptiminiumBenchmark.start())
+			.bounds(x, y + 260, BUTTON_WIDTH, BUTTON_HEIGHT)
+			.build());
+		this.addRenderableWidget(Button.builder(Component.literal("Investigate Scene"), button -> OptiminiumSceneInvestigator.start(this))
+			.bounds(leftX, this.height - 56, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds((this.width - 200) / 2, this.height - 30, 200, BUTTON_HEIGHT)
@@ -121,6 +132,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 			+ (OptiminiumSettings.isArmorStandPersistenceEnabled() ? "ON" : "OFF"));
 	}
 
+	private static Component entityPersistenceLabel() {
+		return Component.literal("Exact Entity Persistence: "
+			+ (OptiminiumSettings.isEntityPersistenceEnabled() ? "ON" : "OFF"));
+	}
+
 	private static Component mobPersistenceLabel() {
 		return Component.literal("Exact Mob Persistence: "
 			+ (OptiminiumSettings.isMobPersistenceEnabled() ? "ON" : "OFF"));
@@ -133,7 +149,7 @@ public final class OptiminiumSettingsScreen extends Screen {
 
 	private static Component beVirtualizationDebugProxyLabel() {
 		boolean enabled = OptiminiumSettings.isBlockEntityVirtualizationDebugProxies();
-		return Component.literal("BE Debug Proxies: " + (enabled ? "ON" : "OFF"));
+		return Component.literal("BE Debug Overlay (costly): " + (enabled ? "ON" : "OFF"));
 	}
 
 	private static Component beVirtualizationAggressivenessLabel() {

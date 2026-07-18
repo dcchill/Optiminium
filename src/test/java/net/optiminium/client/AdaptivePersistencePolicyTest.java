@@ -23,27 +23,27 @@ class AdaptivePersistencePolicyTest {
 	}
 
 	@Test
-	void gpuRegressionVetoesCpuWin() {
+	void gpuRegressionDoesNotVetoCpuWin() {
 		AdaptivePersistencePolicy policy = activePolicy();
 		for (int i = 0; i < 8; i++) policy.recordFrameSafety(2_000_000L, 10_000_000L, false);
 		for (int i = 0; i < 8; i++) policy.recordFrameSafety(3_000_001L, 10_000_000L, true);
 		for (int i = 0; i < AdaptivePersistencePolicy.REQUIRED_LOSSES; i++) {
-			policy.beginFrame(20L + i, 16, true, 16, 128);
+			policy.beginFrame(20L + i, 16, true, 16, 128, true);
 		}
-		assertFalse(policy.active());
-		assertTrue(policy.reason().contains("veto"));
+		assertTrue(policy.active());
+		assertFalse(policy.reason().contains("veto"));
 	}
 
 	@Test
-	void p95FrameRegressionVetoesCpuWin() {
+	void p95FrameRegressionDoesNotVetoCpuWin() {
 		AdaptivePersistencePolicy policy = activePolicy();
 		for (int i = 0; i < 8; i++) policy.recordFrameSafety(2_000_000L, 10_000_000L, false);
 		for (int i = 0; i < 8; i++) policy.recordFrameSafety(2_000_000L, 10_300_000L, true);
 		for (int i = 0; i < AdaptivePersistencePolicy.REQUIRED_LOSSES; i++) {
-			policy.beginFrame(20L + i, 16, true, 16, 128);
+			policy.beginFrame(20L + i, 16, true, 16, 128, true);
 		}
-		assertFalse(policy.active());
-		assertTrue(policy.reason().contains("veto"));
+		assertTrue(policy.active());
+		assertFalse(policy.reason().contains("veto"));
 	}
 
 	@Test
@@ -92,6 +92,29 @@ class AdaptivePersistencePolicyTest {
 			assertTrue(policy.beginFrame(frame, 16, true, 16, 128));
 			assertFalse(policy.active());
 		}
+	}
+
+	@Test
+	void entityCpuWinActivatesWithoutWholeFrameSafetySamples() {
+		AdaptivePersistencePolicy policy = new AdaptivePersistencePolicy();
+		for (long frame = 1L; frame <= 3L; frame++) {
+			policy.recordVanilla(320_000L, 16);
+			policy.beginFrame(frame, 16, true, 16, Integer.MAX_VALUE, true);
+		}
+		assertTrue(policy.trial());
+		for (long frame = 4L; frame <= 7L; frame++) {
+			policy.recordPersistent(32_000L, 16);
+			assertTrue(policy.beginFrame(frame, 16, true, 16, Integer.MAX_VALUE, true));
+		}
+		assertTrue(policy.active());
+		assertTrue(policy.reason().equals("measured_win"));
+	}
+
+	@Test
+	void denseEntityPolicyDoesNotWaitForUnusedSafetyWindow() {
+		AdaptivePersistencePolicy policy = new AdaptivePersistencePolicy();
+		assertTrue(policy.beginFrame(1L, 128, true, 16, 128, true));
+		assertTrue(policy.active());
 	}
 
 	@Test

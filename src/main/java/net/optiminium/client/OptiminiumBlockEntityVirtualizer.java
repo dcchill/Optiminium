@@ -133,6 +133,13 @@ public final class OptiminiumBlockEntityVirtualizer {
 			recordNormal();
 			return false;
 		}
+		// Most BER traffic in real builds is signs, banners, chests, skulls, and
+		// shulker boxes. None currently has a production-safe virtual representation,
+		// so reject them before camera vector math and transition-memory bookkeeping.
+		if (!isKnownVirtualizationCandidate(blockEntity)) {
+			recordNormal();
+			return false;
+		}
 
 		VirtualizationDecision decision = chooseLevel(blockEntity);
 		if (decision.level == FULL) {
@@ -142,6 +149,7 @@ public final class OptiminiumBlockEntityVirtualizer {
 		recordWouldVirtualize();
 		if (!OptiminiumSettings.isBlockEntityVirtualizationEnabled()
 				|| !isCancellationAllowlisted(blockEntity, decision.level)) {
+			renderDebugDecision(blockEntity, poseStack, bufferSource, decision);
 			recordNormal();
 			return false;
 		}
@@ -163,6 +171,15 @@ public final class OptiminiumBlockEntityVirtualizer {
 		proxyRenderFailures.increment();
 		recordNormal();
 		return false;
+	}
+
+	private static void renderDebugDecision(BlockEntity blockEntity, PoseStack poseStack,
+			MultiBufferSource bufferSource, VirtualizationDecision decision) {
+		if (!OptiminiumSettings.isBlockEntityVirtualizationDebugProxies()
+				|| decision.level == FULL || decision.level == VIRTUALIZED) return;
+		CachedRepresentation representation = representationFor(blockEntity, decision.level);
+		representation.render(blockEntity, poseStack, bufferSource, decision.level,
+			decision.fadeAlpha, true);
 	}
 
 	public static void beginFullRenderer() {
@@ -246,10 +263,6 @@ public final class OptiminiumBlockEntityVirtualizer {
 		if (distanceSqr <= LEVEL_0_DISTANCE_SQR || lookedAt || isProtectedFullRenderer(blockEntity)) {
 			return stableDecision(key, FULL);
 		}
-		if (!isKnownVirtualizationCandidate(blockEntity)) {
-			return stableDecision(key, FULL);
-		}
-
 		byte classification = -1;
 		float fadeAlpha = 1.0F;
 		byte desired = levelFromClassification(classification, blockEntity, distanceSqr, lookedAt, lookDot);
@@ -454,8 +467,10 @@ public final class OptiminiumBlockEntityVirtualizer {
 		if (level == VIRTUALIZED) {
 			return aggressiveness != OptiminiumSettings.BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
 		}
-		return OptiminiumSettings.isBlockEntityVirtualizationDebugProxies()
-			&& aggressiveness == OptiminiumSettings.BlockEntityVirtualizationAggressiveness.AGGRESSIVE;
+		// Simplified and impostor representations are currently diagnostic overlays, not
+		// production-quality replacements. Debug visibility must never decide whether the
+		// vanilla renderer is cancelled.
+		return false;
 	}
 
 	private static boolean isFullSkipSafe(double distanceSqr, boolean lookedAt, double lookDot) {

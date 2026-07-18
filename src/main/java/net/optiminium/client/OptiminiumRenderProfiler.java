@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -13,6 +15,9 @@ public final class OptiminiumRenderProfiler {
 	private static final Pattern RESOURCE_ID = Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 	private static final ThreadLocal<Deque<UploadCategory>> UPLOAD_CATEGORY_STACK = ThreadLocal.withInitial(ArrayDeque::new);
 	private static boolean enabled;
+	private static boolean sceneTimingEnabled;
+	private static int sceneTimingStride = 1;
+	private static int sceneTimingCounter;
 	private static boolean frameOpen;
 	private static long textureBindCount;
 	private static long shaderBindCount;
@@ -21,6 +26,10 @@ public final class OptiminiumRenderProfiler {
 	private static long bufferUploadNanos;
 	private static long renderLayerSwitchCount;
 	private static final Map<Object, Long> renderLayerCounts = new IdentityHashMap<>();
+	private static final Map<String, Long> renderedEntityCounts = new LinkedHashMap<>();
+	private static final Map<String, Long> renderedBlockEntityCounts = new LinkedHashMap<>();
+	private static final Map<String, Long> renderedEntityNanos = new LinkedHashMap<>();
+	private static final Map<String, Long> renderedBlockEntityNanos = new LinkedHashMap<>();
 	private static long translucentRenderFrames;
 	private static long particleRenderFrames;
 	private static long terrainRenderFrames;
@@ -111,7 +120,7 @@ public final class OptiminiumRenderProfiler {
 			totalUploadBytes,
 			largestUploadCategory.displayName(), optiminiumDrawCalls, optiminiumRenderTypeSwitches,
 			optiminiumEndBatchCalls, proxyDrawCalls, proxyBatches, debugDrawCalls, debugBatches,
-			topRenderLayers()
+			topRenderLayers(), sceneItems()
 		);
 	}
 
@@ -124,6 +133,10 @@ public final class OptiminiumRenderProfiler {
 		bufferUploadNanos = 0L;
 		renderLayerSwitchCount = 0L;
 		renderLayerCounts.clear();
+		renderedEntityCounts.clear();
+		renderedBlockEntityCounts.clear();
+		renderedEntityNanos.clear();
+		renderedBlockEntityNanos.clear();
 		translucentRenderFrames = 0L;
 		particleRenderFrames = 0L;
 		terrainRenderFrames = 0L;
@@ -222,6 +235,47 @@ public final class OptiminiumRenderProfiler {
 		}
 	}
 
+	public static void recordRenderedEntity(Object entity) {
+		if (isActive() && entity != null) {
+			renderedEntityCounts.merge(typeName(entity), 1L, Long::sum);
+		}
+	}
+
+	public static void recordRenderedBlockEntity(Object blockEntity) {
+		if (isActive() && blockEntity != null) {
+			renderedBlockEntityCounts.merge(typeName(blockEntity), 1L, Long::sum);
+		}
+	}
+
+	public static long beginSceneRenderTiming() {
+		if (!isActive() || !sceneTimingEnabled) return 0L;
+		return ++sceneTimingCounter % sceneTimingStride == 0 ? System.nanoTime() : 0L;
+	}
+
+	public static void setSceneTimingEnabled(boolean value) {
+		sceneTimingEnabled = value;
+		if (!value) sceneTimingCounter = 0;
+	}
+
+	public static void setSceneTimingStride(int stride) {
+		sceneTimingStride = Math.max(1, stride);
+		sceneTimingCounter = 0;
+	}
+
+	public static void finishRenderedEntity(Object entity, long startNanos) {
+		recordSceneRenderTime(renderedEntityNanos, entity, startNanos);
+	}
+
+	public static void finishRenderedBlockEntity(Object blockEntity, long startNanos) {
+		recordSceneRenderTime(renderedBlockEntityNanos, blockEntity, startNanos);
+	}
+
+	private static void recordSceneRenderTime(Map<String, Long> timings, Object value, long startNanos) {
+		if (startNanos == 0L || value == null) return;
+		long sampledNanos = Math.max(0L, System.nanoTime() - startNanos);
+		timings.merge(typeName(value), sampledNanos * sceneTimingStride, Long::sum);
+	}
+
 	public static long start() {
 		return isActive() ? System.nanoTime() : 0L;
 	}
@@ -289,6 +343,41 @@ public final class OptiminiumRenderProfiler {
 		String name = value.substring(start, end);
 		var resource = RESOURCE_ID.matcher(value.substring(end));
 		return resource.find() ? name + "@" + resource.group() : name;
+	}
+
+	private static String typeName(Object value) {
+		String name = value.getClass().getSimpleName();
+		return name.isEmpty() ? value.getClass().getName() : name;
+	}
+
+	private static List<SceneItem> sceneItems() {
+		ArrayList<SceneItem> items = new ArrayList<>();
+		renderedEntityCounts.forEach((name, count) -> {
+			long nanos = renderedEntityNanos.getOrDefault(name, 0L);
+			items.add(new SceneItem("Entity", name, count, nanos / 1_000_000.0D,
+				count == 0L ? 0.0D : nanos / (double)count / 1_000.0D));
+		});
+		renderedBlockEntityCounts.forEach((name, count) -> {
+			long nanos = renderedBlockEntityNanos.getOrDefault(name, 0L);
+			items.add(new SceneItem("Block entity", name, count, nanos / 1_000_000.0D,
+				count == 0L ? 0.0D : nanos / (double)count / 1_000.0D));
+		});
+		renderLayerCounts.forEach((layer, count) ->
+			items.add(new SceneItem("Render layer", renderLayerName(layer), count, 0.0D, 0.0D)));
+		addUploadItem(items, UploadCategory.TERRAIN_CHUNK, terrainChunkUploadCount, terrainChunkUploadBytes);
+		addUploadItem(items, UploadCategory.BLOCK_ENTITY_PROXY, blockEntityProxyUploadCount, blockEntityProxyUploadBytes);
+		addUploadItem(items, UploadCategory.PROXY_LOD, proxyLodUploadCount, proxyLodUploadBytes);
+		addUploadItem(items, UploadCategory.PARTICLES_EFFECTS, particleEffectUploadCount, particleEffectUploadBytes);
+		addUploadItem(items, UploadCategory.UNKNOWN_VANILLA, unknownVanillaUploadCount, unknownVanillaUploadBytes);
+		items.sort(Comparator.comparingDouble(SceneItem::impactScore).reversed());
+		return List.copyOf(items);
+	}
+
+	private static void addUploadItem(ArrayList<SceneItem> items, UploadCategory category, long count, long bytes) {
+		if (count > 0L || bytes > 0L) {
+			items.add(new SceneItem("GPU upload", category.displayName(), count,
+				count * 8.0D + bytes / 1024.0D, 0.0D));
+		}
 	}
 
 	public static UploadCategory currentUploadCategory() {
@@ -490,7 +579,11 @@ public final class OptiminiumRenderProfiler {
 		String largestUploadSource,
 		long optiminiumDrawCalls, long optiminiumRenderTypeSwitches,
 		long optiminiumEndBatchCalls, long proxyDrawCalls, long proxyBatches,
-		long debugDrawCalls, long debugBatches, String topRenderLayers
+		long debugDrawCalls, long debugBatches, String topRenderLayers, List<SceneItem> sceneItems
 	) {
+	}
+
+	public record SceneItem(String category, String name, long renderCount,
+			double impactScore, double averageCpuMicros) {
 	}
 }

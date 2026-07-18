@@ -77,6 +77,8 @@ public final class OptiminiumBlockEntityRenderCache {
 
 	// --- Per-type stat tracking ---
 	private static final ConcurrentHashMap<BlockEntityType<?>, TypeStats> typeStatsMap = new ConcurrentHashMap<>();
+	private static final java.util.Set<BlockEntityType<?>> costBypassedTypes =
+		ConcurrentHashMap.newKeySet();
 
 	// --- Unstable entry detection ---
 	// If an entry is invalidated within UNSTABLE_FRAME_THRESHOLD frames of creation,
@@ -128,9 +130,20 @@ public final class OptiminiumBlockEntityRenderCache {
 	 */
 	public static int lightFor(BlockAndTintGetter levelView, BlockPos pos, BlockEntityRenderer<?> renderer,
 			BlockEntity blockEntity, float partialTick, int packedOverlay) {
+		// Direct packed-light lookup is sub-microsecond in measured mixed scenes. The generic
+		// concurrent cache adds key construction, CHM lookup, weak-reference validation and
+		// accounting on every hit, which costs more despite a nominal 99% hit rate.
+		if (!Boolean.getBoolean("optiminium.experimentalBlockEntityLightCache")) {
+			return LevelRenderer.getLightColor(levelView, pos);
+		}
 		// Fast path: if caching is disabled, compute and return immediately
 		if (!cacheActiveThisFrame) {
 			disabled++;
+			return LevelRenderer.getLightColor(levelView, pos);
+		}
+		BlockEntityType<?> type = blockEntity.getType();
+		if (costBypassedTypes.contains(type)) {
+			costBypasses++;
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
 		if (renderer == null) {
@@ -145,7 +158,6 @@ public final class OptiminiumBlockEntityRenderCache {
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
 		BlockState state = blockEntity.getBlockState();
-		BlockEntityType<?> type = blockEntity.getType();
 		if (!type.isValid(state)) {
 			fallback("invalid_type");
 			rejectedInvalidType++;
@@ -166,6 +178,7 @@ public final class OptiminiumBlockEntityRenderCache {
 		}
 		TypeStats ts = getOrCreateTypeStats(type);
 		if (ts.shouldBypass()) {
+			costBypassedTypes.add(type);
 			costBypasses++;
 			return LevelRenderer.getLightColor(levelView, pos);
 		}
@@ -306,6 +319,7 @@ public final class OptiminiumBlockEntityRenderCache {
 		totalReuses.reset();
 		totalInvalidatedEntries.reset();
 		typeStatsMap.clear();
+		costBypassedTypes.clear();
 		unstableTypeCooldown.clear();
 		visibleThisFrame = 0;
 		lastVisibleBlockEntities = 0;
@@ -323,7 +337,12 @@ public final class OptiminiumBlockEntityRenderCache {
 
 	public static void onFrameStart() {
 		cacheActiveThisFrame = OptiminiumSettings.isEnabled() && OptiminiumSettings.isBlockEntityRenderCache();
-		hookMetricsThisFrame = cacheActiveThisFrame && OptiminiumRenderProfiler.isEnabled();
+		// Per-dispatch accounting executes once for every BER invocation and materially
+		// perturbs dense-scene benchmarks when enabled only in the ON phase. Keep this
+		// diagnostic behind the explicit cache-debug switch; the render profiler already
+		// records block-entity scene volume independently.
+		hookMetricsThisFrame = cacheActiveThisFrame
+			&& OptiminiumSettings.isBlockEntityRenderCacheDebug();
 		lastVisibleBlockEntities = visibleThisFrame;
 		lastRebuildsThisFrame = rebuildsThisFrame;
 		lastSavedFrameNanos = savedThisFrameNanos;
