@@ -13,6 +13,7 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.Sheets;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.ChestRenderer;
 import net.minecraft.client.renderer.blockentity.DecoratedPotRenderer;
@@ -1039,7 +1040,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		long queueStart = queueTimingStart(policyKey);
 		instancePose.pushPose();
 		instancePose.mulPose(Axis.YP.rotationDegrees(-yaw));
-		mesh.queueResident(armorStand, instancePose.last().pose(), true, packedLight, 0);
+		mesh.queueResident(armorStand, instancePose.last().pose(), false,
+			packedLight, OverlayTexture.NO_OVERLAY);
 		instancePose.popPose();
 		recordQueueOverhead(policyKey, queueStart);
 		PersistentEntityMetrics.cached("armor_stand_whole");
@@ -1123,7 +1125,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 		long queueStart = queueTimingStart(policyKey);
 		mesh.queueStaticResident(submeshTransformOwner(stand, layer),
-			instancePose.last().pose(), true, packedLight, 0);
+			instancePose.last().pose(), false, packedLight, OverlayTexture.NO_OVERLAY);
 		recordQueueOverhead(policyKey, queueStart);
 		armorFeatureCachedThisFrame++;
 	}
@@ -2020,6 +2022,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 			var shader = OptiminiumPersistentMeshShader.get();
 			if (shader != null) {
+				// RenderType binds the textures, but this custom ShaderInstance still needs its
+				// sampler values populated. Otherwise every sampler defaults to texture unit 0.
+				shader.setSampler("Sampler0", RenderSystem.getShaderTexture(0));
+				shader.setSampler("Sampler1", RenderSystem.getShaderTexture(1));
+				shader.setSampler("Sampler2", RenderSystem.getShaderTexture(2));
 				shader.setDefaultUniforms(draws.get(0).layer.slice.mode, RenderSystem.getModelViewMatrix(),
 					RenderSystem.getProjectionMatrix(), Minecraft.getInstance().getWindow());
 				shader.apply();

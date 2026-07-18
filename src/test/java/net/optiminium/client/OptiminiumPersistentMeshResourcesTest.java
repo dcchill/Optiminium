@@ -32,6 +32,9 @@ class OptiminiumPersistentMeshResourcesTest {
 		assertTrue(vertex.contains("mat4(InstanceDirectMatrix0"));
 		assertTrue(descriptor.contains("\"name\": \"BonePalette\""));
 		assertTrue(descriptor.contains("\"name\": \"TransformPalette\""));
+		assertTrue(descriptor.contains("\"name\": \"Sampler0\""));
+		assertTrue(descriptor.contains("\"name\": \"Sampler1\""));
+		assertTrue(descriptor.contains("\"name\": \"Sampler2\""));
 		assertTrue(vertex.contains("InstanceLight.x > 65500.0 ? UV2 : ivec2(InstanceLight)"));
 		assertTrue(vertex.contains("texelFetch(Sampler2, lightCoords / 16, 0)"));
 		assertTrue(vertex.contains("fog_distance(viewPosition.xyz, FogShape)"));

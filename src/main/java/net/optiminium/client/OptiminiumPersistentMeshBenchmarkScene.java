@@ -39,6 +39,7 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 	private static final boolean ENABLED = Boolean.getBoolean("optiminium.persistentMeshBenchmarkScene");
 	private static final int GRID_SIZE = Math.max(4, Integer.getInteger("optiminium.persistentMeshBenchmarkGridSize", 16));
 	private static final String SCREENSHOT_NAME = System.getProperty("optiminium.persistentMeshBenchmarkScreenshot", "");
+	private static final boolean AUTO_EXIT = Boolean.getBoolean("optiminium.autoExitAfterBenchmark");
 	private static final String BENCHMARK_ORIGIN = System.getProperty("optiminium.persistentMeshBenchmarkOrigin", "");
 	private static final boolean ARMOR_STANDS = Boolean.getBoolean("optiminium.persistentMeshBenchmarkArmorStands");
 	private static final boolean GENERIC_BLOCK_ENTITIES = Boolean.getBoolean("optiminium.persistentMeshBenchmarkGenericBlockEntities");
@@ -106,6 +107,7 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 				message -> OptiminiumMod.LOGGER.info("Persistent mesh benchmark screenshot: {}", message.getString()));
 		}
 		if (screenshotTaken && readyTicks == 245) minecraft.options.hideGui = previousHideGui;
+		if (screenshotTaken && AUTO_EXIT && readyTicks == 260) minecraft.stop();
 		if (!ENABLED || queued || readyTicks < 80) return;
 		queued = true;
 		var server = minecraft.getSingleplayerServer();

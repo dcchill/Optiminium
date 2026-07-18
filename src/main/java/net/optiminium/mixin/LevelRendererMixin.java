@@ -1,6 +1,5 @@
 package net.optiminium.mixin;
 
-import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.GameRenderer;
@@ -58,17 +57,10 @@ public abstract class LevelRendererMixin {
         OptiminiumGlStateTracker.invalidate(OptiminiumGlStateTracker.InvalidationReason.RENDER_PASS);
     }
 
-    // Weather and cloud skipping preserved - unrelated to Block Entity Culling
+    // Weather skipping preserved - unrelated to Block Entity Culling
     @Inject(method = "renderSnowAndRain", at = @At("HEAD"), cancellable = true)
     private void optiminium$skipWeatherUnderGpuPressure(LightTexture lightTexture, float partialTick, double cameraX, double cameraY, double cameraZ, CallbackInfo callback) {
         if (OptiminiumGpuOptimizer.shouldSkipWeather()) {
-            callback.cancel();
-        }
-    }
-
-    @Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true)
-    private void optiminium$skipCloudsUnderGpuPressure(PoseStack poseStack, Matrix4f projectionMatrix, Matrix4f frustumMatrix, float partialTick, double cameraX, double cameraY, double cameraZ, CallbackInfo callback) {
-        if (OptiminiumGpuOptimizer.shouldSkipClouds()) {
             callback.cancel();
         }
     }
