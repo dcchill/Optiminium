@@ -183,6 +183,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static final Map<GenericSourceKey, GenericQualification> GENERIC_QUALIFICATIONS = new HashMap<>();
 	private static final Map<ExactGroupKey, MobTopologyPolicy> MOB_QUALIFICATIONS = new HashMap<>();
 	private static final Map<ExactGroupKey, String> MOB_FALLBACK_REASONS = new HashMap<>();
+	private static final Map<UUID, CachedMobPalette> MOB_POSE_PALETTES = new HashMap<>();
 	private static final java.util.Set<ExactGroupKey> MOB_ANCHORS_THIS_FRAME = new java.util.HashSet<>();
 	private static final java.util.Set<Object> BLOCK_ENTITY_ANCHORS_THIS_FRAME = new java.util.HashSet<>();
 	private static BlockEntity lastGenericEntity;
@@ -1125,7 +1126,10 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			evictIfNeeded();
 		}
 		long queueStart = queueTimingStart(policyKey);
-		mesh.queueStaticResident(submeshTransformOwner(stand, layer),
+		// LivingEntityRenderer supplies a camera-relative pose. Even a stationary armor stand's
+		// matrix changes as the camera moves, so this must be observed every frame rather than
+		// treated as a static resident transform.
+		mesh.queueResident(submeshTransformOwner(stand, layer),
 			instancePose.last().pose(), false, packedLight, OverlayTexture.NO_OVERLAY);
 		recordQueueOverhead(policyKey, queueStart);
 		armorFeatureCachedThisFrame++;
@@ -1253,6 +1257,51 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			&& !Minecraft.getInstance().shouldEntityAppearGlowing(mob);
 	}
 
+	/** True only while the current mob's exact base-model topology is selected for persistence. */
+	public static boolean isCurrentMobAnimationThrottleEligible() {
+		MobRenderContext context = MOB_RENDER_CONTEXT.get();
+		return context != null && context.persist && context.key instanceof MobGroupKey;
+	}
+
+	/** Marks a successfully restored model pose for cumulative bone-palette replay. */
+	public static void markCurrentMobPoseReused() {
+		MobRenderContext context = MOB_RENDER_CONTEXT.get();
+		if (context != null && context.persist && context.key instanceof MobGroupKey) context.reusePose = true;
+	}
+
+	/** Replays cached cumulative bones and skips base-model traversal when exact topology still matches. */
+	public static boolean tryRenderReusedMobBaseModel(PoseStack poseStack, int packedLight,
+			int packedOverlay, int color) {
+		MobRenderContext context = MOB_RENDER_CONTEXT.get();
+		if (context == null) return false;
+		context.baseModelPose = new Matrix4f(poseStack.last().pose());
+		if (!context.reusePose || color != -1 || context.primaryRenderType == null) return false;
+		CachedMesh mesh = MESHES.get(new MobAtlasKey(context.key));
+		CachedMobPalette palette = MOB_POSE_PALETTES.get(context.entityId);
+		if (mesh == null || palette == null || !palette.key.equals(context.key)
+				|| palette.matrices.size() != mesh.boneCount) {
+			context.reusePose = false;
+			MOB_POSE_PALETTES.remove(context.entityId);
+			mobFallbacks++;
+			OptiminiumMobAnimationThrottler.recordCompatibilityFallback();
+			return false;
+		}
+		context.paletteOffset = BONE_PALETTES.matrixCount();
+		for (Matrix4f matrix : palette.matrices) {
+			BONE_PALETTES.append(new Matrix4f(context.baseModelPose).mul(matrix));
+		}
+		context.poseCount = palette.matrices.size();
+		context.compatibleParts = context.poseCount;
+		context.suppressedParts = context.poseCount;
+		context.packedLight = packedLight;
+		context.packedOverlay = packedOverlay;
+		palette.lastSeenFrame = policyFrame;
+		mobPartsSuppressed += context.poseCount;
+		mobBoneUploads += context.poseCount;
+		OptiminiumMobAnimationThrottler.recordDirectPaletteReuse();
+		return true;
+	}
+
 	/** Completes the pass and records the full renderer cost, including animation and vanilla feature layers. */
 	public static void endMob(Mob mob, long elapsedNanos) {
 		endExactModel(elapsedNanos);
@@ -1274,7 +1323,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		}
 		if (context.partPersistence) return;
 		MobTopologyPolicy qualification = MOB_QUALIFICATIONS.get(context.key);
-		if (qualification != null && context.compatibleParts > 0) {
+		if (qualification != null && context.compatibleParts > 0 && !context.reusePose) {
 			boolean wasQualified = qualification.qualified();
 			qualification.observe(context.topologyHash, context.entityId, policyFrame);
 			if (wasQualified && !qualification.qualified()) {
@@ -1318,7 +1367,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 			if (mesh != null && mesh.boneCount == context.poseCount) {
 				mesh.queueBone(context.packedLight, context.packedOverlay, context.paletteOffset);
-				mobBoneUploads += context.poseCount;
+				if (!context.reusePose) mobBoneUploads += context.poseCount;
+				if (!context.reusePose && context.baseModelPose != null
+						&& context.capturedPoseMatrices.size() == context.poseCount) {
+					Matrix4f inverseBase = new Matrix4f(context.baseModelPose).invert();
+					List<Matrix4f> localMatrices = context.capturedPoseMatrices.stream()
+						.map(matrix -> new Matrix4f(inverseBase).mul(matrix)).toList();
+					MOB_POSE_PALETTES.put(context.entityId, new CachedMobPalette(context.key,
+						localMatrices, policyFrame));
+				}
 			} else {
 				context.suppressedParts = 0;
 				mobFallbacks++;
@@ -1375,6 +1432,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		int boneIndex = context.poseCount++;
 		if (context.paletteOffset < 0) context.paletteOffset = BONE_PALETTES.matrixCount();
 		BONE_PALETTES.append(pose.pose());
+		context.capturedPoseMatrices.add(new Matrix4f(pose.pose()));
 		context.packedLight = packedLight;
 		context.packedOverlay = packedOverlay;
 		if (mesh == null) {
@@ -2173,6 +2231,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	public static void clear() {
+		OptiminiumMobAnimationThrottler.clear();
 		if (!RenderSystem.isOnRenderThread()) {
 			RenderSystem.recordRenderCall(OptiminiumPersistentBlockEntityMeshes::clear);
 			return;
@@ -2193,6 +2252,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		GENERIC_QUALIFICATIONS.clear();
 		MOB_QUALIFICATIONS.clear();
 		MOB_FALLBACK_REASONS.clear();
+		MOB_POSE_PALETTES.clear();
 		MOB_ANCHORS_THIS_FRAME.clear();
 		ENTITY_ANCHORS_THIS_FRAME.clear();
 		BLOCK_ENTITY_ANCHORS_THIS_FRAME.clear();
@@ -2466,6 +2526,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			removeMeshesForPolicy(entry.getKey());
 			return true;
 		});
+		MOB_POSE_PALETTES.entrySet().removeIf(entry ->
+			policyFrame - entry.getValue().lastSeenFrame > AdaptivePersistencePolicy.EXPIRE_AFTER_FRAMES);
 		FAILED_KEYS.entrySet().removeIf(entry -> policyFrame >= entry.getValue());
 		GENERIC_QUALIFICATIONS.entrySet().removeIf(entry -> {
 			if (policyFrame - entry.getValue().lastSeenFrame <= AdaptivePersistencePolicy.EXPIRE_AFTER_FRAMES) return false;
@@ -2794,6 +2856,18 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private record MobAtlasKey(ExactGroupKey group) {
 	}
 
+	private static final class CachedMobPalette {
+		final ExactGroupKey key;
+		final List<Matrix4f> matrices;
+		long lastSeenFrame;
+
+		CachedMobPalette(ExactGroupKey key, List<Matrix4f> matrices, long lastSeenFrame) {
+			this.key = key;
+			this.matrices = matrices;
+			this.lastSeenFrame = lastSeenFrame;
+		}
+	}
+
 	private record GenericKeyCache(GenericSourceKey key, GenericFamilyKey family,
 		int stateId, Class<?> renderer, long sampledAt) {
 	}
@@ -2851,6 +2925,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		long topologyHash = 0xcbf29ce484222325L;
 		int compatibleParts;
 		int suppressedParts;
+		final List<Matrix4f> capturedPoseMatrices = new ArrayList<>();
+		boolean reusePose;
+		Matrix4f baseModelPose;
 		boolean partPersistence;
 		ArmorStandFamilyState armorStandFamily;
 		Object staticOwner;

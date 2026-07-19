@@ -26,6 +26,11 @@ public final class OptiminiumSettings {
 	private static volatile boolean entityPersistenceEnabled = true;
 	private static volatile boolean mobPersistenceEnabled = true;
 	private static volatile int mobPersistenceAdaptiveMinInstances = 8;
+	private static volatile boolean mobAnimationThrottlingEnabled = true;
+	private static volatile int mobAnimationNearDistanceBlocks = 32;
+	private static volatile int mobAnimationFarDistanceBlocks = 64;
+	private static volatile int mobAnimationMediumFps = 15;
+	private static volatile int mobAnimationFarFps = 8;
 	private static volatile boolean blockEntityVirtualizationEnabled = false;
 	private static volatile boolean blockEntityVirtualizationDebugProxies = false;
 	private static volatile BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
@@ -62,6 +67,8 @@ public final class OptiminiumSettings {
 			blockEntityPersistenceAdaptive, blockEntityPersistenceAdaptiveMinInstances,
 			blockEntityPersistenceMaxMeshes, entityPersistenceEnabled, armorStandPersistenceEnabled,
 			mobPersistenceEnabled, mobPersistenceAdaptiveMinInstances,
+			mobAnimationThrottlingEnabled, mobAnimationNearDistanceBlocks,
+			mobAnimationFarDistanceBlocks, mobAnimationMediumFps, mobAnimationFarFps,
 			blockEntityVirtualizationEnabled, blockEntityVirtualizationDebugProxies,
 			blockEntityVirtualizationAggressiveness, enableOpenGlTweaks, openGlOptimizationMode);
 	}
@@ -79,6 +86,11 @@ public final class OptiminiumSettings {
 		armorStandPersistenceEnabled = snapshot.armorStandPersistenceEnabled;
 		mobPersistenceEnabled = snapshot.mobPersistenceEnabled;
 		mobPersistenceAdaptiveMinInstances = snapshot.mobPersistenceAdaptiveMinInstances;
+		mobAnimationThrottlingEnabled = snapshot.mobAnimationThrottlingEnabled;
+		mobAnimationNearDistanceBlocks = snapshot.mobAnimationNearDistanceBlocks;
+		mobAnimationFarDistanceBlocks = snapshot.mobAnimationFarDistanceBlocks;
+		mobAnimationMediumFps = snapshot.mobAnimationMediumFps;
+		mobAnimationFarFps = snapshot.mobAnimationFarFps;
 		blockEntityVirtualizationEnabled = snapshot.blockEntityVirtualizationEnabled;
 		blockEntityVirtualizationDebugProxies = snapshot.blockEntityVirtualizationDebugProxies;
 		blockEntityVirtualizationAggressiveness = snapshot.blockEntityVirtualizationAggressiveness;
@@ -94,6 +106,7 @@ public final class OptiminiumSettings {
 		entityPersistenceEnabled = false;
 		armorStandPersistenceEnabled = false;
 		mobPersistenceEnabled = false;
+		mobAnimationThrottlingEnabled = false;
 		blockEntityVirtualizationEnabled = false;
 		blockEntityVirtualizationDebugProxies = false;
 		blockEntityVirtualizationAggressiveness = BlockEntityVirtualizationAggressiveness.CONSERVATIVE;
@@ -317,6 +330,29 @@ public final class OptiminiumSettings {
 		save();
 	}
 
+	public static boolean isMobAnimationThrottlingEnabled() { return mobAnimationThrottlingEnabled; }
+	public static boolean toggleMobAnimationThrottlingEnabled() {
+		mobAnimationThrottlingEnabled = !mobAnimationThrottlingEnabled;
+		save();
+		return mobAnimationThrottlingEnabled;
+	}
+	public static void setMobAnimationThrottlingEnabled(boolean value) { mobAnimationThrottlingEnabled = value; save(); }
+	public static int getMobAnimationNearDistanceBlocks() { return mobAnimationNearDistanceBlocks; }
+	public static void setMobAnimationNearDistanceBlocks(int value) {
+		mobAnimationNearDistanceBlocks = clamp(value, 8, 128);
+		if (mobAnimationFarDistanceBlocks <= mobAnimationNearDistanceBlocks) mobAnimationFarDistanceBlocks = mobAnimationNearDistanceBlocks + 8;
+		save();
+	}
+	public static int getMobAnimationFarDistanceBlocks() { return mobAnimationFarDistanceBlocks; }
+	public static void setMobAnimationFarDistanceBlocks(int value) {
+		mobAnimationFarDistanceBlocks = clamp(value, mobAnimationNearDistanceBlocks + 8, 256);
+		save();
+	}
+	public static int getMobAnimationMediumFps() { return mobAnimationMediumFps; }
+	public static void setMobAnimationMediumFps(int value) { mobAnimationMediumFps = clamp(value, 4, 30); save(); }
+	public static int getMobAnimationFarFps() { return mobAnimationFarFps; }
+	public static void setMobAnimationFarFps(int value) { mobAnimationFarFps = clamp(value, 2, 20); save(); }
+
 	public static void setBlockEntityPersistenceMaxMeshes(int maxMeshes) {
 		blockEntityPersistenceMaxMeshes = clamp(maxMeshes, 16, 4096);
 		save();
@@ -427,6 +463,11 @@ public final class OptiminiumSettings {
 			entityPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("entityPersistenceEnabled", Boolean.toString(entityPersistenceEnabled)));
 			mobPersistenceEnabled = Boolean.parseBoolean(properties.getProperty("mobPersistenceEnabled", Boolean.toString(mobPersistenceEnabled)));
 			mobPersistenceAdaptiveMinInstances = clamp(Integer.parseInt(properties.getProperty("mobPersistenceAdaptiveMinInstances", Integer.toString(mobPersistenceAdaptiveMinInstances))), 2, 128);
+			mobAnimationThrottlingEnabled = Boolean.parseBoolean(properties.getProperty("mobAnimationThrottlingEnabled", Boolean.toString(mobAnimationThrottlingEnabled)));
+			mobAnimationNearDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("mobAnimationNearDistanceBlocks", Integer.toString(mobAnimationNearDistanceBlocks))), 8, 128);
+			mobAnimationFarDistanceBlocks = clamp(Integer.parseInt(properties.getProperty("mobAnimationFarDistanceBlocks", Integer.toString(mobAnimationFarDistanceBlocks))), mobAnimationNearDistanceBlocks + 8, 256);
+			mobAnimationMediumFps = clamp(Integer.parseInt(properties.getProperty("mobAnimationMediumFps", Integer.toString(mobAnimationMediumFps))), 4, 30);
+			mobAnimationFarFps = clamp(Integer.parseInt(properties.getProperty("mobAnimationFarFps", Integer.toString(mobAnimationFarFps))), 2, 20);
 			blockEntityVirtualizationEnabled = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationEnabled",
 				properties.getProperty("blockEntityRenderVirtualization", Boolean.toString(blockEntityVirtualizationEnabled))));
 			blockEntityVirtualizationDebugProxies = Boolean.parseBoolean(properties.getProperty("blockEntityVirtualizationDebugProxies", Boolean.toString(blockEntityVirtualizationDebugProxies)));
@@ -457,6 +498,11 @@ public final class OptiminiumSettings {
 		properties.setProperty("entityPersistenceEnabled", Boolean.toString(entityPersistenceEnabled));
 		properties.setProperty("mobPersistenceEnabled", Boolean.toString(mobPersistenceEnabled));
 		properties.setProperty("mobPersistenceAdaptiveMinInstances", Integer.toString(mobPersistenceAdaptiveMinInstances));
+		properties.setProperty("mobAnimationThrottlingEnabled", Boolean.toString(mobAnimationThrottlingEnabled));
+		properties.setProperty("mobAnimationNearDistanceBlocks", Integer.toString(mobAnimationNearDistanceBlocks));
+		properties.setProperty("mobAnimationFarDistanceBlocks", Integer.toString(mobAnimationFarDistanceBlocks));
+		properties.setProperty("mobAnimationMediumFps", Integer.toString(mobAnimationMediumFps));
+		properties.setProperty("mobAnimationFarFps", Integer.toString(mobAnimationFarFps));
 		properties.setProperty("blockEntityVirtualizationEnabled", Boolean.toString(blockEntityVirtualizationEnabled));
 		properties.setProperty("blockEntityVirtualizationDebugProxies", Boolean.toString(blockEntityVirtualizationDebugProxies));
 		properties.setProperty("blockEntityVirtualizationAggressiveness", blockEntityVirtualizationAggressiveness.name().toLowerCase());
@@ -523,6 +569,8 @@ public final class OptiminiumSettings {
 			int blockEntityPersistenceMaxMeshes, boolean entityPersistenceEnabled,
 			boolean armorStandPersistenceEnabled,
 			boolean mobPersistenceEnabled, int mobPersistenceAdaptiveMinInstances,
+			boolean mobAnimationThrottlingEnabled, int mobAnimationNearDistanceBlocks,
+			int mobAnimationFarDistanceBlocks, int mobAnimationMediumFps, int mobAnimationFarFps,
 			boolean blockEntityVirtualizationEnabled,
 			boolean blockEntityVirtualizationDebugProxies,
 			BlockEntityVirtualizationAggressiveness blockEntityVirtualizationAggressiveness,

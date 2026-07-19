@@ -27,6 +27,13 @@ public final class OptiminiumSettingsScreen extends Screen {
 		boolean twoColumns = this.width >= BUTTON_WIDTH * 2 + 24;
 		int leftX = twoColumns ? this.width / 2 - BUTTON_WIDTH - 6 : (this.width - BUTTON_WIDTH) / 2;
 		int rightX = twoColumns ? this.width / 2 + 6 : leftX;
+		boolean threeColumns = this.width >= BUTTON_WIDTH * 3 + 36;
+		if (threeColumns) {
+			leftX = this.width / 2 - BUTTON_WIDTH * 3 / 2 - 12;
+			rightX = leftX + BUTTON_WIDTH + 12;
+		}
+		int animationX = threeColumns ? rightX + BUTTON_WIDTH + 12 : rightX;
+		int animationY = threeColumns ? 42 : 328;
 		int rightY = twoColumns ? 42 : 276;
 		int x = leftX;
 		int y = 42;
@@ -84,6 +91,22 @@ public final class OptiminiumSettingsScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.literal("Benchmark Optiminium"), button -> OptiminiumBenchmark.start())
 			.bounds(x, y + 260, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
+		this.addRenderableWidget(Button.builder(mobAnimationThrottlingLabel(), button -> {
+			OptiminiumSettings.toggleMobAnimationThrottlingEnabled();
+			button.setMessage(mobAnimationThrottlingLabel());
+		}).bounds(animationX, animationY, BUTTON_WIDTH, BUTTON_HEIGHT).build());
+		this.addRenderableWidget(new SettingsSlider(animationX, animationY + 26,
+			OptiminiumSettings::getMobAnimationNearDistanceBlocks,
+			OptiminiumSettings::setMobAnimationNearDistanceBlocks, 8, 128, "Mob Anim Full Range"));
+		this.addRenderableWidget(new SettingsSlider(animationX, animationY + 52,
+			OptiminiumSettings::getMobAnimationFarDistanceBlocks,
+			OptiminiumSettings::setMobAnimationFarDistanceBlocks, 16, 256, "Mob Anim Far Range"));
+		this.addRenderableWidget(new SettingsSlider(animationX, animationY + 78,
+			OptiminiumSettings::getMobAnimationMediumFps,
+			OptiminiumSettings::setMobAnimationMediumFps, 4, 30, "Mob Anim Medium FPS"));
+		this.addRenderableWidget(new SettingsSlider(animationX, animationY + 104,
+			OptiminiumSettings::getMobAnimationFarFps,
+			OptiminiumSettings::setMobAnimationFarFps, 2, 20, "Mob Anim Far FPS"));
 		this.addRenderableWidget(Button.builder(Component.literal("Investigate Scene"), button -> OptiminiumSceneInvestigator.start(this))
 			.bounds(leftX, this.height - 56, BUTTON_WIDTH, BUTTON_HEIGHT)
 			.build());
@@ -140,6 +163,11 @@ public final class OptiminiumSettingsScreen extends Screen {
 	private static Component mobPersistenceLabel() {
 		return Component.literal("Exact Mob Persistence: "
 			+ (OptiminiumSettings.isMobPersistenceEnabled() ? "ON" : "OFF"));
+	}
+
+	private static Component mobAnimationThrottlingLabel() {
+		return Component.literal("Mob Animation Throttling: "
+			+ (OptiminiumSettings.isMobAnimationThrottlingEnabled() ? "ON" : "OFF"));
 	}
 
 	private static Component beVirtualizationLabel() {
