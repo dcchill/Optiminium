@@ -3,17 +3,23 @@ package net.optiminium.client;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.HierarchicalModel;
+import net.minecraft.client.model.AgeableListModel;
+import net.minecraft.client.model.ListModel;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.item.ItemStack;
 import net.optiminium.optimization.OptiminiumSettings;
+import net.optiminium.mixin.AgeableListModelAccessor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 
 /** Render-thread-owned pose cache used only by exact-persistence-qualified mobs. */
 public final class OptiminiumMobAnimationThrottler {
@@ -32,7 +38,8 @@ public final class OptiminiumMobAnimationThrottler {
 		PASS.set(pass);
 		if (pass.action == MobAnimationThrottlePolicy.Action.REUSE) {
 			long start = System.nanoTime();
-			if (pass.entry.pose.restore(((HierarchicalModel<?>)model).root())) {
+			List<ModelPart> parts = modelParts(model);
+			if (parts != null && pass.entry.pose.restore(parts)) {
 				reuses++;
 				OptiminiumPersistentBlockEntityMeshes.markCurrentMobPoseReused();
 				ENTRIES.put(mob.getUUID(), new Entry(pass.entry.state, pass.entry.pose,
@@ -59,9 +66,10 @@ public final class OptiminiumMobAnimationThrottler {
 		PASS.remove();
 		if (pass != null && pass.action == MobAnimationThrottlePolicy.Action.REUSE) return;
 		model.setupAnim(mob, limbPosition, limbSpeed, ageInTicks, netHeadYaw, headPitch);
-		if (pass == null || pass.action != MobAnimationThrottlePolicy.Action.REFRESH
-				|| !(model instanceof HierarchicalModel<?> hierarchical)) return;
-		PoseSnapshot pose = PoseSnapshot.capture(hierarchical.root());
+		if (pass == null || pass.action != MobAnimationThrottlePolicy.Action.REFRESH) return;
+		List<ModelPart> parts = modelParts(model);
+		if (parts == null) return;
+		PoseSnapshot pose = PoseSnapshot.capture(parts);
 		long elapsed = pass.animationStartNanos == 0L ? 0L : System.nanoTime() - pass.animationStartNanos;
 		ENTRIES.put(mob.getUUID(), new Entry(pass.state, pose, System.nanoTime(), elapsed));
 		refreshes++;
@@ -70,7 +78,7 @@ public final class OptiminiumMobAnimationThrottler {
 	private static Pass begin(EntityModel<?> model, Mob mob) {
 		long now = System.nanoTime();
 		cleanup(now);
-		if (!(model instanceof HierarchicalModel<?>)
+		if (modelParts(model) == null
 				|| !OptiminiumPersistentBlockEntityMeshes.isCurrentMobAnimationThrottleEligible()) {
 			return Pass.fullRate();
 		}
@@ -94,6 +102,27 @@ public final class OptiminiumMobAnimationThrottler {
 		if (old != null && decision.action() == MobAnimationThrottlePolicy.Action.REFRESH
 				&& (old.state.invalidationFingerprint() != fingerprint || old.state.modelIdentity() != model)) invalidations++;
 		return new Pass(decision.action(), decision.state(), old);
+	}
+
+	private static List<ModelPart> modelParts(EntityModel<?> model) {
+		List<ModelPart> roots = new ArrayList<>();
+		if (model instanceof HierarchicalModel<?> hierarchical) {
+			roots.add(hierarchical.root());
+		} else if (model instanceof ListModel<?> listModel) {
+			listModel.parts().forEach(roots::add);
+		} else if (model instanceof AgeableListModel<?>) {
+			AgeableListModelAccessor accessor = (AgeableListModelAccessor)(Object)model;
+			accessor.optiminium$headParts().forEach(roots::add);
+			accessor.optiminium$bodyParts().forEach(roots::add);
+		} else {
+			return null;
+		}
+		Set<ModelPart> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		List<ModelPart> parts = new ArrayList<>();
+		for (ModelPart root : roots) root.getAllParts().forEach(part -> {
+			if (seen.add(part)) parts.add(part);
+		});
+		return parts.isEmpty() ? null : parts;
 	}
 
 	private static long fingerprint(Mob mob) {
@@ -163,15 +192,13 @@ public final class OptiminiumMobAnimationThrottler {
 			this.states = states;
 		}
 
-		static PoseSnapshot capture(ModelPart root) {
-			List<ModelPart> parts = root.getAllParts().toList();
+		static PoseSnapshot capture(List<ModelPart> parts) {
 			List<PartState> states = new ArrayList<>(parts.size());
 			for (ModelPart part : parts) states.add(PartState.capture(part));
-			return new PoseSnapshot(parts, states);
+			return new PoseSnapshot(List.copyOf(parts), states);
 		}
 
-		boolean restore(ModelPart root) {
-			List<ModelPart> current = root.getAllParts().toList();
+		boolean restore(List<ModelPart> current) {
 			if (current.size() != parts.size()) return false;
 			for (int i = 0; i < current.size(); i++) if (current.get(i) != parts.get(i)) return false;
 			for (int i = 0; i < current.size(); i++) states.get(i).restore(current.get(i));

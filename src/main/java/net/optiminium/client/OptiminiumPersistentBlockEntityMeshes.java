@@ -2693,7 +2693,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			Minecraft.getInstance().getFps(),
 			OptiminiumGpuOptimizer.getLatestCpuFrameNanos() / 1_000_000.0D);
 		PersistentEntityMetrics.Snapshot entityMetrics = PersistentEntityMetrics.snapshot();
-		return base + String.format(Locale.ROOT,
+		String persistence = base + String.format(Locale.ROOT,
 			", persistentDiscovery=%s, persistentGenericDormantSkips=%d, persistentArmorStandDormant=%s, persistentArmorCaptureFailures=%s, persistentEntityEnabled=%s, persistentEntityFamilies=%d, persistentEntityEligible=%d, persistentEntityActive=%d, persistentEntityCandidates=%d, persistentEntityCachedDraws=%d, persistentEntityAnchors=%d, persistentEntityUnsupportedRenderTypes=%d, persistentEntityDynamicStateFallbacks=%d, persistentEntitySafetyVetoes=%d, persistentEntityVanillaDraws=%d, persistentEntityFallbacks=%d, persistentEntityBuilds=%d, persistentEntityVanillaMs=%.3f, persistentEntityBuildMs=%.3f, persistentItemFrameBackingCandidates=%d, persistentItemFrameBackingCached=%d, persistentItemFrameBackingBuilds=%d, persistentItemFrameBackingFailures=%d, persistentArmorFeatureCandidates=%d, persistentArmorFeatureCached=%d, persistentArmorFeatureBuilds=%d, persistentArmorFeatureFailures=%d, persistentMinecartModelCandidates=%d, persistentMinecartModelCached=%d, persistentMinecartModelBuilds=%d, persistentMinecartModelFailures=%d, persistentFrameItemCandidates=%d, persistentFrameItemCached=%d, persistentFrameItemBuilds=%d, persistentFrameItemFailures=%d, persistentDisplayBlockCandidates=%d, persistentDisplayBlockCached=%d, persistentDisplayBlockBuilds=%d, persistentDisplayBlockFailures=%d, persistentImplementationRevision=%s",
 			PERSISTENCE_DISCOVERY_COOLDOWN.state(policyFrame), genericFamilyDormantSkips,
 			armorStandDormantUntilFrame > policyFrame
@@ -2715,6 +2715,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			lastFrameItemCandidates, lastFrameItemCached, frameItemBuilds, frameItemFailures,
 			lastDisplayBlockCandidates, lastDisplayBlockCached, displayBlockBuilds, displayBlockFailures,
 			IMPLEMENTATION_REVISION);
+		OptiminiumMobAnimationThrottler.Snapshot animation = OptiminiumMobAnimationThrottler.snapshot();
+		return persistence + String.format(Locale.ROOT,
+			", mobAnimationEnabled=%s, mobAnimationEligible=%d, mobAnimationRefreshes=%d, mobAnimationReuses=%d, mobAnimationPaletteReuses=%d, mobAnimationInvalidations=%d, mobAnimationFallbacks=%d, mobAnimationCachedPoses=%d, mobAnimationEstimatedAvoidedMs=%.3f",
+			OptiminiumSettings.isMobAnimationThrottlingEnabled(), animation.eligible(), animation.refreshes(),
+			animation.reuses(), animation.directPaletteReuses(), animation.invalidations(),
+			animation.fallbacks(), animation.cachedPoses(),
+			animation.estimatedAnimationNanosAvoided() / 1_000_000.0D);
 	}
 
 	private record MeshKey(BlockEntityType<?> type, int stateId, Object variant, Class<?> renderer) {
