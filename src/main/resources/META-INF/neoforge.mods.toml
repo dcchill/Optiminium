@@ -4,9 +4,11 @@ license="Not specified"
 
 [[mods]]
 modId="optiminium"
-version="1.0.0"
+version="0.1.0"
 displayName="Optiminium"
-authors="dsmar"
+authors="Dcchill"
+description="An Optimization mod"
+logoFile="logo.png"
 
 # Start of user code block mod configuration
 [[mixins]]

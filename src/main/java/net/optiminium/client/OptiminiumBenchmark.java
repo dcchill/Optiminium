@@ -1459,7 +1459,7 @@ public final class OptiminiumBenchmark {
 		BenchmarkHistoryTrend historyTrend = historyTrend(rendererHistoryMode(), benchmarkSceneKey(), percentChange(offFps, onFps), comparison.frameGainMs());
 		StringBuilder html = new StringBuilder(32000);
 		html.append("<!doctype html><html><head><meta charset=\"utf-8\"><title>Optiminium Benchmark</title><style>");
-		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
+		html.append("body{margin:0;background:#101318;color:#e8edf2;font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px}h1{font-size:28px;margin:0 0 8px}h2{margin:28px 0 12px}.muted{color:#9aa8b5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#171d25;border:1px solid #28313d;border-radius:8px;padding:14px}.value{font-size:24px;font-weight:700}.good{color:#66d986}.bad{color:#ff8b73}.warn{color:#ffbf69}.chart{background:#151a21;border:1px solid #28313d;border-radius:8px;padding:12px;margin:10px 0}svg{width:100%;height:auto}table{width:100%;border-collapse:collapse;background:#171d25;border:1px solid #28313d}th,td{padding:8px;border-bottom:1px solid #28313d;text-align:left}.raw{white-space:pre-wrap;overflow:auto;background:#0b0e12;border:1px solid #28313d;border-radius:8px;padding:12px}details{margin:12px 0}.pill{display:inline-block;border:1px solid #344150;border-radius:999px;padding:4px 10px;margin:3px;color:#c8d3df}</style></head><body><main>");
 		html.append("<h1>Optiminium Benchmark</h1><p class=\"muted\">")
 			.append(escape(FORMAT_VERSION)).append(" | rendererCompatibilityMode=")
 			.append(escape(OptiminiumSodiumCompat.rendererModeString())).append("</p>");
@@ -1502,6 +1502,8 @@ public final class OptiminiumBenchmark {
 			.append("</p></div>");
 		appendFpsGainTimeline(html, offFrames, onFrames);
 		appendFramePacingDashboard(html, offFrames, onFrames, onBurstFrames);
+		appendOptimizationOpportunities(html, onCpuMs, onGpuMs, onProfile, onRenderProfile,
+			onDiagnostics, onFrames.size());
 		html.append("<h2>Charts</h2>");
 		html.append(barChart("OFF vs ON FPS comparison", new String[]{"OFF avg FPS","ON avg FPS"}, new double[]{offFps, onFps}));
 		html.append(barChart("OFF vs ON 1% low comparison", new String[]{"OFF 1% low","ON 1% low"}, new double[]{offOneLow, onOneLow}));
@@ -1713,6 +1715,72 @@ public final class OptiminiumBenchmark {
 		card(html, label + " max", maxBurstValue(bursts, metric), "per frame", false);
 		card(html, label + " p95", percentileBurst(bursts, metric, 0.95D), "per frame", false);
 		card(html, label + " p99", percentileBurst(bursts, metric, 0.99D), "per frame", false);
+	}
+
+	private static void appendOptimizationOpportunities(StringBuilder html, double cpuMs, double gpuMs,
+			OptiminiumGpuOptimizer.ProfileSnapshot profile, OptiminiumRenderProfiler.Snapshot render,
+			String diagnostics, int frames) {
+		double optiminiumShare = cpuMs > 0.0D ? profile.totalOptiminiumCpuMs() * 100.0D / cpuMs : 0.0D;
+		html.append("<h2>Optimization Opportunities</h2><p class=\"muted\">Use these normalized costs and hotspots to choose the next profiler target. The bottleneck signal is directional, not proof; confirm it with a dedicated CPU/GPU capture.</p><div class=\"grid\">");
+		statusCard(html, "Likely limiting area", BenchmarkDiagnostics.bottleneckSignal(cpuMs, gpuMs), gpuMs > 0.0D);
+		card(html, "GPU share of frame", cpuMs > 0.0D ? gpuMs * 100.0D / cpuMs : 0.0D, "%", false);
+		card(html, "Optiminium CPU share", optiminiumShare, "% of frame", optiminiumShare <= 2.0D);
+		card(html, "Texture binds", BenchmarkDiagnostics.perFrame(render.textureBindCount(), frames), "per frame", false);
+		card(html, "Shader binds", BenchmarkDiagnostics.perFrame(render.shaderBindCount(), frames), "per frame", false);
+		card(html, "Buffer uploads", BenchmarkDiagnostics.perFrame(render.bufferUploadCount(), frames), "per frame", false);
+		card(html, "Upload traffic", BenchmarkDiagnostics.perFrame(render.totalUploadBytes(), frames) / 1024.0D, "KiB/frame", false);
+		card(html, "Layer switches", BenchmarkDiagnostics.perFrame(render.renderLayerSwitchCount(), frames), "per frame", false);
+		html.append("</div>");
+		html.append(barChart("Optiminium CPU cost by subsystem (average ms/frame)",
+			new String[]{"Particles","Block entities","Entities","Adaptive quality","Visual significance"},
+			new double[]{profile.particleCullingMs(), profile.blockEntityCullingMs(), profile.entityCullingMs(),
+				profile.adaptiveQualityMs(), profile.visualSignificanceMs()}));
+		html.append(barChart("Upload bytes by source", new String[]{"Proxy LOD","BE proxy","Particles","Terrain","Unknown / vanilla"},
+			new double[]{render.proxyLodUploadBytes(), render.blockEntityProxyUploadBytes(),
+				render.particleEffectUploadBytes(), render.terrainChunkUploadBytes(), render.unknownVanillaUploadBytes()}));
+		if (!render.sceneItems().isEmpty()) {
+			html.append("<h3>Ranked scene hotspots</h3><table><thead><tr><th>Category</th><th>Workload</th><th>Impact score</th><th>Average CPU</th><th>Renders</th></tr></thead><tbody>");
+			int limit = Math.min(10, render.sceneItems().size());
+			for (int i = 0; i < limit; i++) {
+				OptiminiumRenderProfiler.SceneItem item = render.sceneItems().get(i);
+				html.append("<tr><td>").append(escape(item.category())).append("</td><td>")
+					.append(escape(item.name())).append("</td><td>").append(format(item.impactScore()))
+					.append("</td><td>").append(format(item.averageCpuMicros())).append(" &micro;s</td><td>")
+					.append(item.renderCount()).append("</td></tr>");
+			}
+			html.append("</tbody></table>");
+		} else {
+			html.append("<div class=\"card warn\">No per-workload scene costs were captured. Instrumenting scene items is the next step before tuning individual renderers.</div>");
+		}
+		appendArmorStandOpportunityCards(html, diagnostics);
+	}
+
+	private static void appendArmorStandOpportunityCards(StringBuilder html, String diagnostics) {
+		if (diagnostics == null || diagnostics.isEmpty()) return;
+		long wholeHits = tryParseDiagLong(diagnostics, "armorWholeMeshHits=");
+		long poseReplays = tryParseDiagLong(diagnostics, "armorBasePoseReplays=");
+		long featureHits = tryParseDiagLong(diagnostics, "armorFeatureMeshHits=");
+		long deterministicSkips = tryParseDiagLong(diagnostics, "armorDeterministicSkips=");
+		long cooldownSkips = tryParseDiagLong(diagnostics, "armorCooldownSkips=");
+		long residualSamples = tryParseDiagLong(diagnostics, "armorVanillaResidualSamples=");
+		double residualMs = tryParseDiagDouble(diagnostics, "armorVanillaResidualMs=");
+		long optimizedPaths = wholeHits + poseReplays + featureHits;
+		long attemptedPaths = optimizedPaths + residualSamples;
+		html.append("<h3>Armor-stand paths</h3><div class=\"grid\">");
+		card(html, "Whole-mesh hits", wholeHits, "renders", wholeHits > 0L);
+		card(html, "Base pose replays", poseReplays, "renders", poseReplays > 0L);
+		card(html, "Shared feature hits", featureHits, "renders", featureHits > 0L);
+		card(html, "Optimized path rate", attemptedPaths == 0L ? 0.0D
+			: optimizedPaths * 100.0D / attemptedPaths, "%", optimizedPaths > residualSamples);
+		card(html, "Sorted fallbacks", tryParseDiagLong(diagnostics, "armorSortedFallbacks="),
+			"first observations", false);
+		card(html, "Avoided deterministic retries", deterministicSkips, "skips", deterministicSkips > 0L);
+		card(html, "Transient cooldown skips", cooldownSkips, "skips", cooldownSkips == 0L);
+		card(html, "First-time builds", tryParseDiagLong(diagnostics, "armorFirstBuilds="), "builds", false);
+		card(html, "Pose cache size", tryParseDiagLong(diagnostics, "armorPoseCacheSize="), "entries", false);
+		card(html, "Vanilla residual CPU", residualSamples == 0L ? 0.0D
+			: residualMs * 1000.0D / residualSamples, "microseconds/render", false);
+		html.append("</div>");
 	}
 
 	private static double percentileNanos(List<Long> frames, double percentile) {

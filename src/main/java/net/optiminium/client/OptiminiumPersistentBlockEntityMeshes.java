@@ -104,7 +104,7 @@ import java.util.function.BiConsumer;
 	 * the cached model is built against an identity pose and the caller's pose is supplied only when drawing.</p>
  */
 public final class OptiminiumPersistentBlockEntityMeshes {
-	private static final String IMPLEMENTATION_REVISION = "exact-submesh-transform-isolation-v24";
+	private static final String IMPLEMENTATION_REVISION = "armor-stand-shared-features-v25";
 	private static final int ARMOR_STAND_BUILD_BUDGET_PER_FRAME = 8;
 	private static final Map<Object, CachedMesh> MESHES = new LinkedHashMap<>(32, 0.75F, true);
 	private static final Map<Object, EntityPolicyKey> ENTITY_POLICY_KEYS = new HashMap<>();
@@ -146,6 +146,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static int lastArmorFeatureCached;
 	private static long armorFeatureBuilds;
 	private static long armorFeatureFailures;
+	private static long armorWholeMeshHits;
+	private static long armorBasePoseReplays;
+	private static long armorFeatureMeshHits;
+	private static long armorSortedFallbacks;
+	private static long armorDeterministicSkips;
+	private static long armorCooldownSkips;
+	private static long armorFirstBuilds;
+	private static long armorVanillaResidualNanos;
+	private static long armorVanillaResidualSamples;
 	private static int minecartModelCandidatesThisFrame;
 	private static int lastMinecartModelCandidates;
 	private static int minecartModelCachedThisFrame;
@@ -1005,7 +1014,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		ArmorStandKey key = armorStandKey(armorStand);
 		Long failedUntil = FAILED_KEYS.get(key);
 		if (failedUntil != null) {
-			if (policyFrame < failedUntil) return false;
+			if (policyFrame < failedUntil) {
+				if (failedUntil == Long.MAX_VALUE) armorDeterministicSkips++;
+				else armorCooldownSkips++;
+				return false;
+			}
 			FAILED_KEYS.remove(key);
 		}
 		CachedMesh mesh = MESHES.get(key);
@@ -1024,8 +1037,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 				mesh = capture.upload(key, policyKey);
 			} catch (RuntimeException exception) {
 				capture.close();
-				ARMOR_CAPTURE_FAILURES.merge(captureFailureReason(exception), 1L, Long::sum);
-				FAILED_KEYS.put(key, policyFrame + FAILURE_COOLDOWN_FRAMES);
+				String reason = captureFailureReason(exception);
+				ARMOR_CAPTURE_FAILURES.merge(reason, 1L, Long::sum);
+				if (reason.startsWith("sorted:")) armorSortedFallbacks++;
+				FAILED_KEYS.put(key, ArmorStandOptimizationPolicy.isDeterministicCaptureFailure(reason)
+					? Long.MAX_VALUE : policyFrame + FAILURE_COOLDOWN_FRAMES);
 				recordFallback();
 				return false;
 			}
@@ -1035,6 +1051,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 			policy(policyKey).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
 			MESHES.put(key, mesh);
+			armorFirstBuilds++;
 			gpuBytes += mesh.bytes;
 			recordUpload();
 			evictIfNeeded();
@@ -1047,6 +1064,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		instancePose.popPose();
 		recordQueueOverhead(policyKey, queueStart);
 		PersistentEntityMetrics.cached("armor_stand_whole");
+		armorWholeMeshHits++;
 		return true;
 	}
 
@@ -1055,6 +1073,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 				&& isStableArmorStand(armorStand)) {
 			policy(ArmorStandWholePolicyKey.INSTANCE).recordVanilla(elapsedNanos, 1);
 			PersistentEntityMetrics.vanilla("armor_stand_whole", elapsedNanos);
+			armorVanillaResidualNanos += Math.max(0L, elapsedNanos);
+			armorVanillaResidualSamples++;
 		}
 	}
 
@@ -1081,10 +1101,13 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			policy(policyKey).recordVanilla(System.nanoTime() - start, 1);
 			return;
 		}
-		ArmorStandFeatureMeshKey key = new ArmorStandFeatureMeshKey(layer, armorStandKey(stand), stand.getId());
+		ArmorStandOptimizationPolicy.FeatureKey key = new ArmorStandOptimizationPolicy.FeatureKey(layer,
+			armorStandKey(stand));
 		Long failedUntil = FAILED_KEYS.get(key);
 		if (failedUntil != null) {
 			if (policyFrame < failedUntil) {
+				if (failedUntil == Long.MAX_VALUE) armorDeterministicSkips++;
+				else armorCooldownSkips++;
 				renderLayer.accept(instancePose, vanillaBuffers);
 				return;
 			}
@@ -1105,10 +1128,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			} catch (RuntimeException exception) {
 				capture.close();
 				armorFeatureFailures++;
-				ARMOR_CAPTURE_FAILURES.merge("feature:" + captureFailureReason(exception), 1L, Long::sum);
-				// Exact equipment/pose/layer keys cannot become compatible without producing a
-				// different key or a resource reload. Avoid retrying known sorted/unsupported output.
-				FAILED_KEYS.put(key, Long.MAX_VALUE);
+				String reason = captureFailureReason(exception);
+				ARMOR_CAPTURE_FAILURES.merge("feature:" + reason, 1L, Long::sum);
+				if (reason.startsWith("sorted:")) armorSortedFallbacks++;
+				FAILED_KEYS.put(key, ArmorStandOptimizationPolicy.isDeterministicCaptureFailure(reason)
+					? Long.MAX_VALUE : policyFrame + FAILURE_COOLDOWN_FRAMES);
 				recordFallback();
 				renderLayer.accept(instancePose, vanillaBuffers);
 				return;
@@ -1120,6 +1144,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			}
 			policy(policyKey).recordBuild(System.nanoTime() - buildStart, mesh.vertices);
 			armorFeatureBuilds++;
+			armorFirstBuilds++;
 			MESHES.put(key, mesh);
 			gpuBytes += mesh.bytes;
 			recordUpload();
@@ -1133,6 +1158,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			instancePose.last().pose(), false, packedLight, OverlayTexture.NO_OVERLAY);
 		recordQueueOverhead(policyKey, queueStart);
 		armorFeatureCachedThisFrame++;
+		armorFeatureMeshHits++;
 	}
 
 	private static boolean isAuditedArmorStandFeatureLayer(RenderLayer<?, ?> layer) {
@@ -1211,8 +1237,8 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		PersistentEntityMetrics.eligible("armor_stand_parts");
 		ArmorStandBoneKey key = new ArmorStandBoneKey(stand.getType(), renderer.getClass(), stand.isSmall(),
 			stand.isShowArms(), stand.isNoBasePlate(), armorStandTexture(renderer, stand));
-		// The shared topology mesh stays model-local; exact per-part pose matrices are uploaded
-		// through the bone palette. This avoids the slower CPU vertex replay path.
+		// The GPU bone-palette path remains faster than CPU pose replay in the fixed-world benchmark.
+		// Keep exact per-part matrices on the existing adaptive atlas path.
 		return beginExactModel(stand.getUUID(), key, delegate, false);
 	}
 
@@ -1506,6 +1532,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (!context.staticReplayComplete) {
 			mesh.replay(consumer, context.staticInstancePose, packedLight, packedOverlay);
 			context.staticReplayComplete = true;
+			armorBasePoseReplays++;
 		}
 		context.suppressedParts++;
 		mobPartsSuppressed++;
@@ -2298,6 +2325,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		lastArmorFeatureCached = 0;
 		armorFeatureBuilds = 0L;
 		armorFeatureFailures = 0L;
+		resetArmorStandDiagnostics();
 		minecartModelCandidatesThisFrame = 0;
 		lastMinecartModelCandidates = 0;
 		minecartModelCachedThisFrame = 0;
@@ -2413,7 +2441,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		armorStandDormantUntilFrame = 0L;
 		armorStandDormantReason = "none";
 		FAILED_KEYS.keySet().removeIf(key -> key instanceof ArmorStandKey
-			|| key instanceof ArmorStandPartKey || key instanceof ArmorStandFeatureMeshKey);
+			|| key instanceof ArmorStandPartKey || key instanceof ArmorStandOptimizationPolicy.FeatureKey);
+		ARMOR_CAPTURE_FAILURES.clear();
+		CPU_ARMOR_MESHES.clear();
 		candidateCountsThisFrame.keySet().removeIf(OptiminiumPersistentBlockEntityMeshes::isArmorStandPolicyKey);
 		candidateCountsLastFrame.keySet().removeIf(OptiminiumPersistentBlockEntityMeshes::isArmorStandPolicyKey);
 		MOB_RENDER_CONTEXT.remove();
@@ -2421,6 +2451,19 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		MOB_FAST_VANILLA_KEY.remove();
 		PART_VANILLA_TIMING.remove();
 		armorStandSummary = "none";
+		resetArmorStandDiagnostics();
+	}
+
+	private static void resetArmorStandDiagnostics() {
+		armorWholeMeshHits = 0L;
+		armorBasePoseReplays = 0L;
+		armorFeatureMeshHits = 0L;
+		armorSortedFallbacks = 0L;
+		armorDeterministicSkips = 0L;
+		armorCooldownSkips = 0L;
+		armorFirstBuilds = 0L;
+		armorVanillaResidualNanos = 0L;
+		armorVanillaResidualSamples = 0L;
 	}
 
 	private static void clearBlockEntityState() {
@@ -2694,12 +2737,15 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			OptiminiumGpuOptimizer.getLatestCpuFrameNanos() / 1_000_000.0D);
 		PersistentEntityMetrics.Snapshot entityMetrics = PersistentEntityMetrics.snapshot();
 		String persistence = base + String.format(Locale.ROOT,
-			", persistentDiscovery=%s, persistentGenericDormantSkips=%d, persistentArmorStandDormant=%s, persistentArmorCaptureFailures=%s, persistentEntityEnabled=%s, persistentEntityFamilies=%d, persistentEntityEligible=%d, persistentEntityActive=%d, persistentEntityCandidates=%d, persistentEntityCachedDraws=%d, persistentEntityAnchors=%d, persistentEntityUnsupportedRenderTypes=%d, persistentEntityDynamicStateFallbacks=%d, persistentEntitySafetyVetoes=%d, persistentEntityVanillaDraws=%d, persistentEntityFallbacks=%d, persistentEntityBuilds=%d, persistentEntityVanillaMs=%.3f, persistentEntityBuildMs=%.3f, persistentItemFrameBackingCandidates=%d, persistentItemFrameBackingCached=%d, persistentItemFrameBackingBuilds=%d, persistentItemFrameBackingFailures=%d, persistentArmorFeatureCandidates=%d, persistentArmorFeatureCached=%d, persistentArmorFeatureBuilds=%d, persistentArmorFeatureFailures=%d, persistentMinecartModelCandidates=%d, persistentMinecartModelCached=%d, persistentMinecartModelBuilds=%d, persistentMinecartModelFailures=%d, persistentFrameItemCandidates=%d, persistentFrameItemCached=%d, persistentFrameItemBuilds=%d, persistentFrameItemFailures=%d, persistentDisplayBlockCandidates=%d, persistentDisplayBlockCached=%d, persistentDisplayBlockBuilds=%d, persistentDisplayBlockFailures=%d, persistentImplementationRevision=%s",
+			", persistentDiscovery=%s, persistentGenericDormantSkips=%d, persistentArmorStandDormant=%s, persistentArmorCaptureFailures=%s, armorWholeMeshHits=%d, armorBasePoseReplays=%d, armorFeatureMeshHits=%d, armorSortedFallbacks=%d, armorDeterministicSkips=%d, armorCooldownSkips=%d, armorFirstBuilds=%d, armorPoseCacheSize=%d, armorVanillaResidualMs=%.3f, armorVanillaResidualSamples=%d, persistentEntityEnabled=%s, persistentEntityFamilies=%d, persistentEntityEligible=%d, persistentEntityActive=%d, persistentEntityCandidates=%d, persistentEntityCachedDraws=%d, persistentEntityAnchors=%d, persistentEntityUnsupportedRenderTypes=%d, persistentEntityDynamicStateFallbacks=%d, persistentEntitySafetyVetoes=%d, persistentEntityVanillaDraws=%d, persistentEntityFallbacks=%d, persistentEntityBuilds=%d, persistentEntityVanillaMs=%.3f, persistentEntityBuildMs=%.3f, persistentItemFrameBackingCandidates=%d, persistentItemFrameBackingCached=%d, persistentItemFrameBackingBuilds=%d, persistentItemFrameBackingFailures=%d, persistentArmorFeatureCandidates=%d, persistentArmorFeatureCached=%d, persistentArmorFeatureBuilds=%d, persistentArmorFeatureFailures=%d, persistentMinecartModelCandidates=%d, persistentMinecartModelCached=%d, persistentMinecartModelBuilds=%d, persistentMinecartModelFailures=%d, persistentFrameItemCandidates=%d, persistentFrameItemCached=%d, persistentFrameItemBuilds=%d, persistentFrameItemFailures=%d, persistentDisplayBlockCandidates=%d, persistentDisplayBlockCached=%d, persistentDisplayBlockBuilds=%d, persistentDisplayBlockFailures=%d, persistentImplementationRevision=%s",
 			PERSISTENCE_DISCOVERY_COOLDOWN.state(policyFrame), genericFamilyDormantSkips,
 			armorStandDormantUntilFrame > policyFrame
 				? armorStandDormantReason + ":" + (armorStandDormantUntilFrame - policyFrame)
 				: "none",
 			ARMOR_CAPTURE_FAILURES.isEmpty() ? "none" : ARMOR_CAPTURE_FAILURES,
+			armorWholeMeshHits, armorBasePoseReplays, armorFeatureMeshHits, armorSortedFallbacks,
+			armorDeterministicSkips, armorCooldownSkips, armorFirstBuilds, CPU_ARMOR_MESHES.size(),
+			armorVanillaResidualNanos / 1_000_000.0D, armorVanillaResidualSamples,
 			OptiminiumSettings.isEntityPersistenceEnabled(), entityMetrics.families(), entityMetrics.eligible(),
 			entityMetrics.active(), entityMetrics.candidates(), entityMetrics.cachedDraws(),
 			entityMetrics.anchors(), entityMetrics.unsupportedRenderTypes(),
@@ -2759,17 +2805,6 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	}
 
 	private record ArmorStandFeaturePolicyKey(Class<?> layerClass) {
-	}
-
-	private record ArmorStandFeatureMeshKey(Object layer, ArmorStandKey state, int modelSeed) {
-		@Override public boolean equals(Object other) {
-			return other instanceof ArmorStandFeatureMeshKey key
-				&& layer == key.layer && modelSeed == key.modelSeed && state.equals(key.state);
-		}
-
-		@Override public int hashCode() {
-			return 31 * (31 * System.identityHashCode(layer) + state.hashCode()) + modelSeed;
-		}
 	}
 
 	private enum ItemFrameBackingPolicyKey {
