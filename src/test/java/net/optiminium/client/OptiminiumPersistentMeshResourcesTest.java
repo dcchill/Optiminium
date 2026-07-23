@@ -44,10 +44,13 @@ class OptiminiumPersistentMeshResourcesTest {
 	}
 
 	@Test
-	void itemFrameBackingSplitMixinIsPackaged() throws IOException {
+	void persistentSplitMixinsArePackaged() throws IOException {
 		String mixins = resource("/optiminium.mixins.json");
 		assertTrue(mixins.contains("\"ItemFrameRendererMixin\""));
 		assertTrue(mixins.contains("\"MinecartRendererMixin\""));
+		assertTrue(mixins.contains("\"SignRendererMixin\""));
+		assertTrue(mixins.contains("\"HangingSignRendererMixin\""));
+		assertTrue(mixins.contains("\"BannerRendererMixin\""));
 	}
 
 	private static String resource(String path) throws IOException {

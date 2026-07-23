@@ -6,6 +6,7 @@
   "client": [
 	"ArmorStandMixin",
 	"AgeableListModelAccessor",
+	"BannerRendererMixin",
 	"BlockEntityMixin",
     "BlockEntityRenderDispatcherMixin",
 	"EntityRenderDispatcherMixin",

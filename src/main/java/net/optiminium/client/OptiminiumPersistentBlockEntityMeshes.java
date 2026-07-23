@@ -14,12 +14,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.blockentity.BannerRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.ChestRenderer;
 import net.minecraft.client.renderer.blockentity.DecoratedPotRenderer;
 import net.minecraft.client.renderer.blockentity.SignRenderer;
 import net.minecraft.client.renderer.blockentity.HangingSignRenderer;
 import net.minecraft.client.renderer.blockentity.BellRenderer;
+import net.minecraft.client.renderer.blockentity.SkullBlockRenderer;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
@@ -31,12 +33,15 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.model.geom.ModelPart;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.AbstractSkullBlock;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.SkullBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.entity.DecoratedPotBlockEntity;
 import net.minecraft.world.level.block.entity.LidBlockEntity;
 import net.minecraft.world.level.block.entity.BellBlockEntity;
+import net.minecraft.world.level.block.entity.SkullBlockEntity;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
@@ -104,7 +109,7 @@ import java.util.function.BiConsumer;
 	 * the cached model is built against an identity pose and the caller's pose is supplied only when drawing.</p>
  */
 public final class OptiminiumPersistentBlockEntityMeshes {
-	private static final String IMPLEMENTATION_REVISION = "armor-stand-shared-features-v25";
+	private static final String IMPLEMENTATION_REVISION = "expanded-block-entities-v26";
 	private static final int ARMOR_STAND_BUILD_BUDGET_PER_FRAME = 8;
 	private static final Map<Object, CachedMesh> MESHES = new LinkedHashMap<>(32, 0.75F, true);
 	private static final Map<Object, EntityPolicyKey> ENTITY_POLICY_KEYS = new HashMap<>();
@@ -169,6 +174,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private static long displayBlockBuilds, displayBlockFailures;
 	private static final ThreadLocal<ChestPartContext> CHEST_PART_CONTEXT = new ThreadLocal<>();
 	private static final ThreadLocal<SignPartContext> SIGN_PART_CONTEXT = new ThreadLocal<>();
+	private static final ThreadLocal<BannerPartContext> BANNER_PART_CONTEXT = new ThreadLocal<>();
 	private static final ThreadLocal<MobRenderContext> MOB_RENDER_CONTEXT = new ThreadLocal<>();
 	private static final ThreadLocal<ExactGroupKey> MOB_FAST_VANILLA_KEY = new ThreadLocal<>();
 	private static final ThreadLocal<PartVanillaTiming> PART_VANILLA_TIMING = new ThreadLocal<>();
@@ -765,10 +771,16 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		// Running the whole renderer through generic qualification as well serializes sign NBT
 		// and captures text geometry that the split path deliberately leaves to vanilla.
 		if (isAuditedSignRenderer(renderer, blockEntity)) return false;
+		// Banner cloth and its pattern layers are animated/sorted. Persist only the static pole
+		// and crossbar through the audited split renderer below.
+		if (isAuditedBannerRenderer(renderer, blockEntity)) return false;
 		if (!isAuditedVanillaRenderer(renderer, blockEntity)) return tryRenderGeneric(renderer,
 			blockEntity, partialTick, instancePose, packedLight, packedOverlay);
 		Object variant = supportedVariant(blockEntity, partialTick);
 		if (variant == null) {
+			// Player skins use a sorted translucent layer, while powered dragon and piglin heads
+			// animate. Neither may fall through to whole-renderer generic capture.
+			if (isAuditedSkullRenderer(renderer, blockEntity)) return false;
 			return tryRenderGeneric(renderer, blockEntity, partialTick, instancePose, packedLight, packedOverlay);
 		}
 
@@ -1827,6 +1839,32 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (blockEntity instanceof DecoratedPotBlockEntity pot) {
 			return isWobbling(pot) ? null : pot.getDecorations();
 		}
+		if (blockEntity instanceof SkullBlockEntity skull
+				&& skull.getBlockState().getBlock() instanceof AbstractSkullBlock skullBlock) {
+			SkullBlock.Type skullType = skullBlock.getType();
+			boolean vanillaType = skullType == SkullBlock.Types.SKELETON
+				|| skullType == SkullBlock.Types.WITHER_SKELETON
+				|| skullType == SkullBlock.Types.ZOMBIE
+				|| skullType == SkullBlock.Types.CREEPER
+				|| skullType == SkullBlock.Types.DRAGON
+				|| skullType == SkullBlock.Types.PIGLIN
+				|| skullType == SkullBlock.Types.PLAYER;
+			VanillaBlockEntityPersistencePolicy.SkullGeometry geometry =
+				VanillaBlockEntityPersistencePolicy.classifySkull(
+					vanillaType,
+					skullType == SkullBlock.Types.PLAYER,
+					skullType == SkullBlock.Types.DRAGON || skullType == SkullBlock.Types.PIGLIN);
+			if (!VanillaBlockEntityPersistencePolicy.supportsWholeSkullMesh(geometry)) return null;
+			int animationBits = 0;
+			if (VanillaBlockEntityPersistencePolicy.hasAnimatedSkullGeometry(geometry)) {
+				float animation = skull.getAnimation(0.0F);
+				if (Float.floatToIntBits(animation) != Float.floatToIntBits(skull.getAnimation(1.0F))) {
+					return null;
+				}
+				animationBits = Float.floatToIntBits(animation);
+			}
+			return new SkullVariant(skullType, animationBits);
+		}
 		BlockEntityType<?> type = blockEntity.getType();
 		if (type != BlockEntityType.CHEST && type != BlockEntityType.TRAPPED_CHEST
 				&& type != BlockEntityType.ENDER_CHEST) {
@@ -1847,7 +1885,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 	private enum ClosedChestVariant { INSTANCE }
 	private enum ChestBottomVariant { INSTANCE }
 	private enum SignBoardVariant { INSTANCE }
+	private enum BannerPoleVariant { INSTANCE }
+	private enum BannerBarVariant { INSTANCE }
 	private enum StationaryBellVariant { INSTANCE }
+	private record SkullVariant(SkullBlock.Type type, int animationBits) {
+	}
 
 	private static MeshKey auditedKey(BlockEntity blockEntity, Object variant, Class<?> rendererClass) {
 		int stateId = Block.getId(blockEntity.getBlockState());
@@ -1875,6 +1917,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (isAuditedSignRenderer(renderer, blockEntity) && OptiminiumPersistentMeshShader.get() != null
 				&& isPersistenceActive()) {
 			renderSignWithSplit(renderer, blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
+			return;
+		}
+		if (isAuditedBannerRenderer(renderer, blockEntity) && OptiminiumPersistentMeshShader.get() != null
+				&& isPersistenceActive()) {
+			renderBannerWithSplit(renderer, blockEntity, partialTick, poseStack, bufferSource, packedLight, packedOverlay);
 			return;
 		}
 		if (!isSingleChest(blockEntity) || OptiminiumPersistentMeshShader.get() == null
@@ -1932,6 +1979,48 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			SIGN_PART_CONTEXT.remove();
 			policy(context.key).recordVanilla(System.nanoTime() - start, 1);
 		}
+	}
+
+	private static <E extends BlockEntity> void renderBannerWithSplit(BlockEntityRenderer<E> renderer, E blockEntity,
+			float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
+		// Rotation and wall/standing transforms are already present in the instance pose.
+		// The bar is identical for every banner; the pole is attempted only while visible.
+		BannerPartContext context = new BannerPartContext(
+			new MeshKey(blockEntity.getType(), 0, BannerPoleVariant.INSTANCE, renderer.getClass()),
+			new MeshKey(blockEntity.getType(), 0, BannerBarVariant.INSTANCE, renderer.getClass()),
+			blockEntity);
+		BANNER_PART_CONTEXT.set(context);
+		try {
+			renderer.render(blockEntity, partialTick, poseStack, renderType -> {
+				context.renderType = renderType;
+				return bufferSource.getBuffer(renderType);
+			}, packedLight, packedOverlay);
+		} finally {
+			BANNER_PART_CONTEXT.remove();
+		}
+	}
+
+	/**
+	 * Called for BannerRenderer's pole and crossbar only. Animated cloth and sorted pattern
+	 * layers remain in vanilla control flow.
+	 */
+	public static boolean tryRenderBannerPart(ModelPart part, PoseStack instancePose,
+			VertexConsumer vanillaConsumer, int packedLight, int packedOverlay) {
+		BannerPartContext context = BANNER_PART_CONTEXT.get();
+		if (context == null || context.renderType == null) return false;
+		MeshKey key = context.nextPartKey();
+		context.currentVanillaKey = part.visible ? key : null;
+		if (key == null || !part.visible) return false;
+		return tryRenderModelPart(key, context.blockEntity, context.renderType, part,
+			instancePose, packedLight, packedOverlay);
+	}
+
+	/** Records the exact vanilla cost of the banner part that was not persisted. */
+	public static void recordBannerPartVanilla(long elapsedNanos) {
+		BannerPartContext context = BANNER_PART_CONTEXT.get();
+		if (context == null || context.currentVanillaKey == null || elapsedNanos <= 0L) return;
+		policy(context.currentVanillaKey).recordVanilla(elapsedNanos, 1);
+		context.currentVanillaKey = null;
 	}
 
 	public static boolean tryRenderSignBoard(ModelPart root, PoseStack instancePose,
@@ -2205,6 +2294,9 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		if (blockEntity.getType() == BlockEntityType.DECORATED_POT) {
 			return renderer.getClass() == DecoratedPotRenderer.class;
 		}
+		if (blockEntity.getType() == BlockEntityType.SKULL) {
+			return renderer.getClass() == SkullBlockRenderer.class;
+		}
 		BlockEntityType<?> type = blockEntity.getType();
 		return (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST
 			|| type == BlockEntityType.ENDER_CHEST) && renderer.getClass() == ChestRenderer.class;
@@ -2212,6 +2304,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 
 	private static boolean isAuditedPersistenceType(BlockEntityType<?> type) {
 		return type == BlockEntityType.SIGN || type == BlockEntityType.HANGING_SIGN
+			|| type == BlockEntityType.BANNER || type == BlockEntityType.SKULL
 			|| type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST
 			|| type == BlockEntityType.ENDER_CHEST || type == BlockEntityType.BELL
 			|| type == BlockEntityType.DECORATED_POT;
@@ -2221,6 +2314,14 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		return blockEntity.getType() == BlockEntityType.SIGN && renderer.getClass() == SignRenderer.class
 			|| blockEntity.getType() == BlockEntityType.HANGING_SIGN
 				&& renderer.getClass() == HangingSignRenderer.class;
+	}
+
+	private static boolean isAuditedBannerRenderer(BlockEntityRenderer<?> renderer, BlockEntity blockEntity) {
+		return blockEntity.getType() == BlockEntityType.BANNER && renderer.getClass() == BannerRenderer.class;
+	}
+
+	private static boolean isAuditedSkullRenderer(BlockEntityRenderer<?> renderer, BlockEntity blockEntity) {
+		return blockEntity.getType() == BlockEntityType.SKULL && renderer.getClass() == SkullBlockRenderer.class;
 	}
 
 	private static final class ChestPartContext {
@@ -2240,6 +2341,29 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		SignPartContext(MeshKey key, BlockEntity blockEntity) {
 			this.key = key;
 			this.blockEntity = blockEntity;
+		}
+	}
+
+	private static final class BannerPartContext {
+		final MeshKey poleKey;
+		final MeshKey barKey;
+		final BlockEntity blockEntity;
+		RenderType renderType;
+		MeshKey currentVanillaKey;
+		int partIndex;
+
+		BannerPartContext(MeshKey poleKey, MeshKey barKey, BlockEntity blockEntity) {
+			this.poleKey = poleKey;
+			this.barKey = barKey;
+			this.blockEntity = blockEntity;
+		}
+
+		MeshKey nextPartKey() {
+			return switch (partIndex++) {
+				case 0 -> poleKey;
+				case 1 -> barKey;
+				default -> null;
+			};
 		}
 	}
 
