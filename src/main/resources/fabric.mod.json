@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "optiminium",
+	"version": "${version}",
+	"name": "Optiminium",
+	"description": "A client-side optimization mod focused on smoother frame pacing in dense and modded worlds.",
+	"authors": [
+		"Dcchill"
+	],
+	"license": "All-Rights-Reserved",
+	"icon": "logo.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"net.optiminium.OptiminiumMod"
+		]
+	},
+	"mixins": [
+		"optiminium.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.14",
+		"minecraft": "~1.21.1",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

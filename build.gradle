@@ -1,120 +1,92 @@
 plugins {
-    id 'eclipse'
-    id 'net.neoforged.moddev' version '2.0.95'
+	id 'eclipse'
+	id 'fabric-loom' version '1.10.5'
 }
 
 version = '1.0'
 group = 'net.optiminium'
 base.archivesName = 'optiminium'
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
-
-neoForge {
-    version = "21.1.190"
-
-    runs {
-        client {
-            client()
-            def quickPlayWorld = providers.gradleProperty('optiminium.quickPlayWorld')
-            if (quickPlayWorld.isPresent()) {
-                programArgument '--quickPlaySingleplayer'
-                programArgument quickPlayWorld.get()
-            }
-			def persistentMeshMinInstances = providers.gradleProperty('optiminium.persistentMeshMinInstances')
-            if (persistentMeshMinInstances.isPresent()) {
-                systemProperty 'optiminium.persistentMeshMinInstances', persistentMeshMinInstances.get()
-            }
-            if (providers.gradleProperty('optiminium.persistentMeshBenchmarkScene').isPresent()) {
-                systemProperty 'optiminium.persistentMeshBenchmarkScene', 'true'
-            }
-            def persistentMeshBenchmarkGridSize = providers.gradleProperty('optiminium.persistentMeshBenchmarkGridSize')
-            if (persistentMeshBenchmarkGridSize.isPresent()) {
-                systemProperty 'optiminium.persistentMeshBenchmarkGridSize', persistentMeshBenchmarkGridSize.get()
-            }
-            def persistentMeshBenchmarkScreenshot = providers.gradleProperty('optiminium.persistentMeshBenchmarkScreenshot')
-            if (persistentMeshBenchmarkScreenshot.isPresent()) {
-                systemProperty 'optiminium.persistentMeshBenchmarkScreenshot', persistentMeshBenchmarkScreenshot.get()
-            }
-            def persistentMeshBenchmarkOrigin = providers.gradleProperty('optiminium.persistentMeshBenchmarkOrigin')
-            if (persistentMeshBenchmarkOrigin.isPresent()) {
-                systemProperty 'optiminium.persistentMeshBenchmarkOrigin', persistentMeshBenchmarkOrigin.get()
-            }
-			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkArmorStands').isPresent()) {
-				systemProperty 'optiminium.persistentMeshBenchmarkArmorStands', 'true'
-			}
-			def persistentMeshAdaptiveMinInstances = providers.gradleProperty('optiminium.persistentMeshAdaptiveMinInstances')
-			if (persistentMeshAdaptiveMinInstances.isPresent()) {
-				systemProperty 'optiminium.persistentMeshAdaptiveMinInstances', persistentMeshAdaptiveMinInstances.get()
-			}
-			def persistentMobAdaptiveMinInstances = providers.gradleProperty('optiminium.persistentMobAdaptiveMinInstances')
-			if (persistentMobAdaptiveMinInstances.isPresent()) {
-				systemProperty 'optiminium.persistentMobAdaptiveMinInstances', persistentMobAdaptiveMinInstances.get()
-			}
-			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkGenericBlockEntities').isPresent()) {
-				systemProperty 'optiminium.persistentMeshBenchmarkGenericBlockEntities', 'true'
-			}
-			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkMobs').isPresent()) {
-				systemProperty 'optiminium.persistentMeshBenchmarkMobs', 'true'
-			}
-			if (providers.gradleProperty('optiminium.persistentMeshBenchmarkVariants').isPresent()) {
-				systemProperty 'optiminium.persistentMeshBenchmarkVariants', 'true'
-			}
-			def persistentMeshBenchmarkCount = providers.gradleProperty('optiminium.persistentMeshBenchmarkCount')
-			if (persistentMeshBenchmarkCount.isPresent()) {
-				systemProperty 'optiminium.persistentMeshBenchmarkCount', persistentMeshBenchmarkCount.get()
-			}
-			if (providers.gradleProperty('optiminium.autoBenchmark').isPresent()) {
-				systemProperty 'optiminium.autoBenchmark', 'true'
-			}
-			if (providers.gradleProperty('optiminium.persistenceOnlyBenchmark').isPresent()) {
-				systemProperty 'optiminium.persistenceOnlyBenchmark', 'true'
-			}
-			if (providers.gradleProperty('optiminium.autoExitAfterBenchmark').isPresent()) {
-				systemProperty 'optiminium.autoExitAfterBenchmark', 'true'
-			}
-			if (providers.gradleProperty('optiminium.visualAuditScreenshots').isPresent()) {
-				systemProperty 'optiminium.visualAuditScreenshots', 'true'
-			}
-			def entityValidationIntervalFrames = providers.gradleProperty('optiminium.entityValidationIntervalFrames')
-			if (entityValidationIntervalFrames.isPresent()) {
-				systemProperty 'optiminium.entityValidationIntervalFrames', entityValidationIntervalFrames.get()
-			}
-        }
-        server {
-            server()
-        }
-
-        configureEach {
-            gameDirectory = layout.projectDirectory.dir('run')
-            systemProperty 'forge.logging.markers', 'REGISTRIES'
-            logLevel = org.slf4j.event.Level.DEBUG
-        }
-    }
-
-    mods {
-        optiminium {
-            sourceSet sourceSets.main
-        }
-    }
+java {
+	toolchain.languageVersion = JavaLanguageVersion.of(21)
+	withSourcesJar()
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
-}
+loom {
+	runs {
+		client {
+			client()
+			configName = 'Fabric Client'
+			ideConfigGenerated = true
+			runDir = 'run'
 
-test {
-    useJUnitPlatform()
+			def quickPlayWorld = providers.gradleProperty('optiminium.quickPlayWorld')
+			if (quickPlayWorld.isPresent()) {
+				programArg '--quickPlaySingleplayer'
+				programArg quickPlayWorld.get()
+			}
+
+			def forwardedProperties = [
+				'optiminium.persistentMeshMinInstances',
+				'optiminium.persistentMeshBenchmarkScene',
+				'optiminium.persistentMeshBenchmarkGridSize',
+				'optiminium.persistentMeshBenchmarkScreenshot',
+				'optiminium.persistentMeshBenchmarkOrigin',
+				'optiminium.persistentMeshBenchmarkArmorStands',
+				'optiminium.persistentMeshAdaptiveMinInstances',
+				'optiminium.persistentMobAdaptiveMinInstances',
+				'optiminium.persistentMeshBenchmarkGenericBlockEntities',
+				'optiminium.persistentMeshBenchmarkMobs',
+				'optiminium.persistentMeshBenchmarkVariants',
+				'optiminium.persistentMeshBenchmarkCount',
+				'optiminium.autoBenchmark',
+				'optiminium.persistenceOnlyBenchmark',
+				'optiminium.autoExitAfterBenchmark',
+				'optiminium.visualAuditScreenshots',
+				'optiminium.entityValidationIntervalFrames'
+			]
+			forwardedProperties.each { propertyName ->
+				def propertyValue = providers.gradleProperty(propertyName)
+				if (propertyValue.isPresent()) {
+					vmArg "-D${propertyName}=${propertyValue.get()}"
+				}
+			}
+		}
+	}
 }
 
 dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	minecraft 'com.mojang:minecraft:1.21.1'
+	mappings loom.officialMojangMappings()
+	modImplementation 'net.fabricmc:fabric-loader:0.16.14'
+	modImplementation 'net.fabricmc.fabric-api:fabric-api:0.116.14+1.21.1'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
 	testImplementation 'org.joml:joml:1.10.5'
 }
 
+def modVersion = version
+
+processResources {
+	inputs.property 'version', modVersion
+	filesMatching('fabric.mod.json') {
+		expand version: modVersion
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release = 21
+}
+
+test {
+	useJUnitPlatform()
+}
+
 def deleteStaleModidJar = tasks.register('deleteStaleModidJar', Delete) {
-    delete layout.buildDirectory.file("libs/modid-${version}.jar")
+	delete layout.buildDirectory.file("libs/modid-${version}.jar")
 }
 
 tasks.named('jar') {
-    dependsOn deleteStaleModidJar
+	dependsOn deleteStaleModidJar
 }

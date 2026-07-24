@@ -4,11 +4,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Player;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
-import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.optiminium.OptiminiumMod;
 import net.optiminium.compat.OptiminiumSodiumCompat;
 import net.optiminium.optimization.OptiminiumMetrics;
@@ -28,7 +23,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-@EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBenchmark {
 	private static final String FORMAT_VERSION = "scene-v6";
 	private static final String IMPLEMENTATION_AUDIT_TAG = "v24";
@@ -202,8 +196,7 @@ public final class OptiminiumBenchmark {
 		message(benchmarkPrefix() + ": " + phase.name() + " preflight started.");
 	}
 
-	@SubscribeEvent
-	public static void onFrame(RenderFrameEvent.Pre event) {
+	public static void onFrame() {
 		if (!running) {
 			return;
 		}
@@ -235,8 +228,7 @@ public final class OptiminiumBenchmark {
 		}
 	}
 
-	@SubscribeEvent
-	public static void onFrameComplete(RenderFrameEvent.Post event) {
+	public static void onFrameComplete() {
 		if (visualAuditFrames <= 0 || --visualAuditFrames > 0) return;
 		Minecraft minecraft = Minecraft.getInstance();
 		Screenshot.grab(minecraft.gameDirectory, visualAuditName, minecraft.getMainRenderTarget(),
@@ -245,8 +237,7 @@ public final class OptiminiumBenchmark {
 		if (Boolean.getBoolean("optiminium.autoExitAfterBenchmark")) minecraft.stop();
 	}
 
-	@SubscribeEvent
-	public static void onClientTick(ClientTickEvent.Post event) {
+	public static void onClientTick() {
 		if (!running && !autoStarted && Boolean.getBoolean("optiminium.autoBenchmark")) {
 			Minecraft minecraft = Minecraft.getInstance();
 			if (minecraft.level == null || minecraft.player == null) {

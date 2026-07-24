@@ -1,6 +1,7 @@
 {
   "required": true,
   "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_21",
   "package": "net.optiminium.mixin",
   "mixins": [],
   "client": [
@@ -18,8 +19,9 @@
     "RenderTypeMixin",
     "ChestRendererMixin",
     "HangingSignRendererMixin",
-    "GlStateManagerMixin",
-    "LevelRendererMixin",
+	"GlStateManagerMixin",
+	"GameRendererMixin",
+	"LevelRendererMixin",
     "MinecraftMixin",
     "RenderStateShardMixin",
     "SignRendererMixin",

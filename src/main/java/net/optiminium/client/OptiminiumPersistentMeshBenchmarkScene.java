@@ -24,17 +24,12 @@ import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.optiminium.OptiminiumMod;
 import net.optiminium.optimization.OptiminiumSettings;
 
 import java.util.List;
 
 /** Explicitly enabled development-only scene for repeatable persistent-mesh measurements. */
-@EventBusSubscriber(modid = OptiminiumMod.MODID, value = Dist.CLIENT)
 public final class OptiminiumPersistentMeshBenchmarkScene {
 	private static final boolean ENABLED = Boolean.getBoolean("optiminium.persistentMeshBenchmarkScene");
 	private static final int GRID_SIZE = Math.max(4, Integer.getInteger("optiminium.persistentMeshBenchmarkGridSize", 16));
@@ -55,8 +50,7 @@ public final class OptiminiumPersistentMeshBenchmarkScene {
 	private OptiminiumPersistentMeshBenchmarkScene() {
 	}
 
-	@SubscribeEvent
-	public static void onClientTick(ClientTickEvent.Post event) {
+	public static void onClientTick() {
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.level == null || minecraft.player == null || minecraft.getSingleplayerServer() == null) {
 			readyTicks = 0;

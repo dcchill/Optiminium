@@ -1,17 +1,11 @@
 package net.optiminium.client;
 
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.EventPriority;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.optiminium.optimization.OptiminiumSettings;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL33C;
 import org.lwjgl.opengl.ARBTimerQuery;
 
-@EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumGpuTimer {
 	private static final int QUERY_COUNT = 4;
 	private static final int SAMPLE_INTERVAL_FRAMES = 2;
@@ -34,8 +28,7 @@ public final class OptiminiumGpuTimer {
 	private OptiminiumGpuTimer() {
 	}
 
-	@SubscribeEvent(priority = EventPriority.HIGHEST)
-	public static void onFrameStart(RenderFrameEvent.Pre event) {
+	public static void onFrameStart() {
 		initialize();
 		readReadyResults();
 		if (!isActive()) {
@@ -49,8 +42,7 @@ public final class OptiminiumGpuTimer {
 		sampleOpen = true;
 	}
 
-	@SubscribeEvent(priority = EventPriority.LOWEST)
-	public static void onFrameEnd(RenderFrameEvent.Post event) {
+	public static void onFrameEnd() {
 		if (!sampleOpen) {
 			return;
 		}

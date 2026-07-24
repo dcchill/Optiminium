@@ -1,5 +1,7 @@
 package net.optiminium.compat;
 
+import net.fabricmc.loader.api.FabricLoader;
+
 /**
  * Detects Sodium/Embeddium renderer replacements at runtime via classpath checks.
  * 
@@ -121,10 +123,8 @@ public final class OptiminiumSodiumCompat {
 
 	private static boolean isModLoaded(String modId) {
 		try {
-			Class<?> modListClass = Class.forName("net.neoforged.fml.ModList", false, OptiminiumSodiumCompat.class.getClassLoader());
-			Object modList = modListClass.getMethod("get").invoke(null);
-			return Boolean.TRUE.equals(modListClass.getMethod("isLoaded", String.class).invoke(modList, modId));
-		} catch (ReflectiveOperationException | LinkageError e) {
+			return FabricLoader.getInstance().isModLoaded(modId);
+		} catch (RuntimeException | LinkageError exception) {
 			return false;
 		}
 	}

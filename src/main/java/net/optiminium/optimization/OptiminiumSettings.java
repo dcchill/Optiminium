@@ -1,6 +1,6 @@
 package net.optiminium.optimization;
 
-import net.neoforged.fml.loading.FMLPaths;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import java.util.Properties;
 
 public final class OptiminiumSettings {
-	private static final Path CONFIG_FILE = FMLPaths.CONFIGDIR.get().resolve("optiminium.properties");
+	private static final Path CONFIG_FILE = FabricLoader.getInstance().getConfigDir().resolve("optiminium.properties");
 	private static volatile boolean enabled = true;
 	private static volatile boolean framePacing = true;
 	private static volatile int gpuTargetFps = 60;

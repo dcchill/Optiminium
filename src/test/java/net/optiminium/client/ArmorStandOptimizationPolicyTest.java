@@ -29,4 +29,13 @@ class ArmorStandOptimizationPolicyTest {
 		assertNotEquals(new ArmorStandOptimizationPolicy.FeatureKey(layer, state),
 			new ArmorStandOptimizationPolicy.FeatureKey(layer, "changed-revisioned-state"));
 	}
+
+	@Test
+	void keepsVanillaEntitySeedOnlyForEquippedArmorStands() {
+		assertEquals(0, ArmorStandOptimizationPolicy.renderSeed(false, 41));
+		assertEquals(41, ArmorStandOptimizationPolicy.renderSeed(true, 41));
+		assertNotEquals(
+			ArmorStandOptimizationPolicy.renderSeed(true, 41),
+			ArmorStandOptimizationPolicy.renderSeed(true, 42));
+	}
 }

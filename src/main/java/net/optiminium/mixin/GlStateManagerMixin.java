@@ -30,7 +30,8 @@ import java.nio.ByteBuffer;
 public abstract class GlStateManagerMixin {
 	// ── Texture bind deduplication ───────────────────────────────────────
 
-	@Redirect(method = "_bindTexture", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL11;glBindTexture(II)V"))
+	@Redirect(method = "_bindTexture", at = @At(value = "INVOKE",
+		target = "Lorg/lwjgl/opengl/GL11;glBindTexture(II)V", remap = false), remap = false)
 	private static void optiminium$redirectTextureBind(int glTarget, int textureId) {
 		OptiminiumSettings.OpenGlOptimizationMode mode = OptiminiumSettings.getOpenGlOptimizationMode();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
@@ -50,7 +51,7 @@ public abstract class GlStateManagerMixin {
 		OptiminiumRenderProfiler.recordTextureBind(start);
 	}
 
-	@Inject(method = "_activeTexture", at = @At("HEAD"), require = 0)
+	@Inject(method = "_activeTexture", at = @At("HEAD"), require = 0, remap = false)
 	private static void optiminium$trackActiveTexture(int texture, CallbackInfo callback) {
 		if (OptiminiumSettings.getOpenGlOptimizationMode() == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
 			return;
@@ -60,7 +61,8 @@ public abstract class GlStateManagerMixin {
 
 	// ── Shader program deduplication ─────────────────────────────────────
 
-	@Redirect(method = "_glUseProgram", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL20;glUseProgram(I)V"))
+	@Redirect(method = "_glUseProgram", at = @At(value = "INVOKE",
+		target = "Lorg/lwjgl/opengl/GL20;glUseProgram(I)V", remap = false), remap = false)
 	private static void optiminium$redirectShaderBind(int program) {
 		OptiminiumSettings.OpenGlOptimizationMode mode = OptiminiumSettings.getOpenGlOptimizationMode();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
@@ -80,7 +82,8 @@ public abstract class GlStateManagerMixin {
 
 	// ── Framebuffer binding (with tracker invalidation) ──────────────────
 
-	@Redirect(method = "_glBindFramebuffer", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL30;glBindFramebuffer(II)V"))
+	@Redirect(method = "_glBindFramebuffer", at = @At(value = "INVOKE",
+		target = "Lorg/lwjgl/opengl/GL30;glBindFramebuffer(II)V", remap = false), remap = false)
 	private static void optiminium$redirectFramebufferBind(int target, int framebuffer) {
 		OptiminiumSettings.OpenGlOptimizationMode mode = OptiminiumSettings.getOpenGlOptimizationMode();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
@@ -98,7 +101,8 @@ public abstract class GlStateManagerMixin {
 
 	// ── Buffer upload profiling and duplicate suppression ───────────────
 
-	@Redirect(method = "_glBufferData(ILjava/nio/ByteBuffer;I)V", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL15;glBufferData(ILjava/nio/ByteBuffer;I)V"))
+	@Redirect(method = "_glBufferData(ILjava/nio/ByteBuffer;I)V", at = @At(value = "INVOKE",
+		target = "Lorg/lwjgl/opengl/GL15;glBufferData(ILjava/nio/ByteBuffer;I)V", remap = false), remap = false)
 	private static void optiminium$redirectBufferedUpload(int target, ByteBuffer data, int usage) {
 		OptiminiumSettings.OpenGlOptimizationMode mode = OptiminiumSettings.getOpenGlOptimizationMode();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {
@@ -117,7 +121,8 @@ public abstract class GlStateManagerMixin {
 		}
 	}
 
-	@Redirect(method = "_glBufferData(IJI)V", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/GL15;glBufferData(IJI)V"))
+	@Redirect(method = "_glBufferData(IJI)V", at = @At(value = "INVOKE",
+		target = "Lorg/lwjgl/opengl/GL15;glBufferData(IJI)V", remap = false), remap = false)
 	private static void optiminium$redirectBufferedUpload(int target, long size, int usage) {
 		OptiminiumSettings.OpenGlOptimizationMode mode = OptiminiumSettings.getOpenGlOptimizationMode();
 		if (mode == OptiminiumSettings.OpenGlOptimizationMode.OFF) {

@@ -1,17 +1,13 @@
 package net.optiminium.client;
 
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import net.optiminium.optimization.OptiminiumSettings;
 
 import java.util.Locale;
 
-@EventBusSubscriber(modid = "optiminium", value = Dist.CLIENT)
 public final class OptiminiumBlockEntityCacheOverlay {
 	private static final int X = 8;
 	private static final int Y = 8;
@@ -21,12 +17,10 @@ public final class OptiminiumBlockEntityCacheOverlay {
 	private OptiminiumBlockEntityCacheOverlay() {
 	}
 
-	@SubscribeEvent
-	public static void render(RenderGuiEvent.Post event) {
+	public static void render(GuiGraphics graphics, DeltaTracker deltaTracker) {
 		if (!OptiminiumSettings.isBlockEntityRenderCacheDebug() || Minecraft.getInstance().options.hideGui) {
 			return;
 		}
-		GuiGraphics graphics = event.getGuiGraphics();
 		Font font = Minecraft.getInstance().font;
 		OptiminiumBlockEntityRenderCache.Snapshot cache = OptiminiumBlockEntityRenderCache.snapshot();
 		OptiminiumPersistentBlockEntityMeshes.Snapshot meshes = OptiminiumPersistentBlockEntityMeshes.snapshot();
