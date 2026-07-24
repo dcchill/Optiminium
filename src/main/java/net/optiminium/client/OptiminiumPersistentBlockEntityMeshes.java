@@ -109,7 +109,7 @@ import java.util.function.BiConsumer;
 	 * the cached model is built against an identity pose and the caller's pose is supplied only when drawing.</p>
  */
 public final class OptiminiumPersistentBlockEntityMeshes {
-	private static final String IMPLEMENTATION_REVISION = "expanded-block-entities-v26";
+	private static final String IMPLEMENTATION_REVISION = "entity-visual-exactness-v27";
 	private static final int ARMOR_STAND_BUILD_BUDGET_PER_FRAME = 8;
 	private static final Map<Object, CachedMesh> MESHES = new LinkedHashMap<>(32, 0.75F, true);
 	private static final Map<Object, EntityPolicyKey> ENTITY_POLICY_KEYS = new HashMap<>();
@@ -356,11 +356,14 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			evictIfNeeded();
 		}
 		int instanceLight = adapter.usesCapturedVertexLight(entity) ? -1 : packedLight;
+		// Stable persistent entities do not carry a damage overlay. Sampling overlay UV (0, 0)
+		// selects the red damage texel, which is especially visible across painting faces.
+		int instanceOverlay = OverlayTexture.NO_OVERLAY;
 		if (adapter.usesRevisionedTransform(entity)) {
-			mesh.queueRevisionedResident(entity, instancePose.last().pose(), true, instanceLight, 0,
+			mesh.queueRevisionedResident(entity, instancePose.last().pose(), true, instanceLight, instanceOverlay,
 				adapter.transformRevision(entity, yaw, partialTick));
 		} else {
-			mesh.queueResident(entity, instancePose.last().pose(), true, instanceLight, 0);
+			mesh.queueResident(entity, instancePose.last().pose(), true, instanceLight, instanceOverlay);
 		}
 		recordQueueOverhead(family, queueStart);
 		PersistentEntityMetrics.cached(family.adapterFamily());
@@ -3229,6 +3232,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 		private final Object leftLegPose;
 		private final Object rightLegPose;
 		private final ItemStack[] equipment;
+		private final int renderSeed;
 		private final int hash;
 
 		ArmorStandKey(ArmorStand stand) {
@@ -3245,6 +3249,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			rightLegPose = stand.getRightLegPose();
 			EquipmentSlot[] slots = EquipmentSlot.values();
 			equipment = new ItemStack[slots.length];
+			boolean hasEquipment = false;
 			int value = Boolean.hashCode(small);
 			value = 31 * value + Boolean.hashCode(marker);
 			value = 31 * value + Boolean.hashCode(invisible);
@@ -3258,8 +3263,11 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			value = 31 * value + rightLegPose.hashCode();
 			for (int i = 0; i < slots.length; i++) {
 				equipment[i] = stand.getItemBySlot(slots[i]).copy();
+				hasEquipment |= !equipment[i].isEmpty();
 				value = 31 * value + ItemStack.hashItemAndComponents(equipment[i]);
 			}
+			renderSeed = ArmorStandOptimizationPolicy.renderSeed(hasEquipment, stand.getId());
+			value = 31 * value + renderSeed;
 			hash = value;
 		}
 
@@ -3270,6 +3278,7 @@ public final class OptiminiumPersistentBlockEntityMeshes {
 			if (!(object instanceof ArmorStandKey other) || hash != other.hash
 					|| small != other.small || marker != other.marker || invisible != other.invisible
 					|| arms != other.arms || noBasePlate != other.noBasePlate
+					|| renderSeed != other.renderSeed
 					|| !headPose.equals(other.headPose) || !bodyPose.equals(other.bodyPose)
 					|| !leftArmPose.equals(other.leftArmPose) || !rightArmPose.equals(other.rightArmPose)
 					|| !leftLegPose.equals(other.leftLegPose) || !rightLegPose.equals(other.rightLegPose)) return false;
